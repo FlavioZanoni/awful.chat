@@ -26,8 +26,16 @@
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://awful.frav.in" />
-    <meta property="og:image" content="/og-invite.png" />
+    <!-- OG scrapers require absolute image URLs -->
+    <meta property="og:image" content="https://awful.frav.in/og-invite.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="635" />
+    <meta
+      property="og:image:alt"
+      content="Awful.chat - end-to-end encrypted P2P chat"
+    />
     <meta property="og:site_name" content="Awful.chat" />
+    <meta property="og:locale" content="en_US" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
@@ -39,7 +47,11 @@
       name="twitter:description"
       content="End-to-end encrypted P2P chat with voice, video, and file sharing. Open source. No accounts, no phone numbers, no personal data required."
     />
-    <meta name="twitter:image" content="/og-invite.png" />
+    <meta name="twitter:image" content="https://awful.frav.in/og-invite.png" />
+    <meta
+      name="twitter:image:alt"
+      content="Awful.chat - end-to-end encrypted P2P chat"
+    />
 
     <link rel="icon" href="/favicon.ico" />
     <link
@@ -47,7 +59,21 @@
       href="/apple-touch-icon-180x180.png"
       sizes="180x180"
     />
-    <link rel="mask-icon" href="/maskable-icon-512x512.svg" color="#09090b" />
+    <link rel="mask-icon" href="/logo.svg" color="#09090b" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Awful.chat",
+        "url": "https://awful.frav.in",
+        "applicationCategory": "CommunicationApplication",
+        "operatingSystem": "Web",
+        "description": "End-to-end encrypted P2P chat with voice, video, and file sharing. Open source. No accounts, no phone numbers, no personal data required.",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "browserRequirements": "Requires a modern browser with WebRTC support"
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

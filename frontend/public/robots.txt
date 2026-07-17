@@ -1,2 +1,7 @@
 User-agent: *
 Allow: /
+# app shell and room invite links have no indexable content
+Disallow: /app
+Disallow: /r/
+
+Sitemap: https://awful.frav.in/sitemap.xml

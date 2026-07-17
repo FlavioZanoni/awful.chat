@@ -6,7 +6,11 @@
     { href: "#features", label: "Features" },
     { href: "#stack", label: "Stack" },
     { href: "#deploy", label: "Deploy" },
-    { href: "https://github.com", label: "GitHub", external: true },
+    {
+      href: "https://github.com/awful-org/awful.chat",
+      label: "GitHub",
+      external: true,
+    },
   ];
 
   const marqueeItems = [

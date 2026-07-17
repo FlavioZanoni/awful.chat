@@ -1,0 +1,26 @@
+# Awful.chat
+
+> End-to-end encrypted peer-to-peer chat with voice, video, and file sharing.
+> Open source. No accounts, no phone numbers, no personal data required.
+
+Awful.chat is a privacy-focused web chat app (PWA). Identity is a BIP39
+mnemonic held on the user's device (ed25519, did:key). Text messages and
+files travel peer-to-peer over libp2p (WebRTC with a circuit-relay
+fallback); the relay server only helps peers find each other and cannot
+read any traffic. Voice calls are fully peer-to-peer. Group video and
+screen share are routed through a mediasoup SFU. Files transfer via
+WebTorrent between peers.
+
+Key properties:
+- No sign-up: create an identity locally, back it up with 12 words
+- End-to-end encrypted messaging (noise protocol between peers)
+- Signed messages (ed25519) to prevent impersonation
+- Delivery and read receipts for direct messages
+- Offline DM queue: messages retry when both peers are online
+- Device sync via QR code between your own devices
+- Self-hostable: Docker Compose with a Go relay, mediasoup SFU, coturn
+
+## Links
+
+- [App](https://awful.frav.in/app): the chat application (requires JavaScript)
+- [Source code](https://github.com/awful-org/awful.chat): open source, self-hosting instructions in the README
