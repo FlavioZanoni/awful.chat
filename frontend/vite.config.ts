@@ -6,6 +6,10 @@ import { nodePolyfills } from "vite-plugin-node-polyfills";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig(({ mode }) => ({
+  // Read VITE_* vars from the repo-root .env so bare `pnpm dev` works
+  // outside docker. Only VITE_-prefixed vars are exposed to the client;
+  // in docker builds the values arrive via ARG/ENV instead.
+  envDir: "..",
   define: {
     global: "globalThis",
   },
