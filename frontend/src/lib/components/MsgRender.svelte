@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { Download, FileText, Bookmark, X, Copy, Check } from "@lucide/svelte";
+  import {
+    Download,
+    FileText,
+    Bookmark,
+    X,
+    Copy,
+    Check,
+    CheckCheck,
+    Clock,
+  } from "@lucide/svelte";
   import { codeToHtml } from "shiki";
   import {
     MessageType,
@@ -464,6 +473,26 @@
         {linkedUrl}
       </a>
     {/if}
+  {/if}
+
+  {#if isOwn && msg.status}
+    <span
+      class="ml-1.5 inline-flex items-center align-text-bottom"
+      title={msg.status === "sending"
+        ? "Queued — will send when the recipient is reachable"
+        : msg.status.charAt(0).toUpperCase() + msg.status.slice(1)}
+      aria-label="Message {msg.status}"
+    >
+      {#if msg.status === "sending"}
+        <Clock class="size-3 text-muted-foreground" />
+      {:else if msg.status === "sent"}
+        <Check class="size-3 text-muted-foreground" />
+      {:else if msg.status === "delivered"}
+        <CheckCheck class="size-3 text-muted-foreground" />
+      {:else}
+        <CheckCheck class="size-3 text-primary" />
+      {/if}
+    </span>
   {/if}
 </div>
 

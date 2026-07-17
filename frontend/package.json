@@ -8,7 +8,8 @@
     "build": "vite build",
     "generate-pwa-assets": "pwa-assets-generator --preset minimal-2023 public/logo.svg",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@internationalized/date": "^3.12.0",
@@ -23,6 +24,7 @@
     "@vite-pwa/assets-generator": "^1.0.2",
     "bits-ui": "^2.16.5",
     "clsx": "^2.1.1",
+    "fake-indexeddb": "^6.2.5",
     "prettier-plugin-svelte": "^3.5.1",
     "svelte": "^5.55.1",
     "svelte-check": "^4.4.6",
@@ -34,6 +36,7 @@
     "vite": "^7.3.1",
     "vite-plugin-node-polyfills": "^0.25.0",
     "vite-plugin-pwa": "^1.2.0",
+    "vitest": "^4.1.10",
     "workbox-core": "^7.4.0",
     "workbox-precaching": "^7.4.0",
     "workbox-window": "^7.4.0"
@@ -41,21 +44,18 @@
   "dependencies": {
     "@chainsafe/libp2p-noise": "^17.0.0",
     "@chainsafe/libp2p-yamux": "^8.0.1",
-    "@libp2p/bootstrap": "^12.0.15",
     "@libp2p/circuit-relay-v2": "^4.1.7",
     "@libp2p/crypto": "^5.1.14",
     "@libp2p/gossipsub": "^15.0.16",
     "@libp2p/identify": "^4.0.14",
     "@libp2p/interface": "~3.1.1",
     "@libp2p/peer-id": "^6.0.5",
-    "@libp2p/pubsub-peer-discovery": "^12.0.0",
     "@libp2p/webrtc": "^6.0.15",
     "@libp2p/websockets": "^10.1.7",
     "@multiformats/multiaddr": "^13.0.1",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "@scure/base": "^2.0.0",
-    "@scure/bip32": "^2.0.1",
     "@scure/bip39": "^2.0.1",
     "@tanstack/svelte-query": "^6.1.12",
     "emoji-picker-element": "^1.29.1",
@@ -63,12 +63,10 @@
     "idb": "^8.0.3",
     "libp2p": "~3.1.7",
     "mediasoup-client": "^3.18.7",
-    "multiformats": "^13.4.2",
     "qrcode": "^1.5.4",
     "shiki": "^4.0.2",
     "simple-peer": "^9.11.1",
     "vaul-svelte": "1.0.0-next.7",
-    "webtorrent": "^1.9.7",
-    "yjs": "^13.6.30"
+    "webtorrent": "^1.9.7"
   }
 }

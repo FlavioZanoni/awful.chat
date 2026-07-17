@@ -107,10 +107,6 @@ export function startAutoLogin(promise: Promise<void>): void {
     .catch(() => {});
 }
 
-export function endInitializing(): void {
-  identityStore.initializing = false;
-}
-
 /**
  * Generate a new identity and immediately unlock the session.
  * Updates the store reactively on success.

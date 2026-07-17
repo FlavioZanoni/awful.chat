@@ -152,24 +152,46 @@
   }
 
   $effect(() => {
-    const seen = new Set<string>();
+    // Track which peers should have analysers
+    const desiredPeers = new Set<string>();
+
+    // Add remote peers with audio
     for (const [peerId, p] of participants) {
-      seen.add(peerId);
-      if (p.audioTrack) startSpeakerDetection(peerId, p.audioTrack);
-      else stopSpeakerDetection(peerId);
+      if (p.audioTrack) {
+        desiredPeers.add(peerId);
+      }
     }
-    for (const peerId of analysers.keys()) {
-      if (peerId !== selfId() && !seen.has(peerId)) {
+
+    // Add self if not muted
+    if (!muted && localMicStream) {
+      const track = localMicStream.getAudioTracks()[0];
+      if (track) {
+        desiredPeers.add(selfId());
+      }
+    }
+
+    // Create/update analysers for desired peers
+    for (const peerId of desiredPeers) {
+      const track = peerId === selfId()
+        ? localMicStream?.getAudioTracks()[0]
+        : participants.get(peerId)?.audioTrack;
+      if (track) {
+        startSpeakerDetection(peerId, track);
+      }
+    }
+
+    // Remove analysers for peers no longer desired
+    for (const peerId of [...analysers.keys()]) {
+      if (!desiredPeers.has(peerId)) {
         stopSpeakerDetection(peerId);
       }
     }
-    if (!muted && localMicStream) {
-      const track = localMicStream.getAudioTracks()[0];
-      if (track) startSpeakerDetection(selfId(), track);
-    } else {
-      stopSpeakerDetection(selfId());
+
+    // Start RAF loop if needed
+    if (!rafId && desiredPeers.size > 0) {
+      rafId = requestAnimationFrame(pollSpeakers);
     }
-    if (!rafId) rafId = requestAnimationFrame(pollSpeakers);
+
     return () => {
       if (rafId) {
         cancelAnimationFrame(rafId);
@@ -199,10 +221,13 @@
 
   function audioAction(node: HTMLAudioElement, track: MediaStreamTrack) {
     node.srcObject = new MediaStream([track]);
+    // Apply saved transmission volume to newly mounted audio element
+    node.volume = transmissionOutputVolume;
     node.play().catch(() => {});
     return {
       update(t: MediaStreamTrack) {
         node.srcObject = new MediaStream([t]);
+        node.volume = transmissionOutputVolume;
         node.play().catch(() => {});
       },
       destroy() {

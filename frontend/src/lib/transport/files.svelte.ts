@@ -129,9 +129,10 @@ export function isFileSignalWireMessage(
 }
 
 export function maybePeerIdFromSenderId(senderId: string): string | null {
-  if (_transport.peers().includes(senderId)) return senderId;
+  const connectedPeers = _transport.peers();
+  if (connectedPeers.includes(senderId)) return senderId;
   for (const [peerId, did] of _peerIdToDid) {
-    if (did === senderId) return peerId;
+    if (did === senderId && connectedPeers.includes(peerId)) return peerId;
   }
   return null;
 }
@@ -152,6 +153,10 @@ export async function fileFingerprint(file: File): Promise<string> {
 
 export function withFileTransfer(snapshot: FileTransferSnapshot): void {
   const prev = transportState.fileTransfers.get(snapshot.infoHash);
+  // Revoke previous blobURL if we're replacing it with a different one
+  if (prev?.blobURL && snapshot.blobURL && prev.blobURL !== snapshot.blobURL) {
+    URL.revokeObjectURL(prev.blobURL);
+  }
   const nextSnapshot: FileTransferSnapshot = {
     ...(prev ?? {}),
     ...snapshot,
@@ -166,7 +171,14 @@ export async function _hydrateFileTransfersFromStorage(
   roomCode: string
 ): Promise<void> {
   const seedable = await getAttachmentsWithData(roomCode);
+  const dedup = new Map<string, Attachment>();
   for (const attachment of seedable) {
+    if (!attachment.data) continue;
+    if (!dedup.has(attachment.infoHash))
+      dedup.set(attachment.infoHash, attachment);
+  }
+
+  for (const attachment of dedup.values()) {
     if (!attachment.data) continue;
     const file: FileEntry = {
       infoHash: attachment.infoHash,

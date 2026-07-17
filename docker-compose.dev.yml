@@ -26,7 +26,6 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      VITE_SIGNAL_URL: ${VITE_SIGNAL_URL:-http://localhost:8080/signal}
       VITE_SFU_URL: ${VITE_SFU_URL:-http://localhost:3000}
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
       VITE_RELAY_MULTIADDR: ${VITE_RELAY_MULTIADDR:-/ip4/127.0.0.1/tcp/9000/ws/p2p/QmRelay}

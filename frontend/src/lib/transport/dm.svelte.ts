@@ -19,6 +19,7 @@ import {
   _loadHistory,
   _peerIdToDid,
   _transport,
+  applyMessageStatus,
   transportState,
 } from "./transport.svelte";
 import {
@@ -28,48 +29,20 @@ import {
   didToPeerId,
 } from "$lib/identity/identity-utils";
 
-interface DmPayload {
-  id: string;
-  text: string;
-  ts: number;
-}
+import {
+  encodeDmChatEnvelope,
+  encodeDmReadEnvelope,
+  hashDmRoomCode,
+} from "./dm-codec";
 
 interface QueuedMessage {
   to: string;
   data: number[];
   queuedAt: number;
+  messageId?: string; // for status updates once the flush succeeds
 }
 
-const DM_CHAT_TAG = 0x01;
-const DM_ACK_TAG = 0x02;
 const DM_QUEUE_KEY = "awful:dm-queue:v1";
-const _dmRoomCodeCache = new Map<string, string>();
-
-/**
- * Generate a stable, deterministic DM room code from two DIDs.
- * - Sort the two DIDs alphabetically
- * - Hash them to create a short (48 char max) stable identifier
- * - Prefix with "dm-" for easy identification
- */
-async function hashDmRoomCode(did1: string, did2: string): Promise<string> {
-  const sorted = [did1, did2].sort();
-  const input = sorted.join("|");
-  const cacheKey = input;
-  const cached = _dmRoomCodeCache.get(cacheKey);
-  if (cached) return cached;
-
-  const encoder = new TextEncoder();
-  const data = encoder.encode(input);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = new Uint8Array(hashBuffer);
-  // Take first 20 bytes (40 hex chars) + "dm-" prefix = 43 chars total
-  const hashHex = Array.from(hashArray.slice(0, 20))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  const roomCode = `dm-${hashHex}`;
-  _dmRoomCodeCache.set(cacheKey, roomCode);
-  return roomCode;
-}
 
 function loadQueuedDmMessages(): QueuedMessage[] {
   if (typeof localStorage === "undefined") return [];
@@ -118,22 +91,19 @@ function resolveDmPeerId(candidate: string): string | null {
   return null;
 }
 
-function encodeDmChatEnvelope(payload: DmPayload): Uint8Array {
-  const body = new TextEncoder().encode(JSON.stringify(payload));
-  const out = new Uint8Array(1 + body.byteLength);
-  out[0] = DM_CHAT_TAG;
-  out.set(body, 1);
-  return out;
-}
-
-function queueDmMessage(toDid: string, data: Uint8Array): void {
+function queueDmMessage(
+  toDid: string,
+  data: Uint8Array,
+  messageId?: string
+): void {
   const queue = loadQueuedDmMessages();
-  queue.push({ to: toDid, data: Array.from(data), queuedAt: Date.now() });
+  queue.push({
+    to: toDid,
+    data: Array.from(data),
+    queuedAt: Date.now(),
+    messageId,
+  });
   saveQueuedDmMessages(queue);
-}
-
-export function isDmConversation(): boolean {
-  return transportState.chatMode === "dm";
 }
 
 export async function dmConversationCodeFor(
@@ -168,6 +138,13 @@ export async function openDmConversation(peerIdOrDid: string): Promise<void> {
   transportState.roomCode = roomCode;
   transportState.roomName = resolveDmDisplayName(resolvedPeerId);
   transportState.connected = true;
+
+  // Everything now on screen counts as read — tell the sender.
+  const selfDid = identityStore.did ?? _transport.selfId();
+  const theirMessageIds = transportState.messages
+    .filter((m) => m.roomCode === roomCode && m.senderId !== selfDid)
+    .map((m) => m.id);
+  sendDmReadAcks(resolvedPeerId, theirMessageIds);
 }
 
 export async function sendDirectMessage(text: string): Promise<void> {
@@ -200,15 +177,11 @@ export async function sendDirectMessage(text: string): Promise<void> {
     !looksLikeDid(resolvedPeerId) &&
     _transport.peers().includes(resolvedPeerId);
 
-  if (!isOnline) {
-    queueDmMessage(peerDid, envelope);
-  } else {
-    try {
-      await _transport.send(resolvedPeerId!, envelope);
-    } catch {
-      queueDmMessage(peerDid, envelope);
-    }
+  let delivered = false;
+  if (isOnline) {
+    delivered = await _transport.send(resolvedPeerId!, envelope);
   }
+  if (!delivered) queueDmMessage(peerDid, envelope, id);
 
   const mySenderId = identityStore.did ?? _transport.selfId();
   let msg: Message = {
@@ -221,7 +194,9 @@ export async function sendDirectMessage(text: string): Promise<void> {
     type: MessageType.Text,
     content: body,
     attachments: [],
-    status: "sent",
+    // "sending" = queued locally, "sent" = handed to the transport;
+    // "delivered"/"read" arrive later via acks
+    status: delivered ? "sent" : "sending",
   };
 
   // Sign the message before storing
@@ -240,63 +215,54 @@ export async function sendDirectMessage(text: string): Promise<void> {
   }
 }
 
-export function encodeDmAckEnvelope(messageId: string): Uint8Array {
-  const body = new TextEncoder().encode(messageId);
-  const out = new Uint8Array(1 + body.byteLength);
-  out[0] = DM_ACK_TAG;
-  out.set(body, 1);
-  return out;
-}
-
-export function parseDmEnvelope(
-  data: Uint8Array
-):
-  | { type: "chat"; payload: DmPayload }
-  | { type: "ack"; messageId: string }
-  | null {
-  if (data.byteLength < 1) return null;
-  const tag = data[0];
-  const payload = data.subarray(1);
-  try {
-    if (tag === DM_CHAT_TAG) {
-      const parsed = JSON.parse(new TextDecoder().decode(payload)) as DmPayload;
-      if (
-        typeof parsed?.id !== "string" ||
-        typeof parsed?.text !== "string" ||
-        typeof parsed?.ts !== "number"
-      ) {
-        return null;
-      }
-      return { type: "chat", payload: parsed };
-    }
-    if (tag === DM_ACK_TAG) {
-      return { type: "ack", messageId: new TextDecoder().decode(payload) };
-    }
-  } catch {
-    return null;
+/**
+ * Send read acks to a peer for messages we just displayed.
+ * Fire-and-forget: if the peer is offline the acks are simply dropped —
+ * they'll be re-sent the next time the conversation is opened while
+ * both peers are online (idempotent on the receiving side).
+ */
+export function sendDmReadAcks(peerId: string, messageIds: string[]): void {
+  if (!messageIds.length) return;
+  let resolved = resolveDmPeerId(peerId);
+  if (resolved && looksLikeDid(resolved)) {
+    resolved = didToPeerId(resolved, _peerIdToDid) ?? resolved;
   }
-  return null;
+  if (!resolved || looksLikeDid(resolved)) return;
+  if (!_transport.peers().includes(resolved)) return;
+  _transport.send(resolved, encodeDmReadEnvelope(messageIds)).catch(() => {});
 }
 
-export async function flushQueuedDmForPeer(peerId: string): Promise<void> {
+// Flushes are serialized and sent entries are removed against a FRESH read
+// of the queue: a snapshot write-back would clobber messages queued (for any
+// peer) while the awaited sends were in flight.
+let _flushChain: Promise<void> = Promise.resolve();
+
+export function flushQueuedDmForPeer(peerId: string): Promise<void> {
+  _flushChain = _flushChain.then(() => _flushQueuedDmForPeer(peerId));
+  return _flushChain;
+}
+
+function queueEntryKey(e: QueuedMessage): string {
+  return `${e.to}|${e.queuedAt}|${e.messageId ?? ""}`;
+}
+
+async function _flushQueuedDmForPeer(peerId: string): Promise<void> {
   const peerDid = _peerIdToDid.get(peerId);
   if (!peerDid) return; // Can't flush if we don't know their DID yet
 
-  const queue = loadQueuedDmMessages();
-  const remaining: QueuedMessage[] = [];
-  for (const entry of queue) {
-    // Check if message is for this peer (by DID, not peerId)
-    if (entry.to !== peerDid) {
-      remaining.push(entry);
-      continue;
-    }
-    try {
-      await _transport.send(peerId, new Uint8Array(entry.data));
-    } catch {
-      remaining.push(entry);
+  const sent = new Set<string>();
+  for (const entry of loadQueuedDmMessages()) {
+    if (entry.to !== peerDid) continue;
+    const ok = await _transport.send(peerId, new Uint8Array(entry.data));
+    if (ok) {
+      sent.add(queueEntryKey(entry));
+      if (entry.messageId) applyMessageStatus(entry.messageId, "sent");
     }
   }
-  saveQueuedDmMessages(remaining);
+  if (sent.size === 0) return;
+  saveQueuedDmMessages(
+    loadQueuedDmMessages().filter((e) => !sent.has(queueEntryKey(e)))
+  );
 }
 
 export function resolveDmDisplayName(peerId: string): string {

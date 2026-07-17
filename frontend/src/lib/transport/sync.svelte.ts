@@ -49,12 +49,9 @@ interface DatabaseExport {
       did: string;
       publicKey: number[];
     };
-    webauthn?: {
-      credentialId: number[];
-      prfSalt: number[];
-      iv: number[];
-      encrypted: number[];
-    };
+    // webauthn is intentionally NOT synced: the credential is bound to the
+    // source device's authenticator and would only present a broken
+    // biometric-unlock option on the target.
   };
   messages: Message[];
   attachments: AttachmentExport[];
@@ -121,8 +118,9 @@ export const syncState = $state<SyncState>({
 let _transport: PeerTransport | null = null;
 let _html5QrCode: Html5Qrcode | null = null;
 let _syncRoomCode: string | null = null;
+let _syncToken: string | null = null;
+let _syncExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 let _isSourceDevice = false;
-let _onCompleteCallback: (() => void) | null = null;
 
 const SYNC_ROOM_PREFIX = "__sync_";
 const SYNC_TIMEOUT = 5 * 60 * 1000; // 5 minutes
@@ -196,7 +194,19 @@ export async function generateSyncCode(): Promise<void> {
   try {
     _syncRoomCode = generateSyncRoomCode();
     const token = generateToken();
+    _syncToken = token;
     const expires = Date.now() + SYNC_TIMEOUT;
+
+    // Enforce expiry on the SOURCE: the QR/short code's own `expires` field
+    // is attacker-controlled (and re-synthesized for manual codes), so the
+    // only reliable expiry is tearing the server down ourselves.
+    if (_syncExpiryTimer) clearTimeout(_syncExpiryTimer);
+    _syncExpiryTimer = setTimeout(() => {
+      if (!syncState.isSyncing && !syncState.isComplete) {
+        syncState.syncError = "Sync code expired";
+        cleanup().catch(() => {});
+      }
+    }, SYNC_TIMEOUT);
 
     const payload: SyncPayload = {
       roomCode: _syncRoomCode,
@@ -304,9 +314,35 @@ async function startSyncServer(): Promise<void> {
       console.log("[Sync][Source] Message type:", msg.type);
 
       if (msg.type === SyncMessageType.ExportRequest) {
-        // Target is requesting data - send it
-        const requestMode =
-          (msg.payload as { mode?: "add" | "replace" })?.mode ?? "replace";
+        const { mode, token } = (msg.payload ?? {}) as {
+          mode?: "add" | "replace";
+          token?: string;
+        };
+
+        // The room code alone is only 32 bits of entropy — the token from
+        // the QR/short code is the actual proof the requester scanned it.
+        // Short codes truncate the token to its first 8 chars, so accept
+        // either the full token or that prefix.
+        const tokenOk =
+          !!_syncToken &&
+          !!token &&
+          (token === _syncToken || token === _syncToken.slice(0, 8));
+        if (!tokenOk) {
+          console.warn("[Sync][Source] Rejected ExportRequest: bad token");
+          _transport?.send(
+            peerId,
+            encode({
+              type: SyncMessageType.SyncError,
+              payload: {
+                error:
+                  "Sync token mismatch — refresh/update the app on both devices and generate a new code",
+              },
+            })
+          );
+          return;
+        }
+
+        const requestMode = mode ?? "replace";
         console.log(
           `[Sync][Source] Received ExportRequest, mode: ${requestMode}, sending data...`
         );
@@ -317,7 +353,6 @@ async function startSyncServer(): Promise<void> {
       } else if (msg.type === SyncMessageType.ExportComplete) {
         syncState.isSyncing = false;
         syncState.isComplete = true;
-        _onCompleteCallback?.();
         await cleanup();
       } else if (msg.type === SyncMessageType.SyncError) {
         syncState.syncError = (msg.payload as { error: string }).error;
@@ -458,12 +493,12 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
       syncState.isConnecting = false;
       syncState.isSyncing = true;
 
-      // Request data from source with mode
+      // Request data from source with mode + proof-of-scan token
       _transport?.send(
         peerId,
         encode({
           type: SyncMessageType.ExportRequest,
-          payload: { mode },
+          payload: { mode, token: payload.token },
         })
       );
     });
@@ -577,7 +612,6 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
               syncState.isSyncing = false;
               syncState.isComplete = true;
               syncState.syncProgress = 100;
-              _onCompleteCallback?.();
               await cleanup();
             } catch (err) {
               console.error("[Sync][Target] Import failed:", err);
@@ -620,10 +654,9 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
 async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
   const db = await getDB();
 
-  const [mnemonicRaw, keypairRaw, webauthnRaw] = await Promise.all([
+  const [mnemonicRaw, keypairRaw] = await Promise.all([
     db.get("identity", "mnemonic"),
     db.get("identity", "keypair"),
-    db.get("identity", "webauthn"),
   ]);
 
   const mnemonic = mnemonicRaw as {
@@ -647,21 +680,6 @@ async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
         publicKey: Array.from(new Uint8Array(keypair.publicKey)),
       },
     };
-
-    if (webauthnRaw) {
-      const webauthn = webauthnRaw as {
-        credentialId: ArrayBuffer;
-        prfSalt: Uint8Array;
-        iv: Uint8Array;
-        encrypted: ArrayBuffer;
-      };
-      identity.webauthn = {
-        credentialId: Array.from(new Uint8Array(webauthn.credentialId)),
-        prfSalt: Array.from(new Uint8Array(webauthn.prfSalt)),
-        iv: Array.from(new Uint8Array(webauthn.iv)),
-        encrypted: Array.from(new Uint8Array(webauthn.encrypted)),
-      };
-    }
   }
 
   const [
@@ -742,18 +760,6 @@ async function importDatabase(
 
     await putIdentityRecord(mnemonicRecord);
     await putIdentityRecord(keypairRecord);
-
-    if (data.identity.webauthn) {
-      const webauthnRecord = {
-        id: "webauthn" as const,
-        credentialId: new Uint8Array(data.identity.webauthn.credentialId)
-          .buffer,
-        prfSalt: new Uint8Array(data.identity.webauthn.prfSalt),
-        iv: new Uint8Array(data.identity.webauthn.iv),
-        encrypted: new Uint8Array(data.identity.webauthn.encrypted).buffer,
-      };
-      await putIdentityRecord(webauthnRecord);
-    }
   }
 
   // Import other data
@@ -860,13 +866,6 @@ export async function stopScanning(): Promise<void> {
 }
 
 /**
- * Set callback for when sync completes.
- */
-export function onSyncComplete(callback: () => void): void {
-  _onCompleteCallback = callback;
-}
-
-/**
  * Reset sync state.
  */
 export function resetSyncState(): void {
@@ -891,7 +890,12 @@ async function cleanup(): Promise<void> {
     _transport = null;
   }
   await stopScanning();
+  if (_syncExpiryTimer) {
+    clearTimeout(_syncExpiryTimer);
+    _syncExpiryTimer = null;
+  }
   _syncRoomCode = null;
+  _syncToken = null;
   _isSourceDevice = false;
 }
 

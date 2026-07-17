@@ -174,6 +174,15 @@ export class WebTorrentFileTransport implements FileTransferTransport {
         }
       }
       if (seeders.size === 0) {
+        // When last seeder disconnects, fail any in-flight downloads
+        const transfer = this.transfers.get(infoHash);
+        if (transfer && transfer.status === "downloading" && !transfer.done) {
+          this.upsertTransfer({
+            ...transfer,
+            status: "failed",
+            error: "Seeder disconnected",
+          });
+        }
         this.seedersByHash.delete(infoHash);
       }
     }
@@ -266,7 +275,7 @@ export class WebTorrentFileTransport implements FileTransferTransport {
 
       (torrent as unknown as { on: Function }).on("error", (err: Error) => {
         const message = err?.message ?? "";
-        if (message.includes("already being seeded")) {
+        if (message.includes("Cannot add duplicate torrent")) {
           const existing = this.client.get(
             (torrent as any).infoHash
           ) as unknown as TorrentLike | null;
@@ -428,6 +437,11 @@ export class WebTorrentFileTransport implements FileTransferTransport {
     torrent.on("error", (...args: unknown[]) => {
       const err = args[0] as Error;
       const prev = this.transfers.get(infoHash);
+      // If currently seeding, keep it as seeding and just log the error
+      if (prev?.seeding || prev?.status === "seeding") {
+        console.error(`Transient error on seeded torrent ${infoHash}:`, err.message);
+        return;
+      }
       this.upsertTransfer({
         ...(prev ?? descriptor),
         infoHash,

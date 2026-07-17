@@ -127,8 +127,9 @@ export class MediasoupVideo implements VideoTransport {
   private active: Set<string> = new Set();
   private paused: Set<VideoSource> = new Set();
   private handlers: Map<keyof VideoEvents, Set<Function>> = new Map();
-  private pending: Map<string, { resolve: Function; reject: Function }> =
+  private pending: Map<string, { resolve: Function; reject: Function }[]> =
     new Map();
+  private pendingChains: Map<string, Promise<any>> = new Map();
   // Screen-share producers that are available but not yet consumed (opt-in transmissions)
   private pendingTransmissions: Map<string, string> = new Map(); // peerId → producerId
   // All pending screen producers (video + optional audio) for a peer.
@@ -141,9 +142,13 @@ export class MediasoupVideo implements VideoTransport {
 
   // SFU WebSocket — opened on join(), closed on leave()
   private sfuWs: WebSocket | null = null;
+  private currentRoomCode: string | null = null;
+  private currentPeerId: string | null = null;
 
   async join(roomCode: string, peerId: string): Promise<void> {
     try {
+      this.currentRoomCode = roomCode;
+      this.currentPeerId = peerId;
       await this.connectSfu(roomCode, peerId);
 
       const capMsg = await this.request<MSCapabilities>(
@@ -188,6 +193,9 @@ export class MediasoupVideo implements VideoTransport {
     this.sendTransport = null;
     this.recvTransport = null;
     this.pending.clear();
+    this.pendingChains.clear();
+    this.currentRoomCode = null;
+    this.currentPeerId = null;
   }
 
   async startCamera(stream?: MediaStream): Promise<void> {
@@ -323,7 +331,9 @@ export class MediasoupVideo implements VideoTransport {
   getAudioTrack(peerId: string): MediaStreamTrack | null {
     const peerConsumers = this.consumers.get(peerId);
     if (!peerConsumers) return null;
-    const audioConsumer = peerConsumers.find((c) => c.source === "screen");
+    const audioConsumer = peerConsumers.find(
+      (c) => c.source === "screen" && c.consumer.track.kind === "audio"
+    );
     return audioConsumer ? audioConsumer.consumer.track : null;
   }
 
@@ -369,13 +379,81 @@ export class MediasoupVideo implements VideoTransport {
       };
 
       ws.onclose = () => {
+        const wasJoined = this.recvTransport !== null;
+
         // Reject all pending requests when connection drops
-        for (const [type, { reject: rej }] of this.pending) {
-          rej(new Error(`SFU connection closed waiting for ${type}`));
+        for (const [type, queue] of this.pending) {
+          for (const req of queue) {
+            req.reject(new Error(`SFU connection closed waiting for ${type}`));
+          }
         }
         this.pending.clear();
+        this.pendingChains.clear();
+
+        // If we were joined, emit an error and attempt automatic rejoin
+        if (wasJoined && this.currentRoomCode && this.currentPeerId) {
+          const err: Error = new Error("SFU connection closed unexpectedly");
+          this.emit("error", err);
+
+          // Attempt ONE automatic rejoin after ~2s. The SFU destroyed all
+          // of our server-side state on disconnect, so this must be a FULL
+          // rebuild (device + transports + producers), not just a re-dial.
+          setTimeout(() => {
+            this.attemptRejoin().catch((err) => {
+              console.warn("[MediasoupVideo] rejoin failed:", err);
+              this.emit(
+                "error",
+                new Error("Video reconnect failed — leave and rejoin the call")
+              );
+            });
+          }, 2000);
+        }
       };
     });
+  }
+
+  /**
+   * Full client-side rebuild after an unexpected SFU disconnect: tear down
+   * dead transports/consumers (server already dropped them), run the normal
+   * join handshake again, then republish local sources whose tracks are
+   * still live. Remote consumers come back via the SFU's producer replay.
+   */
+  private async attemptRejoin(): Promise<void> {
+    const roomCode = this.currentRoomCode;
+    const peerId = this.currentPeerId;
+    if (!roomCode || !peerId) return;
+    if (this.sfuWs && this.sfuWs.readyState === WebSocket.OPEN) return;
+
+    const republish: { source: VideoSource; stream: MediaStream }[] = [];
+    for (const [source, ps] of this.producers) {
+      const stream = ps[0]?.stream;
+      if (stream?.getTracks().some((t) => t.readyState === "live")) {
+        republish.push({ source, stream });
+      }
+    }
+
+    for (const [peer, cs] of this.consumers) {
+      cs.forEach((c) => c.consumer.close());
+      this.emit("peerLeft", peer);
+    }
+    this.consumers.clear();
+    this.producers.forEach((ps) => ps.forEach((p) => p.producer.close()));
+    this.producers.clear();
+    this.active.clear();
+    this.pendingTransmissions.clear();
+    this.pendingScreenProducerIds.clear();
+    this.watchingTransmissionPeers.clear();
+    this.queuedProducers = [];
+    this.sendTransport?.close();
+    this.recvTransport?.close();
+    this.sendTransport = null;
+    this.recvTransport = null;
+    this.device = null;
+
+    await this.join(roomCode, peerId);
+    for (const { source, stream } of republish) {
+      await this.publish(stream, source);
+    }
   }
 
   private async publish(
@@ -400,6 +478,9 @@ export class MediasoupVideo implements VideoTransport {
       const producer = await this.sendTransport.produce({
         track,
         appData: { source },
+        // Track lifecycle is owned by the app (stopSource / call.svelte),
+        // and rejoin republishes the same tracks after a transport rebuild.
+        stopTracks: false,
       });
 
       const entry: Producer = { producer, source, stream };
@@ -506,10 +587,13 @@ export class MediasoupVideo implements VideoTransport {
 
   private handleSignal(msg: MSMessage): void {
     // resolve pending request
-    const pending = this.pending.get(msg.type);
-    if (pending) {
-      this.pending.delete(msg.type);
-      pending.resolve(msg);
+    const queue = this.pending.get(msg.type);
+    if (queue && queue.length > 0) {
+      const req = queue.shift()!;
+      req.resolve(msg);
+      if (queue.length === 0) {
+        this.pending.delete(msg.type);
+      }
       return;
     }
 
@@ -648,19 +732,49 @@ export class MediasoupVideo implements VideoTransport {
   }
 
   private request<T>(msg: MSMessage, responseType: string): Promise<T> {
-    return new Promise((resolve, reject) => {
-      this.pending.set(responseType, {
-        resolve: (response: MSMessage) => resolve(response as unknown as T),
-        reject,
-      });
-      this.signal(msg);
-      setTimeout(() => {
-        if (this.pending.has(responseType)) {
-          this.pending.delete(responseType);
-          reject(new Error(`mediasoup request timeout: ${responseType}`));
-        }
-      }, 10_000);
-    });
+    // Chain this request to serialize by responseType. The .catch() is
+    // load-bearing: without it one timed-out request would poison the chain
+    // and instantly reject every later request of the same type.
+    const prevChain = this.pendingChains.get(responseType) ?? Promise.resolve();
+    const chain = prevChain.catch(() => {}).then(
+      () =>
+        new Promise<T>((resolve, reject) => {
+          // Queue this request
+          if (!this.pending.has(responseType)) {
+            this.pending.set(responseType, []);
+          }
+
+          let timeoutId: ReturnType<typeof setTimeout>;
+          const resolveHandler = (response: MSMessage) => {
+            clearTimeout(timeoutId);
+            resolve(response as unknown as T);
+          };
+
+          timeoutId = setTimeout(() => {
+            // Remove from queue on timeout
+            const queue = this.pending.get(responseType);
+            if (queue) {
+              const idx = queue.findIndex((r) => r.resolve === resolveHandler);
+              if (idx >= 0) {
+                queue.splice(idx, 1);
+              }
+            }
+            reject(new Error(`mediasoup request timeout: ${responseType}`));
+          }, 10_000);
+
+          this.pending.get(responseType)!.push({
+            resolve: resolveHandler,
+            reject: (err: Error) => {
+              clearTimeout(timeoutId);
+              reject(err);
+            },
+          });
+
+          this.signal(msg);
+        })
+    );
+    this.pendingChains.set(responseType, chain);
+    return chain;
   }
 
   private emit<K extends keyof VideoEvents>(

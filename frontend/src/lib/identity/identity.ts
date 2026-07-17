@@ -117,6 +117,9 @@ export function deriveKeypairFromMnemonic(mnemonic: string): {
   const seed = bip39.mnemonicToSeedSync(mnemonic);
   const privateKey = seed.slice(0, 32) as Uint8Array<ArrayBuffer>;
   const publicKey = ed25519.getPublicKey(privateKey) as Uint8Array<ArrayBuffer>;
+  // slice() copied the scalar — wipe the seed so the only remaining copy
+  // is the session privateKey (zeroed later by lockIdentity)
+  seed.fill(0);
   return { privateKey, publicKey };
 }
 
@@ -271,6 +274,7 @@ export async function unlockIdentity(password: string): Promise<void> {
   }
 
   const mnemonic = new TextDecoder().decode(decrypted);
+  new Uint8Array(decrypted).fill(0);
   const { privateKey, publicKey } = deriveKeypairFromMnemonic(mnemonic);
   const did = publicKeyToDid(publicKey);
 

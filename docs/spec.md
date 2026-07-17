@@ -99,6 +99,15 @@ enum MessageType {
   System       = "system",
 }
 
+// NOTE: DM delivery/read receipts are implemented, but NOT via these wire
+// types — DMs use tagged binary envelopes over the direct libp2p stream:
+//   0x01 chat  { id, text, ts }
+//   0x02 ack   → recipient got it        → status "delivered"
+//   0x03 read  string[] of messageIds    → conversation on screen → "read"
+// (see frontend/src/lib/transport/dm-codec.ts)
+// Status ladder: sending (queued offline) → sent → delivered → read.
+// Statuses never regress; queued DMs retry when the peer's profile arrives.
+
 // only chat types are persisted to IDB
 type ChatMessageType = MessageType.Text | MessageType.Reply | MessageType.Reaction | MessageType.File
 
@@ -364,7 +373,8 @@ function sortMessages(a: Message, b: Message): number {
 ## Sync Flow
 
 ```txt
-peer joins room → connects to all peers in full mesh (SimplePeer)
+peer joins room → rendezvous on the Go relay → dials peers via
+libp2p (WebRTC direct, circuit-relay fallback); gossipsub per room topic
 
 on each connection (both sides independently):
   → send SyncDigest { watermarks }          // vector clock of what I have

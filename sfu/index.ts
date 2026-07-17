@@ -134,6 +134,8 @@ interface PeerState {
     string,
     { consumer: mediasoup.types.Consumer; producerId: string }
   >;
+  // Track which producers have been notified as closed to avoid duplicates
+  notifiedClosedProducers: Set<string>;
 }
 
 // ── Room state ────────────────────────────────────────────────────────────────
@@ -313,6 +315,12 @@ async function handleProduce(peer: PeerState, msg: MSProduce): Promise<void> {
   }
 
   function notifyProducerClosed(producerId: string, source: "camera" | "screen") {
+    // Avoid duplicate notifications
+    if (peer.notifiedClosedProducers.has(producerId)) {
+      return;
+    }
+    peer.notifiedClosedProducers.add(producerId);
+
     peer.producers.delete(producerId);
     const room = rooms.get(peer.roomCode);
     if (room) {
@@ -329,10 +337,6 @@ async function handleProduce(peer: PeerState, msg: MSProduce): Promise<void> {
   }
 
   producer.on("transportclose", () => {
-    notifyProducerClosed(producer.id, producer.appData.source as "camera" | "screen");
-  });
-
-  producer.observer.on("close", () => {
     notifyProducerClosed(producer.id, producer.appData.source as "camera" | "screen");
   });
 
@@ -576,6 +580,7 @@ async function main(): Promise<void> {
           recvTransport: null,
           producers: new Map(),
           consumers: new Map(),
+          notifiedClosedProducers: new Set(),
         };
         const room = getOrCreateRoom(joinMsg.roomCode);
         if (room.has(peer.peerId)) {

@@ -19,11 +19,8 @@ export enum MessageType {
   SyncDigest = "sync_digest",
   SyncBatch = "sync_batch",
   SyncComplete = "sync_complete",
-  // future
-  SyncAck = "sync_ack",
-  DeliveryAck = "delivery_ack",
-  ReadAck = "read_ack",
-  System = "system",
+  // DM delivery/read receipts do NOT use MessageType — they are tagged
+  // binary envelopes over the direct stream (see dm-codec.ts)
 }
 
 /** Types that are persisted to IDB and displayed in the chat. */
@@ -50,7 +47,8 @@ export interface Message {
   senderId: string;
   senderName: string;
   senderDid?: string;
-  sig?: string; // ed25519 over canonical(id, senderId, lamport, content)
+  sig?: string; // ed25519 over the canonical form (see messaging.ts)
+  sigV?: number; // canonical version: absent = v1, 2 = covers reactions/reply/meta
   timestamp: number; // wall clock, display only
   lamport: number; // logical clock, ordering source of truth
   type: ChatMessageType;
@@ -116,6 +114,7 @@ export interface WireChatMessage {
   senderName: string;
   senderDid?: string;
   sig?: string;
+  sigV?: number;
   timestamp: number;
   lamport: number;
   content: string;
@@ -185,20 +184,6 @@ export interface WireSyncComplete {
   type: MessageType.SyncComplete;
 }
 
-// ── Ack wire messages ─────────────────────────────────────────────────────────
-
-export interface WireDeliveryAck {
-  type: MessageType.DeliveryAck;
-  messageId: string;
-  senderId: string;
-}
-
-export interface WireReadAck {
-  type: MessageType.ReadAck;
-  messageId: string;
-  senderId: string;
-}
-
 // File wire
 export interface FileSignalWireMessage {
   type: "__file_signal";
@@ -218,9 +203,7 @@ export type AnyWireMessage =
   | WireRoomUsersSync
   | WireSyncDigest
   | WireSyncBatch
-  | WireSyncComplete
-  | WireDeliveryAck
-  | WireReadAck;
+  | WireSyncComplete;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -236,6 +219,7 @@ export function wireToMessage(
     senderName: wire.senderName,
     senderDid: wire.senderDid,
     sig: wire.sig,
+    sigV: wire.sigV,
     timestamp: wire.timestamp,
     lamport: wire.lamport,
     type: wire.type,
@@ -258,6 +242,7 @@ export function messageToWire(msg: Message): WireChatMessage {
     senderName: msg.senderName,
     senderDid: msg.senderDid,
     sig: msg.sig,
+    sigV: msg.sigV,
     timestamp: msg.timestamp,
     lamport: msg.lamport,
     content: msg.content,

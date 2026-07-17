@@ -1,5 +1,4 @@
 import { deleteDB, openDB, type IDBPDatabase } from "idb";
-import * as Y from "yjs";
 
 import type {
   Attachment,
@@ -14,7 +13,7 @@ import type {
   WebAuthnRecord,
 } from "./identity/identity";
 
-export type RoomType = "text" | "voice" | "dm";
+export type RoomType = "text" | "dm";
 
 export interface Room {
   roomCode: string;
@@ -328,6 +327,14 @@ export async function getUnreadCount(
   return messages.filter((m) => m.senderId !== excludeSenderId).length;
 }
 
+const MESSAGE_STATUS_RANK: Record<MessageStatus, number> = {
+  sending: 0,
+  sent: 1,
+  delivered: 2,
+  read: 3,
+};
+
+/** Advance a message's delivery status. Never regresses (read stays read). */
 export async function updateMessageStatus(
   id: string,
   status: MessageStatus
@@ -336,6 +343,12 @@ export async function updateMessageStatus(
   const tx = database.transaction("messages", "readwrite");
   const message = await tx.store.get(id);
   if (!message) return;
+  if (
+    message.status &&
+    MESSAGE_STATUS_RANK[message.status] >= MESSAGE_STATUS_RANK[status]
+  ) {
+    return;
+  }
   await tx.store.put({ ...message, status });
   await tx.done;
 }
@@ -359,16 +372,6 @@ export async function getAttachmentsByInfoHash(
 ): Promise<Attachment[]> {
   const database = await getDB();
   return database.getAllFromIndex("attachments", "byInfoHash", infoHash);
-}
-
-export async function getSeedableAttachments(): Promise<Attachment[]> {
-  const database = await getDB();
-  const complete = await database.getAllFromIndex(
-    "attachments",
-    "byStatus",
-    "complete"
-  );
-  return complete.filter((a) => !!a.data);
 }
 
 export async function getAttachmentsWithData(
@@ -406,32 +409,6 @@ export async function updateAttachmentStatus(
   if (!attachment) return;
   await tx.store.put({ ...attachment, status });
   await tx.done;
-}
-
-export async function getPendingByRecipient(
-  recipientDid: string
-): Promise<PendingMessage[]> {
-  const database = await getDB();
-  return database.getAllFromIndex("pending", "byRecipient", recipientDid);
-}
-
-export async function putPending(pending: PendingMessage): Promise<void> {
-  const database = await getDB();
-  await database.put("pending", pending);
-}
-
-export async function incrementPendingAttempts(id: string): Promise<void> {
-  const database = await getDB();
-  const tx = database.transaction("pending", "readwrite");
-  const record = await tx.store.get(id);
-  if (!record) return;
-  await tx.store.put({ ...record, attempts: record.attempts + 1 });
-  await tx.done;
-}
-
-export async function deletePending(id: string): Promise<void> {
-  const database = await getDB();
-  await database.delete("pending", id);
 }
 
 export async function getKeypairRecord(): Promise<KeypairRecord | undefined> {
@@ -570,25 +547,6 @@ export async function cleanupInactiveParticipants(
 }
 
 /**
- * Patch a room's mutable fields.
- * pfpData and pfpURL are mutually exclusive — setting one clears the other.
- */
-export async function updateRoom(
-  roomCode: string,
-  patch: Partial<Pick<Room, "name" | "pfpData" | "pfpURL">>
-): Promise<void> {
-  const database = await getDB();
-  const tx = database.transaction("rooms", "readwrite");
-  const room = await tx.store.get(roomCode);
-  if (!room) return;
-  const updated = { ...room, ...patch };
-  if (patch.pfpData !== undefined) updated.pfpURL = undefined;
-  if (patch.pfpURL !== undefined) updated.pfpData = undefined;
-  await tx.store.put(updated);
-  await tx.done;
-}
-
-/**
  * Mark all messages up to the given lamport as seen.
  * Used to derive unread count in the sidebar.
  */
@@ -660,27 +618,6 @@ export async function getAllPeerProfiles(): Promise<PeerProfile[]> {
 }
 
 /**
- * Patch a cached peer profile.
- * Called when a peer broadcasts a profile update over the data channel.
- * pfpData and pfpURL are mutually exclusive — setting one clears the other.
- */
-export async function updatePeerProfile(
-  did: string,
-  patch: Partial<Pick<PeerProfile, "nickname" | "pfpData" | "pfpURL">>
-): Promise<void> {
-  const database = await getDB();
-  const tx = database.transaction("profiles", "readwrite");
-  const record = await tx.store.get(did);
-  if (!record || record.isMe) return;
-  const profile = record as PeerProfile;
-  const updated: PeerProfile = { ...profile, ...patch, updatedAt: Date.now() };
-  if (patch.pfpData !== undefined) updated.pfpURL = undefined;
-  if (patch.pfpURL !== undefined) updated.pfpData = undefined;
-  await tx.store.put(updated);
-  await tx.done;
-}
-
-/**
  * Generate a runtime blobURL from pfpData.
  * Use when pfpData is set and you need an <img src>.
  * Caller must call URL.revokeObjectURL() when done.
@@ -738,26 +675,6 @@ export async function getWatermarksForRoom(
   return Object.fromEntries(records.map((r) => [r.senderId, r.maxLamport]));
 }
 
-/**
- * Load a persisted Yjs snapshot into a doc.
- * Call before connecting peers to avoid redundant re-sync.
- */
-export async function loadYjsDoc(id: string, doc: Y.Doc): Promise<void> {
-  const database = await getDB();
-  const record = await database.get("yjsDocs", id);
-  if (record) Y.applyUpdate(doc, record.update);
-}
-
-/**
- * Persist the current Yjs doc state as a full snapshot.
- * Call in doc.on("update", ...) to keep IndexedDB in sync.
- */
-export async function saveYjsDoc(id: string, doc: Y.Doc): Promise<void> {
-  const database = await getDB();
-  const update = Y.encodeStateAsUpdate(doc);
-  await database.put("yjsDocs", { id, update });
-}
-
 export async function getAllSavedGifs(): Promise<SavedGif[]> {
   const database = await getDB();
   return database.getAll("savedGifs");
@@ -796,13 +713,6 @@ export async function getPhonebookEntries(): Promise<PhonebookEntry[]> {
   });
 }
 
-export async function getPhonebookEntry(
-  peerId: string
-): Promise<PhonebookEntry | undefined> {
-  const database = await getDB();
-  return database.get("phonebook", peerId);
-}
-
 export async function putPhonebookEntry(entry: PhonebookEntry): Promise<void> {
   const database = await getDB();
   await database.put("phonebook", entry);
@@ -811,22 +721,6 @@ export async function putPhonebookEntry(entry: PhonebookEntry): Promise<void> {
 export async function deletePhonebookEntry(peerId: string): Promise<void> {
   const database = await getDB();
   await database.delete("phonebook", peerId);
-}
-
-export async function togglePhonebookFavorite(
-  peerId: string
-): Promise<boolean> {
-  const database = await getDB();
-  const entry = await database.get("phonebook", peerId);
-  if (!entry) return false;
-  const newFavorite = !entry.favorite;
-  await database.put("phonebook", { ...entry, favorite: newFavorite });
-  return newFavorite;
-}
-
-export async function putWebAuthnRecord(record: WebAuthnRecord): Promise<void> {
-  const database = await getDB();
-  await database.put("identity", record);
 }
 
 export async function deleteWebAuthnRecord(): Promise<void> {

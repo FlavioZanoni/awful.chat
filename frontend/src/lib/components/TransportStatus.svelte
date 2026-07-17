@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { _transport } from "$lib/transport/transport.svelte";
+  import { _transport, transportState } from "$lib/transport/transport.svelte";
   import type { TransportStatus } from "$lib/transport/types";
   import {
     Activity,
@@ -36,7 +36,9 @@
 
   let statusItems = $state<StatusItem[]>([]);
   let itemId = 0;
-  let relayConnected = $state(true);
+  // Single source of truth — transport.svelte.ts keeps this in sync with
+  // relay status events, so the indicator can't drift from reality.
+  const relayConnected = $derived(transportState.relayConnected);
   let peerCount = $state(0);
   let isMobile = $state(false);
   let isVisible = $state(true);
@@ -89,11 +91,9 @@
     const handleStatus = (status: TransportStatus) => {
       switch (status.type) {
         case "relay-connected":
-          relayConnected = true;
           addStatus("connected", status.message, Server);
           break;
         case "relay-disconnected":
-          relayConnected = false;
           addStatus("error", status.message, Unplug);
           break;
         case "relay-dial-failed":

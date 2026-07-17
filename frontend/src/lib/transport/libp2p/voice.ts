@@ -140,6 +140,11 @@ export class LibP2PVoice implements VoiceTransport {
       this.onTransportConnect = null;
     }
 
+    if (this.onTransportDisconnect) {
+      this.transport.off("disconnect", this.onTransportDisconnect);
+      this.onTransportDisconnect = () => {};
+    }
+
     for (const peerId of [...this.remotePeers.keys()]) {
       this.teardownRemotePeer(peerId);
       this.emit("peerLeft", peerId);
@@ -390,7 +395,10 @@ export class LibP2PVoice implements VoiceTransport {
 
     if (!stream) return;
 
-    if (remote.pc.remoteDescription) return;
+    if (remote.pc.remoteDescription) {
+      stream.abort(new Error("peer connection already has remote description"));
+      return;
+    }
 
     this.attachStream(peerId, remote, stream);
 
@@ -547,11 +555,24 @@ export class LibP2PVoice implements VoiceTransport {
         // attempt ICE restart if signaling stream is still alive
         if (remote.sigStream && remote.pc.signalingState === "stable") {
           remote.pc.restartIce();
-          remote.pc.createOffer({ iceRestart: true }).then((offer) => {
-            remote.pc.setLocalDescription(offer).then(() => {
-              this.sendSignal(peerId, { type: "offer", sdp: offer.sdp! });
+          remote.pc
+            .createOffer({ iceRestart: true })
+            .then((offer) => {
+              return remote.pc.setLocalDescription(offer).then(() => {
+                this.sendSignal(peerId, { type: "offer", sdp: offer.sdp! });
+              });
+            })
+            .catch((err) => {
+              console.warn(
+                `[LibP2PVoice] ICE restart failed for ${peerId}:`,
+                err
+              );
+              this.emit("status", {
+                type: "voice-connection-failed",
+                peerId: peerId.slice(-8),
+                message: `Voice ICE restart failed for ${peerId.slice(-8)}`,
+              });
             });
-          });
         }
       }
     };

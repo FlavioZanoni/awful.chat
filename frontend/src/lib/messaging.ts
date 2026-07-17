@@ -11,21 +11,60 @@
  */
 
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { hex, unhex, utf8 } from "./utils";
 import { didToPublicKey, requireSession } from "./identity/identity";
 import type { Message } from "./types/message";
 
 /**
- * Produce the canonical string that is signed and verified for a message.
- * Excludes `timestamp` — wall-clock time is untrusted and must not affect
- * signature validity.
- *
- * Both signMessage and verifyMessage must use this exact form.
+ * Legacy (v1) canonical form: only id/senderId/lamport/content are signed.
+ * Kept for verifying messages produced before sigV 2 existed.
  */
 export function canonicalContent(
   msg: Pick<Message, "id" | "senderId" | "lamport" | "content">
 ): string {
   return `${msg.id}:${msg.senderId}:${msg.lamport}:${msg.content}`;
+}
+
+type Signable = Pick<
+  Message,
+  | "id"
+  | "senderId"
+  | "lamport"
+  | "content"
+  | "reactionTo"
+  | "reactionEmoji"
+  | "reactionOp"
+  | "replyTo"
+  | "meta"
+> & { sigV?: number };
+
+/**
+ * v2 canonical form — additionally covers reaction fields, the replied-to
+ * message id, and file metadata (infoHashes!) so none of them can be
+ * swapped in transit on a validly signed message. JSON array encoding is
+ * deterministic and unambiguous regardless of content characters.
+ * Excludes `timestamp` — wall-clock time is untrusted.
+ */
+export function canonicalContentV2(msg: Signable): string {
+  return JSON.stringify([
+    msg.id,
+    msg.senderId,
+    msg.lamport,
+    msg.content,
+    msg.reactionTo ?? null,
+    msg.reactionEmoji ?? null,
+    msg.reactionOp ?? null,
+    msg.replyTo?.id ?? null,
+    msg.meta?.files?.map(
+      (f) => `${f.infoHash}:${f.size}:${f.mimeType}:${f.filename}`
+    ) ?? null,
+  ]);
+}
+
+/** Pick the canonical form matching the message's signature version. */
+export function canonicalFor(msg: Signable): string {
+  return msg.sigV === 2 ? canonicalContentV2(msg) : canonicalContent(msg);
 }
 
 // ── ed25519 sign / verify ─────────────────────────────────────────────────────
@@ -38,8 +77,8 @@ export function canonicalContent(
  */
 export function signMessage(message: Message): Message {
   const { privateKey, did } = requireSession();
-  const sig = ed25519.sign(utf8(canonicalContent(message)), privateKey);
-  return { ...message, senderDid: did, sig: hex(sig) };
+  const sig = ed25519.sign(utf8(canonicalContentV2(message)), privateKey);
+  return { ...message, senderDid: did, sig: hex(sig), sigV: 2 };
 }
 
 /**
@@ -71,24 +110,10 @@ export async function verifySignature(
  */
 export async function verifyMessage(message: Message): Promise<boolean> {
   if (!message.senderDid || !message.sig) return false;
-  return verifySignature(
-    message.senderDid,
-    message.sig,
-    canonicalContent(message)
-  );
+  return verifySignature(message.senderDid, message.sig, canonicalFor(message));
 }
 
 // ── X25519 key agreement ──────────────────────────────────────────────────────
-
-/**
- * Return the X25519 public key derived from the current identity's ed25519 key.
- * Shared with DM senders so they can encrypt messages addressed to this identity.
- * Requires an unlocked session.
- */
-export function getX25519PublicKey(): Uint8Array<ArrayBuffer> {
-  const { publicKey } = requireSession();
-  return ed25519.utils.toMontgomery(publicKey) as Uint8Array<ArrayBuffer>;
-}
 
 /**
  * Compute a shared X25519 secret with another peer via ECDH.
@@ -106,10 +131,14 @@ export function computeSharedSecret(
   const theirX25519Pub = ed25519.utils.toMontgomery(
     theirEd25519PubKey
   ) as Uint8Array<ArrayBuffer>;
-  return x25519.getSharedSecret(
-    myX25519Priv,
-    theirX25519Pub
-  ) as Uint8Array<ArrayBuffer>;
+  const raw = x25519.getSharedSecret(myX25519Priv, theirX25519Pub);
+  // Never use raw ECDH output as a key directly — hash for key separation
+  // (domain tag) and to erase the curve point's algebraic structure.
+  return sha256
+    .create()
+    .update(utf8("awful-dm-v1"))
+    .update(raw)
+    .digest() as Uint8Array<ArrayBuffer>;
 }
 
 // ── DM encryption / decryption ────────────────────────────────────────────────

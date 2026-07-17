@@ -46,15 +46,18 @@ import { LibP2PTransport } from "./libp2p/transport";
 import { LibP2PVoice } from "./libp2p/voice";
 import { DtlnProcessor } from "../audio/dtln-processor";
 import { requireSession } from "../identity/identity";
-import { signMessage } from "../messaging";
+import { canonicalFor, signMessage, verifySignature } from "../messaging";
 import { encode, decode, normalizeAvatarUrl } from "../utils";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
 import {
   encodeDmAckEnvelope,
+  encodeDmReadEnvelope,
+  parseDmEnvelope,
+} from "./dm-codec";
+import {
   ensureDmRoomForPeer,
   flushQueuedDmForPeer,
   joinPhonebookDmRooms,
-  parseDmEnvelope,
   resolveDmDisplayName,
   sendDirectMessage,
 } from "./dm.svelte";
@@ -188,6 +191,26 @@ initVoice(_voice, _dtln);
 initTransmission(_video);
 initFiles(_fileTransport);
 
+const STATUS_RANK = { sending: 0, sent: 1, delivered: 2, read: 3 } as const;
+
+/**
+ * Advance a message's delivery status (never regress: a late "delivered"
+ * ack must not overwrite "read"). Updates IDB and the in-memory list.
+ */
+export function applyMessageStatus(
+  messageId: string,
+  status: keyof typeof STATUS_RANK
+): void {
+  updateMessageStatus(messageId, status).catch(() => {});
+  const idx = transportState.messages.findIndex((m) => m.id === messageId);
+  if (idx === -1) return;
+  const current = transportState.messages[idx].status;
+  if (current && STATUS_RANK[current] >= STATUS_RANK[status]) return;
+  const next = [...transportState.messages];
+  next[idx] = { ...next[idx], status };
+  transportState.messages = next;
+}
+
 function lamportSend(): number {
   _lamport += 1;
   return _lamport;
@@ -242,23 +265,7 @@ async function _sendProfile(peerId?: string): Promise<void> {
 }
 
 async function _broadcastProfile(): Promise<void> {
-  try {
-    const profile = await getOwnProfile();
-    const name = profile?.nickname?.trim() || "Anonymous";
-    const did = identityStore.did ?? null;
-    let avatarUrl: string | null = profile?.pfpURL || null;
-    if (!avatarUrl && profile?.pfpData) {
-      const bytes = new Uint8Array(profile.pfpData);
-      const binary = Array.from(bytes)
-        .map((b) => String.fromCharCode(b))
-        .join("");
-      avatarUrl = `data:image/jpeg;base64,${btoa(binary)}`;
-    }
-    _transport.broadcast(
-      encode({ type: MessageType.Profile, name, did, avatarUrl }),
-      transportState.roomCode!
-    );
-  } catch {}
+  await _sendProfile().catch(() => {});
 }
 
 async function _sendDigest(peerId: string): Promise<void> {
@@ -278,7 +285,9 @@ export async function _loadHistory(roomCode: string): Promise<void> {
     getAllPeerProfiles(),
   ]);
   transportState.messages = msgs;
-  if (msgs.length > 0) {
+  // DM rooms use wall-clock ms as their lamport — absorbing those here would
+  // catapult the shared room clock to ~1.7e12 and skew every room after.
+  if (msgs.length > 0 && !roomCode.startsWith("dm-")) {
     _lamport = Math.max(_lamport, ...msgs.map((m) => m.lamport));
   }
   if (profiles.length > 0) {
@@ -363,7 +372,15 @@ async function _handleSyncBatch(messages: WireChatMessage[]): Promise<void> {
   if (!messages.length || !transportState.roomCode) return;
 
   const roomCode = transportState.roomCode;
-  const fullMessages = messages.map((w) => wireToMessage(w, roomCode));
+  const verdicts = await Promise.all(messages.map(_verifyIncoming));
+  const verified = messages.filter((_, i) => verdicts[i]);
+  if (verified.length < messages.length) {
+    console.warn(
+      `[sync] dropped ${messages.length - verified.length} message(s) with invalid signatures`
+    );
+  }
+  if (!verified.length) return;
+  const fullMessages = verified.map((w) => wireToMessage(w, roomCode));
 
   await bulkPutMessages(fullMessages);
 
@@ -401,7 +418,13 @@ function _handleSyncComplete(peerId: string): void {
 
 function _handleProfile(peerId: string, msg: WireProfile): void {
   const did = msg.did ?? peerId;
+  const isNewMapping = _peerIdToDid.get(peerId) !== did;
   _peerIdToDid.set(peerId, did);
+
+  // Queued DMs are keyed by DID, and the "connect" event fires before we
+  // know the peer's DID — so the real flush happens here, once the profile
+  // (and with it the DID) has arrived.
+  if (isNewMapping) flushQueuedDmForPeer(peerId).catch(() => {});
 
   const avatarUrl = normalizeAvatarUrl(msg.avatarUrl);
 
@@ -529,6 +552,23 @@ function _broadcastLeaveRoom(): void {
   );
 }
 
+/**
+ * Authenticate an incoming chat message.
+ * A signed message must verify (and senderDid must match the claimed
+ * did:key senderId) or it is dropped. Unsigned messages are accepted:
+ * history predating signing and DM messages mirrored by the receiver are
+ * stored without a sig, and rejecting them silently destroys sync.
+ * ponytail: unsigned did:key claims are still spoofable — tighten to
+ * mandatory signatures once legacy history has aged out.
+ */
+async function _verifyIncoming(wire: WireChatMessage): Promise<boolean> {
+  if (!wire.sig) return true;
+  if (wire.senderId.startsWith("did:key:") && wire.senderDid !== wire.senderId)
+    return false;
+  if (!wire.senderDid) return false;
+  return verifySignature(wire.senderDid, wire.sig, canonicalFor(wire));
+}
+
 function _handleChatMessage(
   wire: WireChatMessage,
   roomCodeOverride?: string,
@@ -618,6 +658,20 @@ function _handleChatMessage(
 
 // ── Transport events ──────────────────────────────────────────────────────────
 
+_transport.on("status", (status) => {
+  switch (status.type) {
+    case "relay-connected":
+      transportState.relayConnected = true;
+      break;
+    case "relay-disconnected":
+    case "relay-dial-failed":
+    case "relay-reconnecting":
+    case "relay-reconnect-failed":
+      transportState.relayConnected = false;
+      break;
+  }
+});
+
 _transport.on("connect", (peerId) => {
   transportState.peers = _transport.peers();
   flushQueuedDmForPeer(peerId).catch(() => {});
@@ -675,14 +729,13 @@ _transport.on("message", (peerId, data, room) => {
     const envelope = parseDmEnvelope(data);
     if (envelope) {
       if (envelope.type === "ack") {
-        updateMessageStatus(envelope.messageId, "delivered").catch(() => {});
-        const idx = transportState.messages.findIndex(
-          (m) => m.id === envelope.messageId
-        );
-        if (idx !== -1) {
-          const next = [...transportState.messages];
-          next[idx] = { ...next[idx], status: "delivered" };
-          transportState.messages = next;
+        applyMessageStatus(envelope.messageId, "delivered");
+        return;
+      }
+
+      if (envelope.type === "read") {
+        for (const id of envelope.messageIds) {
+          applyMessageStatus(id, "read");
         }
         return;
       }
@@ -730,6 +783,10 @@ _transport.on("message", (peerId, data, room) => {
             }
             await refreshDmRooms();
             transportState.dmVersion += 1;
+            // Conversation is on screen — this message is read, not just delivered
+            _transport
+              .send(peerId, encodeDmReadEnvelope([envelope.payload.id]))
+              .catch(() => {});
           }
         }
 
@@ -798,7 +855,16 @@ _transport.on("message", (peerId, data, room) => {
       case MessageType.Reply:
       case MessageType.Reaction:
       case MessageType.File:
-        _handleChatMessage(msg, room ?? undefined, peerId);
+        _verifyIncoming(msg)
+          .then((ok) => {
+            if (ok) _handleChatMessage(msg, room ?? undefined, peerId);
+            else
+              console.warn(
+                "[app] dropped message with invalid signature from",
+                msg.senderId
+              );
+          })
+          .catch(() => {});
         break;
     }
   } catch (e) {
@@ -807,6 +873,26 @@ _transport.on("message", (peerId, data, room) => {
 });
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+const CONNECT_RETRY_BASE_MS = 3_000;
+const CONNECT_RETRY_MAX_MS = 30_000;
+let _connectRetryDelay = CONNECT_RETRY_BASE_MS;
+let _connectRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function _scheduleConnectRetry(): void {
+  if (_connectRetryTimer) return;
+  _connectRetryTimer = setTimeout(() => {
+    _connectRetryTimer = null;
+    // Stop retrying if the identity got locked in the meantime
+    try {
+      requireSession();
+    } catch {
+      return;
+    }
+    connect().catch(() => {});
+  }, _connectRetryDelay);
+  _connectRetryDelay = Math.min(_connectRetryDelay * 2, CONNECT_RETRY_MAX_MS);
+}
 
 export async function connect() {
   if (transportState.relayConnected) return;
@@ -819,10 +905,13 @@ export async function connect() {
     try {
       await _transport.connect(requireSession().privateKey);
       transportState.relayConnected = true;
+      transportState.error = null;
+      _connectRetryDelay = CONNECT_RETRY_BASE_MS;
       joinPhonebookDmRooms().catch(() => {});
     } catch (err) {
       transportState.error = err instanceof Error ? err.message : String(err);
       transportState.relayConnected = false;
+      _scheduleConnectRetry();
     } finally {
       _connectPromise = null;
     }
@@ -868,7 +957,10 @@ export async function joinRoom(roomCode: string): Promise<void> {
     participants.add(selfDid);
     transportState.roomUsers = [...participants];
     await addRoomParticipant(roomCode, selfDid);
-    await _resumeAttachmentSeeding(roomCode);
+    // Best-effort: one corrupt stored attachment must not block joining
+    await _resumeAttachmentSeeding(roomCode).catch((err) =>
+      console.warn("[room] attachment re-seed failed:", err)
+    );
     await _broadcastProfile();
     _broadcastJoinRoom();
   } catch (err) {
@@ -884,10 +976,6 @@ export function getRoomUsers(): string[] {
 
 export function leaveRoom(): void {
   _broadcastLeaveRoomAndDisconnect();
-}
-
-export function switchRoom(): void {
-  _disconnectWithoutBroadcasting();
 }
 
 function _broadcastLeaveRoomAndDisconnect(): void {
@@ -1056,7 +1144,7 @@ export async function sendFiles(
   const myId = identityStore.did ?? _transport.selfId();
   const lamport = lamportSend();
 
-  const msg: Message = {
+  let msg: Message = {
     id: messageId,
     roomCode: transportState.roomCode,
     senderId: myId,
@@ -1069,6 +1157,8 @@ export async function sendFiles(
     attachments: attachmentIds,
     replyTo: options.replyTo,
   };
+
+  msg = signMessage(msg);
 
   _transport.broadcast(encode(messageToWire(msg)), transportState.roomCode);
   await putMessage(msg);

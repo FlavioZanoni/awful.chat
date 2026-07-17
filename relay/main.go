@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -39,9 +41,16 @@ type serverMsg struct {
 	Peer  string   `json:"peer,omitempty"` // PEER_JOINED | PEER_LEFT
 }
 
+// rvStream is the slice of network.Stream the registry needs — an
+// interface so tests can stub it without a real libp2p stream.
+type rvStream interface {
+	io.Writer
+	SetWriteDeadline(time.Time) error
+}
+
 type connectedClient struct {
 	peerId string
-	stream network.Stream
+	stream rvStream
 	rooms  map[string]struct{}
 }
 
@@ -70,6 +79,9 @@ func (r *registry) sendTo(c *connectedClient, msg serverMsg) {
 	frame[2] = byte(len(data) >> 8)
 	frame[3] = byte(len(data))
 	copy(frame[4:], data)
+	// sendTo runs with r.mu held — a stalled client must not be able to
+	// wedge the whole registry on a blocking Write
+	c.stream.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	c.stream.Write(frame)
 }
 
@@ -266,6 +278,8 @@ func main() {
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/og", handleOgPreview)
+		// the frontend fetches /og/preview (path inherited from the old signal server)
+		mux.HandleFunc("/og/preview", handleOgPreview)
 		mux.HandleFunc("/klipy/search", handleKlipySearch)
 		mux.HandleFunc("/klipy/trending", handleKlipyTrending)
 		log.Printf("[http] Starting API server on port %s", apiPort)
@@ -331,31 +345,3 @@ func printAddrs(h host.Host) {
 	}
 }
 
-func startHTTPServerWithHost(h host.Host, port string) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/og", handleOgPreview)
-	mux.HandleFunc("/klipy/search", handleKlipySearch)
-	mux.HandleFunc("/klipy/trending", handleKlipyTrending)
-
-	// Wrap with WebSocket upgrade handler for libp2p
-	handler := &wsUpgradeHandler{next: mux, host: h}
-
-	log.Printf("[http] Starting on port %s (HTTP + WebSocket)", port)
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
-		log.Printf("[http] Server error: %v", err)
-	}
-}
-
-type wsUpgradeHandler struct {
-	next http.Handler
-	host host.Host
-}
-
-func (h *wsUpgradeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Check if this is a WebSocket upgrade request
-	if r.Header.Get("Upgrade") == "websocket" {
-		// Let libp2p handle it - the websocket transport should handle this
-		// For now, fall through to next handler
-	}
-	h.next.ServeHTTP(w, r)
-}

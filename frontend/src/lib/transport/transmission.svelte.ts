@@ -148,10 +148,6 @@ export function setTransmissionOutputVolume(volume: number): void {
     });
 }
 
-export function getTransmissionOutputVolume(): number {
-  return _volume;
-}
-
 export async function watchTransmission(
   peerId: string,
   producerId: string

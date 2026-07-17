@@ -5,8 +5,7 @@ import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { identify, type Identify } from "@libp2p/identify";
-import { gossipsub } from "@libp2p/gossipsub";
-import { type PubSub } from "@libp2p/pubsub-peer-discovery";
+import { gossipsub, type GossipSub } from "@libp2p/gossipsub";
 import { keys } from "@libp2p/crypto";
 import { peerIdFromPrivateKey, peerIdFromString } from "@libp2p/peer-id";
 import { multiaddr } from "@multiformats/multiaddr";
@@ -42,7 +41,7 @@ function encodeFrame(data: Uint8Array): Uint8Array {
 }
 
 export interface AppServices {
-  pubsub: PubSub;
+  pubsub: GossipSub;
   identify: Identify;
   [key: string]: unknown;
 }
@@ -58,7 +57,7 @@ export class LibP2PTransport implements PeerTransport {
 
   private peerStreams = new Map<string, Stream>();
   private pendingQueues = new Map<string, Uint8Array[]>();
-  private openingStreams = new Set<string>();
+  private openingStreams = new Map<string, Promise<void>>();
   private dialingPeers = new Set<string>();
   private joinedRooms = new Set<string>();
 
@@ -74,6 +73,25 @@ export class LibP2PTransport implements PeerTransport {
 
   async connect(privateKeyBytes?: Uint8Array | null): Promise<void> {
     this.intentionalDisconnect = false;
+
+    // A previous failed connect may have left a half-started node behind —
+    // stop it so retries don't leak libp2p nodes.
+    if (this.node) {
+      try {
+        await this.node.stop();
+      } catch {}
+      this.node = null;
+    }
+    // All per-connection state belongs to the old node. Stale connectedPeers
+    // would suppress future "connect" events; stale streams can't be reused.
+    // joinedRooms is intentionally KEPT — it's re-subscribed below.
+    this.connectedPeers.clear();
+    this.relayedPeers.clear();
+    this.peerStreams.clear();
+    this.pendingQueues.clear();
+    this.openingStreams.clear();
+    this.dialingPeers.clear();
+    this.rendezvousStream = null;
 
     if (privateKeyBytes) this.privateKeyBytes = privateKeyBytes;
 
@@ -115,7 +133,16 @@ export class LibP2PTransport implements PeerTransport {
     const myId = this.node.peerId.toString();
     console.log("[LibP2PTransport] node started, selfId:", myId);
 
-    await this.dialRelay();
+    try {
+      await this.dialRelay();
+    } catch (err) {
+      // Don't leave a running node behind on a failed connect
+      try {
+        await this.node.stop();
+      } catch {}
+      this.node = null;
+      throw err;
+    }
     await this.requestRelayReservation();
     await this.waitForRelayReservation();
 
@@ -171,6 +198,13 @@ export class LibP2PTransport implements PeerTransport {
       }
     });
 
+    // Re-subscribe rooms joined before a reconnect — the new node starts
+    // with no subscriptions, and joinRoom() early-returns for known rooms.
+    // (startRendezvous re-REGISTERs them with the relay itself.)
+    for (const room of this.joinedRooms) {
+      this.node.services.pubsub.subscribe(roomTopic(room));
+    }
+
     this.startRendezvous();
   }
 
@@ -218,34 +252,44 @@ export class LibP2PTransport implements PeerTransport {
     this.dialingPeers.clear();
   }
 
-  async send(peerId: string, data: Uint8Array): Promise<void> {
-    if (!this.node || this.isRelayPeer(peerId)) return;
-    if (peerId === this.node.peerId.toString()) return;
+  /**
+   * Send to a peer over the direct-message stream.
+   * Resolves true once the frame is handed to an open stream, false if the
+   * stream could not be opened or the write failed — so callers (e.g. the
+   * DM retry queue) can requeue instead of messages vanishing silently.
+   */
+  async send(peerId: string, data: Uint8Array): Promise<boolean> {
+    if (!this.node || this.isRelayPeer(peerId)) return false;
+    if (peerId === this.node.peerId.toString()) return false;
 
     const stream = this.peerStreams.get(peerId);
     if (stream) {
-      this.writeFrame(peerId, stream, data);
-      return;
+      return this.writeFrame(peerId, stream, data);
     }
 
     if (!this.pendingQueues.has(peerId)) this.pendingQueues.set(peerId, []);
     this.pendingQueues.get(peerId)!.push(data);
 
-    if (!this.openingStreams.has(peerId)) {
-      this.openingStreams.add(peerId);
-      this.openOutboundStream(peerId).catch((err) => {
-        console.warn(
-          `[LibP2PTransport] stream open failed for ${peerId}:`,
-          err
-        );
-        this.emit("status", {
-          type: "stream-open-failed",
-          peerId: peerId.slice(-8),
-          message: `Failed to open stream to peer ${peerId.slice(-8)}`,
-        });
+    let opening = this.openingStreams.get(peerId);
+    if (!opening) {
+      opening = this.openOutboundStream(peerId).finally(() => {
         this.openingStreams.delete(peerId);
-        this.pendingQueues.delete(peerId);
       });
+      this.openingStreams.set(peerId, opening);
+    }
+
+    try {
+      await opening;
+      return true;
+    } catch (err) {
+      console.warn(`[LibP2PTransport] stream open failed for ${peerId}:`, err);
+      this.emit("status", {
+        type: "stream-open-failed",
+        peerId: peerId.slice(-8),
+        message: `Failed to open stream to peer ${peerId.slice(-8)}`,
+      });
+      this.pendingQueues.delete(peerId);
+      return false;
     }
   }
 
@@ -378,28 +422,33 @@ export class LibP2PTransport implements PeerTransport {
     );
 
     this.peerStreams.set(peerId, stream);
-    this.openingStreams.delete(peerId);
-
-    const queued = this.pendingQueues.get(peerId) ?? [];
-    this.pendingQueues.delete(peerId);
-    for (const msg of queued) {
-      this.writeFrame(peerId, stream, msg);
-    }
 
     stream.addEventListener("close", (_evt: StreamCloseEvent) => {
       this.cleanupPeerStream(peerId);
     });
+
+    const queued = this.pendingQueues.get(peerId) ?? [];
+    this.pendingQueues.delete(peerId);
+    let allOk = true;
+    for (const msg of queued) {
+      allOk = this.writeFrame(peerId, stream, msg) && allOk;
+    }
+    // Reject so every send() awaiting this open reports failure and callers
+    // requeue (receivers dedupe by message id, so re-sends are safe).
+    if (!allOk) throw new Error("write failed while flushing queued frames");
   }
 
-  private writeFrame(peerId: string, stream: Stream, data: Uint8Array): void {
+  private writeFrame(peerId: string, stream: Stream, data: Uint8Array): boolean {
     try {
       const ok = stream.send(encodeFrame(data));
       if (!ok) {
         stream.onDrain().catch(() => this.cleanupPeerStream(peerId));
       }
+      return true;
     } catch (err) {
       console.warn(`[LibP2PTransport] write failed for ${peerId}:`, err);
       this.cleanupPeerStream(peerId);
+      return false;
     }
   }
 
@@ -529,7 +578,7 @@ export class LibP2PTransport implements PeerTransport {
     }
   }
 
-  private async dialPeer(peerId: string): Promise<void> {
+  private async dialPeer(peerId: string, attempt = 0): Promise<void> {
     if (!this.node || this.connectedPeers.has(peerId)) return;
     if (this.dialingPeers.has(peerId)) return;
     this.dialingPeers.add(peerId);
@@ -549,6 +598,15 @@ export class LibP2PTransport implements PeerTransport {
       try {
         await this.node.dial(withoutWebRTC);
       } catch (err) {
+        // ponytail: 3 attempts with linear backoff; enough for transient
+        // reservation races without hammering an offline peer
+        if (attempt < 2 && !this.intentionalDisconnect) {
+          setTimeout(
+            () => this.dialPeer(peerId, attempt + 1).catch(() => {}),
+            PEER_REDIAL_DELAY_MS * (attempt + 1)
+          );
+          return;
+        }
         const message = err instanceof Error ? err.message : String(err);
         if (!message.includes("NO_RESERVATION")) {
           console.warn(

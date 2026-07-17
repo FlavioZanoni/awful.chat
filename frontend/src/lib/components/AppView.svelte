@@ -28,6 +28,7 @@
     getMessages,
     getUnreadCount,
     getPeerProfile,
+    markRoomSeen,
     putPhonebookEntry,
     type PhonebookEntry,
   } from "$lib/storage";
@@ -273,7 +274,6 @@
     roomCode: string,
     lamport: number
   ): Promise<void> {
-    const { markRoomSeen } = await import("$lib/storage");
     await markRoomSeen(roomCode, lamport);
     const next = new Map(dmUnread);
     next.set(roomCode, 0);

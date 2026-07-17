@@ -18,7 +18,6 @@
   type CallQuality = "connecting" | "p2p" | "relayed" | "degraded" | "failed";
 
   let quality = $state<CallQuality>("connecting");
-  let deafened = $state(false);
 
   let handlers: (() => void)[] = [];
 
@@ -83,9 +82,7 @@
           quality = "failed";
           break;
         case "voice-ice-connected":
-          if (quality !== "failed") {
-            quality = status.relayed ? "relayed" : "p2p";
-          }
+          quality = status.relayed ? "relayed" : "p2p";
           break;
         case "voice-connection-failed":
           quality = "failed";
@@ -120,12 +117,11 @@
       () => _voice?.off("trackAdded", handleTrackAdded),
       () => _voice?.off("trackRemoved", handleTrackRemoved),
     ];
-
-    deafened = transportState.deafened ?? false;
   });
 
   onDestroy(() => handlers.forEach((h) => h()));
 
+  const deafened = $derived(transportState.deafened ?? false);
   const config = $derived(getStatusConfig(quality));
   const StatusIcon = $derived(config.icon);
 </script>

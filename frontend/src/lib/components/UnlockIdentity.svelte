@@ -15,27 +15,21 @@
     CardHeader,
     CardTitle,
   } from "$lib/components/ui/card";
-  import { getCookie, setCookie, deleteCookie } from "$lib/utils";
+  import {
+    saveRememberedPassword,
+    loadRememberedPassword,
+    clearRememberedPassword,
+  } from "$lib/identity/remembered-password";
 
   let password = $state("");
   let remember = $state(false);
 
-  const PASSWORD_COOKIE = "awful_password";
   const DURATION_KEY = "awful_remember_duration";
-  const ONE_DAY = 86400;
 
   function getRememberDuration(): number {
     const stored = localStorage.getItem(DURATION_KEY);
     if (stored) return parseInt(stored, 10);
     return 15;
-  }
-
-  function saveRememberedPassword(value: string, duration: number) {
-    setCookie(PASSWORD_COOKIE, value, duration * ONE_DAY);
-  }
-
-  function getRememberedPassword(): string | null {
-    return getCookie(PASSWORD_COOKIE);
   }
 
   interface Props {
@@ -54,27 +48,25 @@
       !identityStore.loading &&
       !identityStore.error
     ) {
-      const stored = getRememberedPassword();
-      if (!stored) {
-        deleteCookie(PASSWORD_COOKIE);
-        return;
-      }
-      password = stored;
-      remember = true;
-      if (canUseBiometrics) {
-        return;
-      }
-      startAutoLogin(
-        unlock(stored)
-          .then(() => {
-            const resetTimer =
-              localStorage.getItem("awful_remember_reset_timer") === "true";
-            if (resetTimer) {
-              saveRememberedPassword(stored, getRememberDuration());
-            }
-          })
-          .catch(() => {})
-      );
+      loadRememberedPassword().then((stored) => {
+        if (!stored) return;
+        password = stored;
+        remember = true;
+        if (canUseBiometrics) {
+          return;
+        }
+        startAutoLogin(
+          unlock(stored)
+            .then(() => {
+              const resetTimer =
+                localStorage.getItem("awful_remember_reset_timer") === "true";
+              if (resetTimer) {
+                return saveRememberedPassword(stored, getRememberDuration());
+              }
+            })
+            .catch(() => {})
+        );
+      });
     }
   });
 
@@ -83,9 +75,9 @@
       const duration = remember ? getRememberDuration() : 0;
       await unlock(password);
       if (duration > 0) {
-        saveRememberedPassword(password, duration);
+        await saveRememberedPassword(password, duration);
       } else {
-        deleteCookie(PASSWORD_COOKIE);
+        await clearRememberedPassword();
       }
     } catch {
       password = "";
@@ -98,9 +90,9 @@
       const resetTimer =
         localStorage.getItem("awful_remember_reset_timer") === "true";
       if (resetTimer) {
-        const stored = getRememberedPassword();
+        const stored = await loadRememberedPassword();
         if (stored) {
-          saveRememberedPassword(stored, getRememberDuration());
+          await saveRememberedPassword(stored, getRememberDuration());
         }
       }
     } catch {
