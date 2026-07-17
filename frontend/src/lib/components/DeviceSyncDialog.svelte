@@ -370,6 +370,10 @@ async function handleStartScanning() {
             class="font-mono text-center uppercase"
             onkeydown={(e) => {
               if (e.key === "Enter" && manualToken.trim()) {
+                // preventDefault: otherwise the keypress bubbles into the
+                // dialog and closes it mid-submit, aborting the sync
+                e.preventDefault();
+                e.stopPropagation();
                 handleSubmitManualToken();
               }
             }}

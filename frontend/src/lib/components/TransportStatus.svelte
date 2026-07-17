@@ -39,6 +39,9 @@
   // Single source of truth — transport.svelte.ts keeps this in sync with
   // relay status events, so the indicator can't drift from reality.
   const relayConnected = $derived(transportState.relayConnected);
+  // Don't show "Relay disconnected" before any connection was attempted
+  // (e.g. on the identity setup screens) — only after a relay event fired.
+  let sawRelayEvent = $state(false);
   let peerCount = $state(0);
   let isMobile = $state(false);
   let isVisible = $state(true);
@@ -89,6 +92,7 @@
 
     // Listen for transport status events
     const handleStatus = (status: TransportStatus) => {
+      if (status.type.startsWith("relay-")) sawRelayEvent = true;
       switch (status.type) {
         case "relay-connected":
           addStatus("connected", status.message, Server);
@@ -208,7 +212,7 @@
   }
 </script>
 
-{#if statusItems.length > 0 || !relayConnected || peerCount > 0}
+{#if statusItems.length > 0 || (!relayConnected && sawRelayEvent) || peerCount > 0}
   <div
     class={cn(
       "fixed z-50 flex flex-col gap-2 max-w-sm",
@@ -217,7 +221,7 @@
     )}
   >
     <!-- Connection Summary -->
-    {#if peerCount > 0 || !relayConnected}
+    {#if peerCount > 0 || (!relayConnected && sawRelayEvent)}
       <div
         class="flex items-center gap-2 px-3 py-2 rounded-lg border bg-background/95 backdrop-blur shadow-lg text-xs"
       >
@@ -271,7 +275,7 @@
 {/if}
 
 <!-- Toggle button when hidden -->
-{#if !isVisible && (peerCount > 0 || !relayConnected)}
+{#if !isVisible && (peerCount > 0 || (!relayConnected && sawRelayEvent))}
   <button
     class="fixed bottom-20 right-3.75 z-50 p-2 rounded-full bg-background border shadow-lg hover:bg-accent transition-colors"
     onclick={() => (isVisible = true)}
