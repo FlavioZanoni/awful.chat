@@ -4,8 +4,11 @@
 
 ```txt
 message log (append-only)  → lamport + watermark sync + IndexedDB
-channel mutations (CRDT)   → Yjs per-channel doc (pins, topic, room settings)
 identity                   → BIP39 + ed25519, encrypted at rest in IndexedDB
+
+FUTURE (designed, not wired): Yjs per-channel CRDT for edits/deletes/pins.
+Reactions currently ship as ordinary persisted messages (type "reaction"
+with reactionTo/reactionEmoji/reactionOp), resolved at render time.
 ```
 
 ---
@@ -13,9 +16,11 @@ identity                   → BIP39 + ed25519, encrypted at rest in IndexedDB
 ## IndexedDB Schema (idb)
 
 ```typescript
+// Current schema is v4 - v2 added savedGifs, v3 re-keyed profiles by did,
+// v4 added phonebook. See storage.ts for the authoritative upgrade path.
 export async function getDB(): Promise<AppDB> {
-  // singleton — one connection for app lifetime
-  return openDB("awful-chat", 1, {
+  // singleton - one connection for app lifetime
+  return openDB("awful-chat", 4, {
     upgrade(db) {
       // messages
       const msg = db.createObjectStore("messages", { keyPath: "id" })
@@ -33,21 +38,21 @@ export async function getDB(): Promise<AppDB> {
       const pen = db.createObjectStore("pending", { keyPath: "id" })
       pen.createIndex("byRecipient", "to")
 
-      // identity — keyed by "mnemonic" | "keypair"
+      // identity - keyed by "mnemonic" | "keypair"
       db.createObjectStore("identity", { keyPath: "id" })
 
-      // watermarks — keyed by "roomCode:senderId"
+      // watermarks - keyed by "roomCode:senderId"
       const wm = db.createObjectStore("watermarks", { keyPath: "id" })
       wm.createIndex("byRoom", "roomCode")
 
-      // Yjs snapshots — keyed by "channel:{roomCode}"
+      // Yjs snapshots - keyed by "channel:{roomCode}"
       db.createObjectStore("yjsDocs", { keyPath: "id" })
 
-      // rooms — keyed by roomCode
+      // rooms - keyed by roomCode
       const room = db.createObjectStore("rooms", { keyPath: "roomCode" })
       room.createIndex("byType", "type")
 
-      // profiles — "own" + peer did:keys
+      // profiles - "own" + peer did:keys
       db.createObjectStore("profiles", { keyPath: "id" })
     }
   })
@@ -67,7 +72,8 @@ interface Message {
   senderId: string
   senderName: string
   senderDid?: string
-  sig?: string           // ed25519 over canonical(id, senderId, lamport, content)
+  sig?: string           // ed25519 over the canonical form (v1 or v2, see below)
+  sigV?: number          // 2 = canonical covers reactions/replyTo/meta
   timestamp: number      // wall clock, display only
   lamport: number        // ordering source of truth
   type: ChatMessageType  // only chat types stored in IDB
@@ -79,28 +85,23 @@ interface Message {
 }
 
 enum MessageType {
-  // chat — persisted to IDB, sent over wire
+  // chat - persisted to IDB, sent over wire
   Text         = "text",
   Reply        = "reply",
   Reaction     = "reaction",
   File         = "file",
-  // presence — wire only, never persisted
+  // presence - wire only, never persisted
   Profile      = "profile",
   CallPresence = "call_presence",
   RoomName     = "room_name",
-  // sync — wire only, never persisted
+  // sync - wire only, never persisted
   SyncDigest   = "sync_digest",
   SyncBatch    = "sync_batch",
   SyncComplete = "sync_complete",
-  // future
-  SyncAck      = "sync_ack",
-  DeliveryAck  = "delivery_ack",
-  ReadAck      = "read_ack",
-  System       = "system",
 }
 
 // NOTE: DM delivery/read receipts are implemented, but NOT via these wire
-// types — DMs use tagged binary envelopes over the direct libp2p stream:
+// types - DMs use tagged binary envelopes over the direct libp2p stream:
 //   0x01 chat  { id, text, ts }
 //   0x02 ack   → recipient got it        → status "delivered"
 //   0x03 read  string[] of messageIds    → conversation on screen → "read"
@@ -154,7 +155,7 @@ type AttachmentStatus = "seeding" | "pending" | "downloading" | "complete" | "fa
 ### Room
 
 ```typescript
-type RoomType = "text" | "voice" | "dm"
+type RoomType = "text" | "dm"
 
 interface Room {
   roomCode: string
@@ -162,8 +163,8 @@ interface Room {
   name: string
   lastSeenLamport: number  // unread count derived from this
   createdAt: number
-  pfpData?: ArrayBuffer    // local upload — blobURL generated at runtime
-  pfpURL?: string          // external URL (tenor, giphy, etc) — stored as-is
+  pfpData?: ArrayBuffer    // local upload - blobURL generated at runtime
+  pfpURL?: string          // external URL (tenor, giphy, etc) - stored as-is
   // pfpData and pfpURL mutually exclusive
 }
 
@@ -213,7 +214,7 @@ interface KeypairRecord {
   id: "keypair"
   did: string
   publicKey: Uint8Array    // ed25519, cached
-  // privateKey NEVER stored — derived at unlock, held in memory only
+  // privateKey NEVER stored - derived at unlock, held in memory only
 }
 ```
 
@@ -243,7 +244,7 @@ interface PendingMessage {
 ### Wire Types
 
 ```typescript
-// chat message — sent over wire and persisted on receipt
+// chat message - sent over wire and persisted on receipt
 interface WireChatMessage {
   type: ChatMessageType
   id: string
@@ -261,24 +262,19 @@ interface WireChatMessage {
   reactionOp?: "add" | "remove"
 }
 
-// presence — wire only
+// presence - wire only
 interface WireProfile      { type: MessageType.Profile;      name: string; did: string | null; avatarUrl: string | null }
 interface WireCallPresence { type: MessageType.CallPresence; inCall: boolean }
 interface WireRoomName     { type: MessageType.RoomName;     name: string }
 
-// sync — wire only
+// sync - wire only
 interface WireSyncDigest   { type: MessageType.SyncDigest;   watermarks: Record<string, number> }
 interface WireSyncBatch    { type: MessageType.SyncBatch;    messages: WireChatMessage[]; batchIndex: number; totalBatches: number }
 interface WireSyncComplete { type: MessageType.SyncComplete }
 
-// acks — future
-interface WireDeliveryAck  { type: MessageType.DeliveryAck;  messageId: string; senderId: string }
-interface WireReadAck      { type: MessageType.ReadAck;      messageId: string; senderId: string }
-
 type AnyWireMessage =
   | WireChatMessage | WireProfile | WireCallPresence | WireRoomName
   | WireSyncDigest | WireSyncBatch | WireSyncComplete
-  | WireDeliveryAck | WireReadAck
 
 // helpers
 function wireToMessage(wire: WireChatMessage, roomCode: string): Message  // adds roomCode + attachments: []
@@ -289,7 +285,7 @@ function isChatMessage(msg: AnyWireMessage): msg is WireChatMessage        // ty
 ### Sync Protocol
 
 ```typescript
-// all messages share a single type discriminant — no kind/wire wrapper
+// all messages share a single type discriminant - no kind/wire wrapper
 // { type: MessageType.SyncDigest, watermarks: { ... } }
 
 // watermarks are a vector clock: senderId → maxLamport seen from that sender
@@ -303,10 +299,10 @@ on connect (both peers):
 on receive SyncDigest:
   → compare their watermarks against mine
   → push everything they're missing as SyncBatch[] + SyncComplete
-  → they do the same — one round trip, bidirectional, no host election
+  → they do the same - one round trip, bidirectional, no host election
 
 on receive SyncBatch:
-  → bulkPut to IDB (idempotent — put by id)
+  → bulkPut to IDB (idempotent - put by id)
   → update watermarks (max semantics)
   → merge into in-memory message list
 
@@ -315,15 +311,19 @@ on receive SyncComplete:
   → send SyncDigest to all OTHER connected peers (gossip propagation)
     so data spreads through partial meshes without requiring direct connections
 
-SyncRequest removed — push-on-digest replaces it, saving one round trip
+SyncRequest removed - push-on-digest replaces it, saving one round trip
 ```
 
 ---
 
-## Yjs Channel Doc
+## Future: Yjs Channel Doc
+
+*Designed, not wired - the yjs dependency is not installed. The `yjsDocs`
+IndexedDB store exists (and is carried through device sync) so adding this
+later needs no schema migration. Reactions are persisted messages today.*
 
 ```typescript
-// per channel — reactions, edits, deletes, pins, topic
+// per channel - edits, deletes, pins, topic
 // keyed in IndexedDB as "channel:{roomCode}"
 
 channelDoc.getArray<string>('pins')
@@ -373,8 +373,10 @@ function sortMessages(a: Message, b: Message): number {
 ## Sync Flow
 
 ```txt
-peer joins room → rendezvous on the Go relay → dials peers via
-libp2p (WebRTC direct, circuit-relay fallback); gossipsub per room topic
+peer joins room → rendezvous on the Go relay (/awful/rendezvous/1.0.0,
+length-prefixed JSON: REGISTER/UNREGISTER → PEERS/PEER_JOINED/PEER_LEFT)
+→ dials peers via libp2p (WebRTC direct, circuit-relay fallback, 3 dial
+attempts with backoff) → gossipsub topic app:room:{roomCode} per room
 
 on each connection (both sides independently):
   → send SyncDigest { watermarks }          // vector clock of what I have
@@ -387,12 +389,11 @@ result:
   → one round trip per peer pair
   → no host election, no single point of failure
   → each SyncComplete triggers gossip to other peers
-    (redundant in full mesh, required for future partial mesh / libp2p)
+    (spreads data through partial meshes without direct connections)
 
-Yjs:
-  → piggybacks on SimplePeer data channel (type: "yjs-sync" / "yjs-update")
-  → load from IndexedDB before connecting peers
-  → save to IndexedDB on every update
+signature policy on receive:
+  → signed messages must verify (sigV 2 covers reactions/replyTo/meta)
+  → unsigned messages accepted (pre-signing history, receiver-stored DMs)
 ```
 
 ---
@@ -403,8 +404,11 @@ Yjs:
 
 ```txt
 password → PBKDF2(salt, 100_000, SHA-256) → AES-256-GCM key → decrypt mnemonic
-mnemonic (BIP39, 12 words) → SLIP-0010 → ed25519 keypair
+mnemonic (BIP39, 12 words) → BIP39 seed, first 32 bytes = ed25519 scalar
 did:key = "did:key:" + base58btc(0xed01 + publicKey)
+
+NOTE: deliberately NOT SLIP-0010 - changing derivation would break every
+existing identity. Seed and mnemonic buffers are zeroed after derivation.
 ```
 
 ### Unlock Flow
@@ -417,20 +421,28 @@ lock     → zero out private key bytes → null session
 ### Message Signature
 
 ```typescript
-const canonical = `${msg.id}:${msg.senderId}:${msg.lamport}:${msg.content}`
+// v1 (legacy, still verified):
+const canonicalV1 = `${id}:${senderId}:${lamport}:${content}`
+// v2 (current, msg.sigV === 2) - also covers reaction fields, replyTo.id,
+// and file meta (infoHash/size/mime/name) so they can't be swapped in transit:
+const canonicalV2 = JSON.stringify([id, senderId, lamport, content,
+  reactionTo, reactionEmoji, reactionOp, replyTo?.id, metaFileStrings])
 // sign with private key in memory
-// verify with pubkey decoded from senderDid (did:key)
+// verify with pubkey decoded from senderDid (did:key); senderDid must
+// equal senderId when senderId is a did:key
 ```
 
 ---
 
 ## DM Encryption
 
-```typescript
-// ed25519 → curve25519 conversion for ECDH
-const sharedSecret = x25519(edwardsToMontgomeryPriv(myPrivKey), edwardsToMontgomeryPub(theirPubKey))
-// then AES-GCM with sharedSecret as key
-// { iv, ct } transmitted in WireMessage.content
+```txt
+DMs travel over direct libp2p streams - noise-encrypted end-to-end between
+the two peers (the relay only forwards ciphertext, even on circuit relay).
+
+App-layer primitives exist for future double encryption (messaging.ts):
+  ed25519 → curve25519 ECDH, shared secret = SHA-256("awful-dm-v1" || raw)
+  → AES-256-GCM. Implemented and tested, not yet wired into the DM path.
 ```
 
 ---
@@ -465,10 +477,8 @@ blobURL:
 ```txt
 max per message:   64 KB
 SyncBatch:         max 20 messages per batch
-Yjs updates:       { kind: "yjs-update", doc, data: number[] }
-                   incremental ops typically < 1KB
-                   initial yjs-sync on connect can be larger — stays under 64KB
-                   for channel docs (reactions, edits, pins)
+direct streams:    4-byte big-endian length-prefixed frames
+                   (chat DM envelopes, file signaling, rendezvous)
 ```
 
 ---
@@ -477,7 +487,7 @@ Yjs updates:       { kind: "yjs-update", doc, data: number[] }
 
 ```txt
 Voice:
-  - p2p via SimplePeer (mic only, audio stays peer-to-peer always)
+  - p2p WebRTC over libp2p signaling (mic only, audio stays peer-to-peer always)
   - Web Audio input gain + output volume + device selection
   - input chain:  mic → GainNode → MediaStreamDestination → peers
   - output chain: remoteStream → GainNode → AudioContext.destination (per peer)
@@ -487,8 +497,10 @@ Video:
   - mediasoup SFU over dedicated /sfu WebSocket signaling
   - camera and screen published as separate sources ("camera" | "screen")
   - recv/send transports created after router capabilities exchange
-  - Node.js worker process required for mediasoup (not compatible with Bun)
-  - Bun handles all client-facing signaling, proxies ms: messages to Node worker
+  - sfu/ is a Node process (mediasoup is not Bun-compatible); the client
+    talks to its WebSocket directly (VITE_SFU_URL)
+  - unexpected WS drop mid-call → client emits error + one full automatic
+    rejoin (device + transports + republish of live local tracks)
 
 Screen share transmissions:
   - remote screen producers emit transmissionAvailable(peerId, producerId)
@@ -509,8 +521,9 @@ Late join behavior:
 ## Room Codes
 
 ```txt
-text/voice:  slugify(name) + "-" + sha256(creatorDid + salt)[0..4]
-DM:          sha256(sort([didA, didB]).join(':'))[0..24]
+text:  slugify(name) + "-" + sha256(creatorDid + salt)[0..4]
+DM:    "dm-" + hex(sha256(sort([didA, didB]).join("|")))[0..40]
+       (deterministic - both peers derive the same room without coordination)
 ```
 
 ---
@@ -518,9 +531,12 @@ DM:          sha256(sort([didA, didB]).join(':'))[0..24]
 ## Server Privacy
 
 ```txt
-signaling server knows:  ephemeral session ID + roomCode only
-never knows:             did:key, message content, Yjs content
-all p2p:                 messages, files, Yjs — direct between peers
+relay knows:   libp2p peerId + which roomCodes it registered (rendezvous)
+never knows:   did:key, message content, file content - all traffic it
+               forwards is noise-encrypted end-to-end between peers
+SFU knows:     video/screen streams it routes (see landing page disclosure);
+               voice never touches it
+all p2p:       messages, files, voice - direct between peers
 ```
 
 ---
@@ -540,7 +556,7 @@ Storage: Credential ID and public key in IndexedDB "webauthn" store
 
 ## Future: Roles + Permissions (Hash Chain Model)
 
-*Deferred — implement after core is stable*
+*Deferred - implement after core is stable*
 
 When roles are needed, the model is:
 
@@ -548,12 +564,12 @@ When roles are needed, the model is:
 room creation:
   roomCode embeds commitment to creatorDid
   genesis entry signed by creator → stored in Yjs
-  genesis is the trust anchor — verifiable from roomCode alone
+  genesis is the trust anchor - verifiable from roomCode alone
 
 role changes:
   each mutation is a SignedMutation { update, signer, sig, lamport }
   signer's role at mutation time determines if it is accepted
-  replayed in lamport order — post-revocation mutations rejected
+  replayed in lamport order - post-revocation mutations rejected
 
 hash chain:
   each entry references prevHash = sha256(previous entry)
@@ -564,7 +580,7 @@ hash chain:
 known limitation:
   if only malicious peers are reachable, role state may be stale
   mitigated by syncing from multiple peers + longest valid chain wins
-  signaling server can optionally store and serve the chain
+  the relay can optionally store and serve the chain
 ```
 
 ---
@@ -587,8 +603,9 @@ Scope: /app/ for all PWA routes
 
 ```txt
 Purpose: Prevent client IP leaks to third-party sites when fetching link previews
-Endpoint: /og?url=<encoded_url> on signaling server
-Response: JSON { title, description, image, siteName, url }
+Endpoint: /og/preview?url=<encoded_url> on the Go relay's API port
+         (/og is an alias; /klipy/* proxies GIF search the same way)
+Response: JSON { title, description, image, siteName, url, video, mediaType }
 Caching: Server-side caching with TTL
 Security: URL allowlist/blocklist, size limits, timeout protection
 ```
@@ -598,20 +615,25 @@ Security: URL allowlist/blocklist, size limits, timeout protection
 ## Password Persistence
 
 ```txt
-Storage: HTTP-only cookie "auth" with AES-GCM encrypted password
-Expiry: Sliding window (reset on each successful unlock)
-Security: Cookie SameSite=Strict, Secure flag in production
-Fallback: Manual password entry when cookie expired or absent
-Clearing: Explicit logout clears cookie and memory
+Storage: password AES-256-GCM encrypted under a NON-EXTRACTABLE CryptoKey,
+         both stored in a dedicated IndexedDB ("awful-auth") - never in a
+         cookie, never sent over the network, not readable via document.cookie
+Expiry: user-configurable duration (default 15 days), optional sliding reset
+Migration: a legacy plaintext "awful_password" cookie is read once,
+           migrated into the encrypted store, then deleted
+Fallback: manual password entry (or WebAuthn/biometric unlock) when absent
+Clearing: disabling "remember" or logout deletes the record
+Limit: code running in the origin can still USE the key (client-only
+       storage ceiling) - WebAuthn PRF unlock is the hardware-backed path
 ```
 
 ---
 
 ## Future: Sequential Sync Queue
 
-*Deferred — only worth implementing if rooms grow large with many simultaneous joins*
+*Deferred - only worth implementing if rooms grow large with many simultaneous joins*
 
-**Problem:** When a peer joins and connects to N peers at once, all N digest exchanges happen in parallel. Each peer responds independently with what the joiner is missing — so the same messages can arrive from multiple peers before any response has been processed, wasting bandwidth.
+**Problem:** When a peer joins and connects to N peers at once, all N digest exchanges happen in parallel. Each peer responds independently with what the joiner is missing - so the same messages can arrive from multiple peers before any response has been processed, wasting bandwidth.
 
 ```txt
 A connects to B and C simultaneously:
@@ -619,7 +641,7 @@ A connects to B and C simultaneously:
   B → A: pushes missing     C → A: pushes same missing  ← duplicate on air
 ```
 
-**Solution:** Queue digest sends and process them sequentially — wait for SyncComplete from peer N before sending digest to peer N+1. By the time you reach C, your watermarks reflect what B already sent, so C only pushes the delta.
+**Solution:** Queue digest sends and process them sequentially - wait for SyncComplete from peer N before sending digest to peer N+1. By the time you reach C, your watermarks reflect what B already sent, so C only pushes the delta.
 
 ```typescript
 const _syncQueue: string[] = []
@@ -639,7 +661,7 @@ async function _queueSync(peerId: string): Promise<void> {
 }
 ```
 
-**Tradeoff:** Adds latency on join — you wait for the first peer's full push before starting with the second. For small rooms (2–5 peers) with modest history, parallel is faster and the duplicate data is negligible. Sequential only pays off with larger rooms or large histories where duplicate transmission is significant.
+**Tradeoff:** Adds latency on join - you wait for the first peer's full push before starting with the second. For small rooms (2–5 peers) with modest history, parallel is faster and the duplicate data is negligible. Sequential only pays off with larger rooms or large histories where duplicate transmission is significant.
 
 **Current behavior:** Parallel. Each peer connection runs an independent digest/push cycle. Duplicate data in flight is bounded to messages missing at join time, sent once per already-connected peer.
 
@@ -698,11 +720,15 @@ Two buttons added:
 
 ### Security
 
-- QR codes expire after 5 minutes
-- 8-char room code + 8-char token
+- QR codes expire after 5 minutes - enforced by the SOURCE tearing down its
+  sync server (the code's own expires field is untrusted input)
+- 128-bit token in the QR (truncated to 8 chars in the manual short code);
+  the source verifies it on every ExportRequest before exporting anything
 - P2P connection via ephemeral rooms
 - Password required for identity sync
 - Data transferred over encrypted WebRTC
+- WebAuthn records are never synced (credential is bound to the source
+  device's authenticator and would be unusable on the target)
 
 ### Future Enhancements
 
