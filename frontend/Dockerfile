@@ -1,9 +1,12 @@
 FROM node:22-alpine AS base
-RUN npm install -g pnpm
+# pinned major: pnpm 11 changed ignored-build-script handling to a hard error
+RUN npm install -g pnpm@10
 WORKDIR /app
 
 FROM base AS deps
-COPY package.json pnpm-lock.yaml ./
+# pnpm-workspace.yaml carries the build-script approvals — without it pnpm
+# refuses to run postinstall scripts and the install fails
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM base AS builder

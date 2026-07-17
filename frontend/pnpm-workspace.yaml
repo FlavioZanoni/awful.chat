@@ -1,3 +1,11 @@
 onlyBuiltDependencies:
   - esbuild
   - '@tailwindcss/oxide'
+# Native modules pulled in by webtorrent/ws for Node.js - never used in the
+# browser bundle, so their compile steps are skipped on purpose.
+ignoredBuiltDependencies:
+  - bufferutil
+  - node-datachannel
+  - sharp
+  - utf-8-validate
+  - utp-native
