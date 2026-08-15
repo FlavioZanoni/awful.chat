@@ -522,6 +522,13 @@
   const othersInCallNotUs = $derived(callPeerIds.size > 0 && !inCall);
 </script>
 
+<!-- Error banner (always visible if present) -->
+{#if error}
+  <div class="flex flex-col border-b border-border shrink-0 bg-background">
+    <p class="text-sm text-destructive px-3 pt-1.5">{error}</p>
+  </div>
+{/if}
+
 <!-- ── CallTile snippet ── -->
 {#snippet callTile(
   tile: TileData,
@@ -635,7 +642,6 @@
   <div
     class="flex flex-col border-b border-border shrink-0 h-[12vh] sm:h-[16vh] pb-14 relative bg-background"
   >
-    {#if error}<p class="text-sm text-destructive px-3 pt-1.5">{error}</p>{/if}
     <div class="flex-1 flex items-center justify-center">
       <div class="flex items-center gap-1">
         {#each [...callPeerIds] as peerId (peerId)}
@@ -694,8 +700,6 @@
       {isFullscreen ? 'h-screen' : rowClass}
       {!isFullscreen && !hasActiveVideo ? 'pb-14' : ''}"
   >
-    {#if error}<p class="text-sm text-destructive px-3 pt-1.5">{error}</p>{/if}
-
     <!-- Always-mounted remote audio elements -->
     {#each remoteAudio as a (a.id)}
       <!-- svelte-ignore a11y_media_has_caption -->

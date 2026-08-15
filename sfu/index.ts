@@ -189,15 +189,18 @@ const mediaCodecs: mediasoup.types.RouterOptions["mediaCodecs"] = [
 
 let worker: mediasoup.types.Worker;
 // One router per room for now — keyed by roomCode.
-const routers = new Map<string, mediasoup.types.Router>();
+// Stores promises to avoid TOCTOU race: concurrent callers await the same pending creation.
+const routers = new Map<string, Promise<mediasoup.types.Router>>();
 
 async function getOrCreateRouter(
   roomCode: string,
 ): Promise<mediasoup.types.Router> {
   if (!routers.has(roomCode)) {
-    const router = await worker.createRouter({ mediaCodecs });
-    routers.set(roomCode, router);
-    console.log(`[router] created for room ${roomCode}`);
+    const promise = worker.createRouter({ mediaCodecs }).then((router) => {
+      console.log(`[router] created for room ${roomCode}`);
+      return router;
+    });
+    routers.set(roomCode, promise);
   }
   return routers.get(roomCode)!;
 }
@@ -523,11 +526,15 @@ function handlePeerLeft(peer: PeerState): void {
   // Clean up empty room
   if (room.size === 0) {
     rooms.delete(peer.roomCode);
-    const router = routers.get(peer.roomCode);
-    if (router) {
-      router.close();
-      routers.delete(peer.roomCode);
-      console.log(`[sfu] router closed for empty room ${peer.roomCode}`);
+    const routerPromise = routers.get(peer.roomCode);
+    if (routerPromise) {
+      routerPromise.then((router) => {
+        router.close();
+        routers.delete(peer.roomCode);
+        console.log(`[sfu] router closed for empty room ${peer.roomCode}`);
+      }).catch((err) => {
+        console.error(`[sfu] error closing router for room ${peer.roomCode}:`, err);
+      });
     }
   }
 }
@@ -552,7 +559,28 @@ async function main(): Promise<void> {
 
   const wss = new WebSocketServer({ port: PORT });
 
+  // Heartbeat to detect and terminate dead connections (silent disconnect, network handover, etc.)
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((ws: WebSocket) => {
+      const isAlive = (ws as any).isAlive;
+      if (isAlive === false) {
+        ws.terminate();
+      } else {
+        (ws as any).isAlive = false;
+        ws.ping();
+      }
+    });
+  }, 30000); // 30 second interval
+
+  wss.on("close", () => {
+    clearInterval(heartbeatInterval);
+  });
+
   wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
+    (ws as any).isAlive = true;
+    ws.on("pong", () => {
+      (ws as any).isAlive = true;
+    });
     let peer: PeerState | null = null;
 
     ws.on("message", async (raw: Buffer) => {
@@ -583,13 +611,24 @@ async function main(): Promise<void> {
           notifiedClosedProducers: new Set(),
         };
         const room = getOrCreateRoom(joinMsg.roomCode);
-        if (room.has(peer.peerId)) {
-          console.warn(
-            `[sfu] duplicate peerId ${peer.peerId} in room ${peer.roomCode}; rejecting join`,
+        const oldPeer = room.get(peer.peerId);
+        if (oldPeer && oldPeer !== peer) {
+          // Duplicate peerId: replace the old (usually silently-dead) session.
+          // Close its media directly — do NOT call handlePeerLeft(), which
+          // would delete the room and close the router this new session needs
+          // (and its async ws-close would otherwise evict the new peer).
+          console.log(
+            `[sfu] duplicate peerId ${peer.peerId} in room ${peer.roomCode}; replacing old session`,
           );
-          ws.close();
-          peer = null;
-          return;
+          for (const { producer } of oldPeer.producers.values()) {
+            producer.close();
+          }
+          for (const { consumer } of oldPeer.consumers.values()) {
+            consumer.close();
+          }
+          oldPeer.sendTransport?.close();
+          oldPeer.recvTransport?.close();
+          oldPeer.ws.terminate();
         }
         room.set(peer.peerId, peer);
 
@@ -644,7 +683,13 @@ async function main(): Promise<void> {
 
     ws.on("close", () => {
       if (peer) {
-        handlePeerLeft(peer);
+        // Only clean up if THIS peer is still the room's current session for
+        // its peerId. After a duplicate-join replacement the map holds the new
+        // peer, so the old ws closing here must not evict it.
+        const room = rooms.get(peer.roomCode);
+        if (room && room.get(peer.peerId) === peer) {
+          handlePeerLeft(peer);
+        }
         peer = null;
       }
     });

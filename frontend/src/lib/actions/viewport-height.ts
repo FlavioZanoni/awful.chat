@@ -1,6 +1,6 @@
 export function viewportHeight(node: HTMLElement): any {
   if (typeof window === "undefined" || !window.visualViewport) {
-    return () => {};
+    return { destroy() {} };
   }
   const vv = window.visualViewport;
   const update = () => {
@@ -10,9 +10,11 @@ export function viewportHeight(node: HTMLElement): any {
   vv.addEventListener("scroll", update);
   // Defer so the drawer is fully mounted and visible
   setTimeout(update, 0);
-  return () => {
-    vv.removeEventListener("resize", update);
-    vv.removeEventListener("scroll", update);
+  return {
+    destroy() {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    }
   };
 }
 

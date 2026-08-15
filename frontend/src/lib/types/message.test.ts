@@ -44,7 +44,7 @@ describe("wire codec", () => {
   it("isChatMessage accepts only persisted chat types", () => {
     expect(isChatMessage(messageToWire(full))).toBe(true);
     expect(
-      isChatMessage({ type: MessageType.SyncComplete })
+      isChatMessage({ type: MessageType.SyncComplete, roomCode: "r" })
     ).toBe(false);
     expect(
       isChatMessage({

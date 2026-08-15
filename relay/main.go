@@ -49,15 +49,17 @@ type rvStream interface {
 }
 
 type connectedClient struct {
-	peerId string
-	stream rvStream
-	rooms  map[string]struct{}
+	peerId     string
+	stream     rvStream
+	rooms      map[string]struct{}
+	generation uint64 // Incremented on each new connection; used to avoid evicting reconnected sessions
 }
 
 type registry struct {
-	mu      sync.Mutex
-	rooms   map[string]map[string]struct{} // room → set of peerIds
-	clients map[string]*connectedClient    // peerId → client
+	mu             sync.Mutex
+	rooms          map[string]map[string]struct{} // room → set of peerIds
+	clients        map[string]*connectedClient    // peerId → client
+	nextGeneration uint64                         // Incremented for each new client connection
 }
 
 func newRegistry() *registry {
@@ -79,32 +81,18 @@ func (r *registry) sendTo(c *connectedClient, msg serverMsg) {
 	frame[2] = byte(len(data) >> 8)
 	frame[3] = byte(len(data))
 	copy(frame[4:], data)
-	// sendTo runs with r.mu held — a stalled client must not be able to
-	// wedge the whole registry on a blocking Write
 	c.stream.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	c.stream.Write(frame)
 }
 
-func (r *registry) broadcastToRoom(room string, msg serverMsg, excludePeer string) {
-	peers := r.rooms[room]
-	for pid := range peers {
-		if pid == excludePeer {
-			continue
-		}
-		if c, ok := r.clients[pid]; ok {
-			r.sendTo(c, msg)
-		}
-	}
-}
-
 func (r *registry) register(c *connectedClient, room string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	if r.rooms[room] == nil {
 		r.rooms[room] = make(map[string]struct{})
 	}
 	if _, already := r.rooms[room][c.peerId]; already {
+		r.mu.Unlock()
 		return
 	}
 
@@ -113,34 +101,59 @@ func (r *registry) register(c *connectedClient, room string) {
 
 	log.Printf("[rv] %s joined room [%s] (%d peers)", short(c.peerId), room, len(r.rooms[room]))
 
-	// Notify existing peers
-	r.broadcastToRoom(room, serverMsg{
-		Type: "PEER_JOINED",
-		Room: room,
-		Peer: c.peerId,
-	}, c.peerId)
+	// Snapshot clients to notify and peer list under lock, then release lock before sending
+	peers := r.rooms[room]
+	targetClients := make([]*connectedClient, 0, len(peers))
+	for pid := range peers {
+		if pid == c.peerId {
+			continue
+		}
+		if cl, ok := r.clients[pid]; ok {
+			targetClients = append(targetClients, cl)
+		}
+	}
 
-	// Send full peer list to the joiner
 	others := make([]string, 0)
 	for pid := range r.rooms[room] {
 		if pid != c.peerId {
 			others = append(others, pid)
 		}
 	}
+
+	r.mu.Unlock()
+
+	// Send notifications outside the lock
+	for _, tc := range targetClients {
+		r.sendTo(tc, serverMsg{
+			Type: "PEER_JOINED",
+			Room: room,
+			Peer: c.peerId,
+		})
+	}
 	r.sendTo(c, serverMsg{Type: "PEERS", Room: room, Peers: others})
 }
 
 func (r *registry) unregister(c *connectedClient, room string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.doUnregister(c, room)
+	targets := r.doUnregister(c, room)
+	r.mu.Unlock()
+
+	// Send notifications outside the lock
+	for _, tc := range targets {
+		r.sendTo(tc, serverMsg{
+			Type: "PEER_LEFT",
+			Room: room,
+			Peer: c.peerId,
+		})
+	}
 }
 
 // caller must hold r.mu
-func (r *registry) doUnregister(c *connectedClient, room string) {
+// returns the list of clients to notify about the departure
+func (r *registry) doUnregister(c *connectedClient, room string) []*connectedClient {
 	peers := r.rooms[room]
 	if peers == nil {
-		return
+		return nil
 	}
 	delete(peers, c.peerId)
 	delete(c.rooms, room)
@@ -149,29 +162,61 @@ func (r *registry) doUnregister(c *connectedClient, room string) {
 
 	if len(peers) == 0 {
 		delete(r.rooms, room)
-	} else {
-		r.broadcastToRoom(room, serverMsg{
-			Type: "PEER_LEFT",
-			Room: room,
-			Peer: c.peerId,
-		}, "")
+		return nil
 	}
+
+	// Snapshot clients to notify
+	targets := make([]*connectedClient, 0, len(peers))
+	for pid := range peers {
+		if cl, ok := r.clients[pid]; ok {
+			targets = append(targets, cl)
+		}
+	}
+	return targets
 }
 
-func (r *registry) disconnect(peerId string) {
+func (r *registry) disconnect(peerId string, generation uint64) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	c, ok := r.clients[peerId]
 	if !ok {
+		r.mu.Unlock()
 		return
 	}
 
+	// Only delete if this is still the same client instance (generation matches).
+	// This prevents a stale read-loop from evicting a freshly reconnected session.
+	// generation == 0 is used for backup disconnects (DisconnectedF) and always proceeds.
+	if generation != 0 && c.generation != generation {
+		r.mu.Unlock()
+		return
+	}
+
+	// Collect all notifications by room while holding the lock
+	type notification struct {
+		room   string
+		client *connectedClient
+	}
+	var notifications []notification
 	for room := range c.rooms {
-		r.doUnregister(c, room)
+		targets := r.doUnregister(c, room)
+		for _, tc := range targets {
+			notifications = append(notifications, notification{room, tc})
+		}
 	}
 	delete(r.clients, peerId)
 	log.Printf("[rv] %s disconnected", short(peerId))
+
+	r.mu.Unlock()
+
+	// Send notifications outside the lock
+	for _, n := range notifications {
+		r.sendTo(n.client, serverMsg{
+			Type: "PEER_LEFT",
+			Room: n.room,
+			Peer: peerId,
+		})
+	}
 }
 
 // ── Stream handler ────────────────────────────────────────────────────────────
@@ -187,18 +232,22 @@ func (r *registry) handleStream(s network.Stream) {
 			r.doUnregister(old, room)
 		}
 	}
+	r.nextGeneration++
 	c := &connectedClient{
-		peerId: peerId,
-		stream: s,
-		rooms:  make(map[string]struct{}),
+		peerId:     peerId,
+		stream:     s,
+		rooms:      make(map[string]struct{}),
+		generation: r.nextGeneration,
 	}
 	r.clients[peerId] = c
 	r.mu.Unlock()
 
 	// Read loop — reassemble length-prefixed frames
+	const maxMsgLen = 8192 // Max size for a single frame (REGISTER/UNREGISTER payloads are tiny)
 	buf := make([]byte, 0, 512)
 	tmp := make([]byte, 4096)
 
+readLoop:
 	for {
 		n, err := s.Read(tmp)
 		if err != nil {
@@ -208,6 +257,14 @@ func (r *registry) handleStream(s network.Stream) {
 
 		for len(buf) >= 4 {
 			msgLen := int(buf[0])<<24 | int(buf[1])<<16 | int(buf[2])<<8 | int(buf[3])
+			// Reject oversized frames to prevent memory DoS. Abort the whole
+			// stream — a plain `break` here would leave the bad length header in
+			// buf and re-trip on every subsequent read while buf grows unbounded.
+			if msgLen > maxMsgLen {
+				log.Printf("[rv] message too large from %s: %d bytes, closing stream", short(peerId), msgLen)
+				s.Reset()
+				break readLoop
+			}
 			if len(buf) < 4+msgLen {
 				break
 			}
@@ -232,7 +289,7 @@ func (r *registry) handleStream(s network.Stream) {
 	}
 
 	log.Printf("[rv] %s stream closed", short(peerId))
-	r.disconnect(peerId)
+	r.disconnect(peerId, c.generation)
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -282,8 +339,17 @@ func main() {
 		mux.HandleFunc("/og/preview", handleOgPreview)
 		mux.HandleFunc("/klipy/search", handleKlipySearch)
 		mux.HandleFunc("/klipy/trending", handleKlipyTrending)
+		mux.HandleFunc("/turn-credentials", handleTurnCredentials)
 		log.Printf("[http] Starting API server on port %s", apiPort)
-		if err := http.ListenAndServe(":"+apiPort, mux); err != nil {
+		server := &http.Server{
+			Addr:              ":" + apiPort,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      15 * time.Second,
+			IdleTimeout:       30 * time.Second,
+		}
+		if err := server.ListenAndServe(); err != nil {
 			log.Printf("[http] API server error: %v", err)
 		}
 	}()
@@ -293,9 +359,17 @@ func main() {
 		ConnectedF: func(_ network.Network, c network.Conn) {
 			log.Printf("[peer] connect %s", short(c.RemotePeer().String()))
 		},
-		DisconnectedF: func(_ network.Network, c network.Conn) {
-			log.Printf("[peer] disconnect %s", short(c.RemotePeer().String()))
-			reg.disconnect(c.RemotePeer().String())
+		DisconnectedF: func(n network.Network, c network.Conn) {
+			peerId := c.RemotePeer()
+			// A peer that reconnected on a fresh connection is still Connected —
+			// don't let this old connection's teardown evict the new session.
+			// Only clean up when the peer is genuinely gone. (handleStream's
+			// stream-close path is the authoritative cleanup.)
+			if n.Connectedness(peerId) == network.Connected {
+				return
+			}
+			log.Printf("[peer] disconnect %s", short(peerId.String()))
+			reg.disconnect(peerId.String(), 0)
 		},
 	})
 
@@ -344,4 +418,3 @@ func printAddrs(h host.Host) {
 		log.Printf(" %s/p2p/%s", ma, h.ID())
 	}
 }
-

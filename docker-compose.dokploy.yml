@@ -11,6 +11,11 @@ services:
       - KLIPY_API_KEY=${KLIPY_API_KEY}
       - NODE_ENV=production
       - DOMAIN=${DOMAIN}
+      # Set TURN_SECRET (matching coturn's --static-auth-secret) to serve
+      # short-lived TURN credentials. Unset = /turn-credentials returns 204 and
+      # clients fall back to the bundled static creds. See README.
+      - TURN_SECRET=${TURN_SECRET:-}
+      - TURN_URLS=${TURN_URLS:-}
     volumes:
       - relay_data:/app/data
     networks:
@@ -39,6 +44,11 @@ services:
       - traefik.http.routers.klipy.tls=true
       - traefik.http.routers.klipy.tls.certresolver=letsencrypt
       - traefik.http.routers.klipy.service=relay-api-service
+      - traefik.http.routers.turn.rule=Host(`relay.${DOMAIN}`) && PathPrefix(`/turn-credentials`)
+      - traefik.http.routers.turn.entrypoints=websecure
+      - traefik.http.routers.turn.tls=true
+      - traefik.http.routers.turn.tls.certresolver=letsencrypt
+      - traefik.http.routers.turn.service=relay-api-service
 
   sfu:
     build:

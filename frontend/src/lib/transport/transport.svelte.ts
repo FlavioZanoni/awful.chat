@@ -43,9 +43,15 @@ import {
 import { WebTorrentFileTransport } from "./file/webtorrent";
 import type { FileDescriptor, FileTransferSnapshot } from "./types";
 import { LibP2PTransport } from "./libp2p/transport";
+import { refreshTurnCredentials } from "./ice-server-list";
 import { LibP2PVoice } from "./libp2p/voice";
 import { DtlnProcessor } from "../audio/dtln-processor";
 import { requireSession } from "../identity/identity";
+import {
+  didFromPeerId,
+  looksLikeDid,
+  looksLikePeerId,
+} from "../identity/identity-utils";
 import { canonicalFor, signMessage, verifySignature } from "../messaging";
 import { encode, decode, normalizeAvatarUrl } from "../utils";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
@@ -269,11 +275,12 @@ async function _broadcastProfile(): Promise<void> {
 }
 
 async function _sendDigest(peerId: string): Promise<void> {
-  if (!transportState.roomCode) return;
-  const watermarks = await getWatermarksForRoom(transportState.roomCode);
+  const roomCode = transportState.roomCode;
+  if (!roomCode) return;
+  const watermarks = await getWatermarksForRoom(roomCode);
   await _transport.send(
     peerId,
-    encode({ type: MessageType.SyncDigest, watermarks })
+    encode({ type: MessageType.SyncDigest, roomCode, watermarks })
   );
 }
 
@@ -322,26 +329,30 @@ export async function _loadHistory(roomCode: string): Promise<void> {
 
 async function _handleDigest(
   peerId: string,
+  roomCode: string,
   theirWatermarks: Record<string, number>
 ): Promise<void> {
-  if (!transportState.roomCode) return;
-  const mine = await getWatermarksForRoom(transportState.roomCode);
+  // Only reconcile a room we have actually joined — never a room the sender
+  // merely named, and never fall back to whatever room the UI has open.
+  if (!roomCode || !_transport.rooms().includes(roomCode)) return;
+  const mine = await getWatermarksForRoom(roomCode);
 
   const theyAreMissing = Object.keys(mine).filter(
     (sid) => (theirWatermarks[sid] ?? -1) < mine[sid]
   );
 
   if (theyAreMissing.length > 0) {
-    await _pushMissingTo(peerId, theirWatermarks);
+    await _pushMissingTo(peerId, roomCode, theirWatermarks);
   }
 }
 
 async function _pushMissingTo(
   peerId: string,
+  roomCode: string,
   theirWatermarks: Record<string, number>
 ): Promise<void> {
-  if (!transportState.roomCode) return;
-  const all = await getAllMessages(transportState.roomCode);
+  if (!roomCode) return;
+  const all = await getAllMessages(roomCode);
   const missing = all.filter(
     (m) => m.lamport > (theirWatermarks[m.senderId] ?? -1)
   );
@@ -358,6 +369,7 @@ async function _pushMissingTo(
       peerId,
       encode({
         type: MessageType.SyncBatch,
+        roomCode,
         messages: batches[i],
         batchIndex: i,
         totalBatches: batches.length,
@@ -365,13 +377,22 @@ async function _pushMissingTo(
     );
   }
 
-  _transport.send(peerId, encode({ type: MessageType.SyncComplete }));
+  _transport.send(peerId, encode({ type: MessageType.SyncComplete, roomCode }));
 }
 
-async function _handleSyncBatch(messages: WireChatMessage[]): Promise<void> {
-  if (!messages.length || !transportState.roomCode) return;
-
-  const roomCode = transportState.roomCode;
+async function _handleSyncBatch(
+  roomCode: string,
+  messages: WireChatMessage[]
+): Promise<void> {
+  // Bind incoming history to the room named in the (signed-message-bearing)
+  // batch, and only if we actually joined it — a peer cannot inject history
+  // into whatever room the receiver currently has open.
+  if (
+    !messages.length ||
+    !roomCode ||
+    !_transport.rooms().includes(roomCode)
+  )
+    return;
   const verdicts = await Promise.all(messages.map(_verifyIncoming));
   const verified = messages.filter((_, i) => verdicts[i]);
   if (verified.length < messages.length) {
@@ -417,7 +438,10 @@ function _handleSyncComplete(peerId: string): void {
 // ── Message handlers ──────────────────────────────────────────────────────────
 
 function _handleProfile(peerId: string, msg: WireProfile): void {
-  const did = msg.did ?? peerId;
+  // Trust the DID derived from the authenticated peerId, NOT the (unsigned,
+  // spoofable) `did` field — otherwise any peer could claim someone else's
+  // identity and hijack their DM conversation / poison their cached profile.
+  const did = didFromPeerId(peerId) ?? msg.did ?? peerId;
   const isNewMapping = _peerIdToDid.get(peerId) !== did;
   _peerIdToDid.set(peerId, did);
 
@@ -526,12 +550,20 @@ function _handleLeaveRoom(peerId: string): void {
   _peerIdToDid.delete(peerId);
 }
 
+// A room's participant list is presence metadata, not a security boundary,
+// but a peer must not be able to grow it without bound or stuff it with junk.
+const MAX_ROOM_USERS = 512;
+
 function _handleRoomUsersSync(participants: string[]): void {
   if (!transportState.roomCode) return;
+  if (!Array.isArray(participants)) return;
   const selfDid = identityStore.did ?? _transport.selfId();
-  const merged = new Set([...transportState.roomUsers, ...participants]);
+  const valid = participants.filter(
+    (p) => typeof p === "string" && (looksLikeDid(p) || looksLikePeerId(p))
+  );
+  const merged = new Set([...transportState.roomUsers, ...valid]);
   if (selfDid) merged.add(selfDid);
-  transportState.roomUsers = [...merged];
+  transportState.roomUsers = [...merged].slice(0, MAX_ROOM_USERS);
 }
 
 function _broadcastJoinRoom(): void {
@@ -563,6 +595,10 @@ function _broadcastLeaveRoom(): void {
  */
 async function _verifyIncoming(wire: WireChatMessage): Promise<boolean> {
   if (!wire.sig) return true;
+  // A signature MUST use the v2 canonical form (which covers reaction/reply/
+  // file fields). The weak v1 form left those unsigned, so accepting a v1 sig
+  // would let a relay swap an infoHash/emoji on a signed message undetected.
+  if (wire.sigV !== 2) return false;
   if (wire.senderId.startsWith("did:key:") && wire.senderDid !== wire.senderId)
     return false;
   if (!wire.senderDid) return false;
@@ -674,6 +710,10 @@ _transport.on("status", (status) => {
 
 _transport.on("connect", (peerId) => {
   transportState.peers = _transport.peers();
+  // The peer's DID is the SAME Ed25519 key as their authenticated libp2p
+  // peerId, so bind it now (no need to wait for — or trust — a Profile).
+  const authDid = didFromPeerId(peerId);
+  if (authDid) _peerIdToDid.set(peerId, authDid);
   flushQueuedDmForPeer(peerId).catch(() => {});
   _fileTransport.onPeerConnect(peerId);
   _sendProfile(peerId);
@@ -843,10 +883,10 @@ _transport.on("message", (peerId, data, room) => {
         _handleRoomUsersSync(msg.participants);
         break;
       case MessageType.SyncDigest:
-        _handleDigest(peerId, msg.watermarks).catch(() => {});
+        _handleDigest(peerId, msg.roomCode, msg.watermarks).catch(() => {});
         break;
       case MessageType.SyncBatch:
-        _handleSyncBatch(msg.messages).catch(() => {});
+        _handleSyncBatch(msg.roomCode, msg.messages).catch(() => {});
         break;
       case MessageType.SyncComplete:
         _handleSyncComplete(peerId);
@@ -855,9 +895,21 @@ _transport.on("message", (peerId, data, room) => {
       case MessageType.Reply:
       case MessageType.Reaction:
       case MessageType.File:
+        // A bare chat message is only legitimate over a room's pubsub topic
+        // (room !== null). The same message type arriving over a direct
+        // stream (room === null) would otherwise be stamped with whatever
+        // room the receiver has open — letting any connected peer inject
+        // forged history into a room they never joined. Drop it.
+        if (room === null) {
+          console.warn(
+            "[app] dropped direct-stream chat message from",
+            msg.senderId
+          );
+          break;
+        }
         _verifyIncoming(msg)
           .then((ok) => {
-            if (ok) _handleChatMessage(msg, room ?? undefined, peerId);
+            if (ok) _handleChatMessage(msg, room, peerId);
             else
               console.warn(
                 "[app] dropped message with invalid signature from",
@@ -896,6 +948,9 @@ function _scheduleConnectRetry(): void {
 
 export async function connect() {
   if (transportState.relayConnected) return;
+  // Fetch fresh short-lived TURN credentials for this session (best-effort;
+  // falls back to bundled ICE servers if the relay doesn't issue them).
+  refreshTurnCredentials().catch(() => {});
   if (_connectPromise) {
     await _connectPromise;
     return;
@@ -964,6 +1019,14 @@ export async function joinRoom(roomCode: string): Promise<void> {
     await _broadcastProfile();
     _broadcastJoinRoom();
   } catch (err) {
+    // Roll back the partial join: _transport.joinRoom() already subscribed the
+    // gossipsub topic and we flipped transportState to "in this room" before
+    // the awaits that threw. Leaving that half-state makes the room look
+    // joined-but-errored. Undo it.
+    _transport.leaveRoom(roomCode);
+    transportState.connected = false;
+    transportState.roomCode = null;
+    transportState.roomName = "";
     transportState.error = err instanceof Error ? err.message : String(err);
     transportState.connecting = false;
     throw err;
@@ -991,9 +1054,18 @@ function _disconnectWithoutBroadcasting(): void {
   for (const transfer of transportState.fileTransfers.values()) {
     if (transfer.blobURL) URL.revokeObjectURL(transfer.blobURL);
   }
+  // Clear the file transport's internal maps too — it's a session-long
+  // singleton, so without this its stale (revoked) blobURLs get replayed on
+  // rejoin and revoke freshly-hydrated ones. Keeps the client alive for reuse.
+  _fileTransport.resetTransfers();
   leaveCall();
   _transport.disconnect();
   _peerIdToDid.clear();
+  // disconnect() fully stops and nulls the libp2p node, so the relay
+  // connection is gone too. Without clearing this flag, connect()/joinRoom()
+  // short-circuit on the stale `relayConnected === true` and never rebuild
+  // the node — reconnect stays broken until a full page reload.
+  transportState.relayConnected = false;
   transportState.connected = false;
   transportState.roomCode = null;
   transportState.roomName = "";

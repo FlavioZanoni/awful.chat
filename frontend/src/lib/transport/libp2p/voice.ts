@@ -4,9 +4,10 @@ import type { StreamMessageEvent, StreamCloseEvent } from "@libp2p/interface";
 import type { VoiceTransport, VoiceEvents } from "../types";
 import type { AppServices, LibP2PTransport } from "./transport";
 import type { DtlnProcessor } from "$lib/audio/dtln-processor";
-import { defaultIceServerList } from "../ice-server-list";
+import { getIceServers } from "../ice-server-list";
 
 const VOICE_PROTO = "/voice/1.0.0";
+const MAX_FRAME_BYTES = 256 * 1024; // 256 KB max frame size; signaling payloads are tiny
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: false,
@@ -395,12 +396,12 @@ export class LibP2PVoice implements VoiceTransport {
 
     if (!stream) return;
 
+    this.attachStream(peerId, remote, stream);
+
     if (remote.pc.remoteDescription) {
-      stream.abort(new Error("peer connection already has remote description"));
+      // Signaling channel re-established but offer/answer already exchanged; skip redundant steps
       return;
     }
-
-    this.attachStream(peerId, remote, stream);
 
     if (remote.pc.signalingState === "have-local-offer") return;
 
@@ -432,6 +433,11 @@ export class LibP2PVoice implements VoiceTransport {
           remote.readBuf.buffer,
           remote.readBuf.byteOffset
         ).getUint32(0, false);
+        // Guard against unbounded buffer growth from malicious peers
+        if (len > MAX_FRAME_BYTES) {
+          stream.abort(new Error("frame size exceeds maximum"));
+          return;
+        }
         if (remote.readBuf.byteLength < 4 + len) break;
         const payload = remote.readBuf.slice(4, 4 + len);
         remote.readBuf = remote.readBuf.slice(4 + len);
@@ -491,7 +497,7 @@ export class LibP2PVoice implements VoiceTransport {
 
     const pc = new RTCPeerConnection({
       iceCandidatePoolSize: 10,
-      iceServers: defaultIceServerList,
+      iceServers: getIceServers(),
     });
 
     if (this.processedStream) {

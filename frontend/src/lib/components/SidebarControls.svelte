@@ -22,10 +22,15 @@
   import { profileStore, loadProfile } from "$lib/profile.svelte";
   import AvatarPickerDialog from "$lib/components/AvatarPickerDialog.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
+  import DeviceSyncDialog from "$lib/components/DeviceSyncDialog.svelte";
   import { toggleDeafen } from "$lib/transport/call.svelte";
 
   let avatarDialogOpen = $state(false);
   let audioSettingsOpen = $state(false);
+  // Owned here (not in SettingsDialog) so the sync dialog survives the settings
+  // dialog closing on mobile — see SessionSettings onOpenSync.
+  let syncDialogOpen = $state(false);
+  let syncFlowMode = $state<"receive" | "generate-qr" | "scan-qr">("receive");
 
   $effect(() => {
     loadProfile();
@@ -191,5 +196,17 @@
   bind:open={audioSettingsOpen}
   onClose={() => {
     audioSettingsOpen = false;
+  }}
+  onOpenSync={(mode) => {
+    syncFlowMode = mode;
+    syncDialogOpen = true;
+  }}
+/>
+
+<DeviceSyncDialog
+  bind:open={syncDialogOpen}
+  flowMode={syncFlowMode}
+  onClose={() => {
+    syncDialogOpen = false;
   }}
 />

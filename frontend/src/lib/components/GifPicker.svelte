@@ -54,6 +54,7 @@
   let observer: IntersectionObserver | undefined;
   let nextPageBackoffAttempt = $state(0);
   let nextPageRetryAfter = $state(0);
+  let trendingAttempted = $state(false);
 
   const MAX_BACKOFF_MS = 30_000;
 
@@ -89,6 +90,7 @@
       hasMore = result.hasMore;
     } finally {
       loading = false;
+      if (pageNum === 1) trendingAttempted = true;
     }
   }
 
@@ -139,6 +141,7 @@
       hasMore = true;
       popularGifs = [];
       searchResults = [];
+      trendingAttempted = false;
       resetBackoff();
       loadSavedGifs();
     }
@@ -149,7 +152,7 @@
       open &&
       tab === "popular" &&
       debouncedQuery === "" &&
-      popularGifs.length === 0
+      !trendingAttempted
     ) {
       void fetchGifPage(1);
     }
@@ -173,6 +176,13 @@
       resetBackoff();
       void fetchGifPage(1);
     }, 320);
+  });
+
+  $effect(() => {
+    // Reset the trending attempted flag when conditions change
+    if (!(open && tab === "popular" && debouncedQuery === "")) {
+      trendingAttempted = false;
+    }
   });
 
   $effect(() => {

@@ -18,7 +18,7 @@ export default defineConfig(({ mode }) => ({
     svelte(),
     nodePolyfills(),
     VitePWA({
-      registerType: "autoUpdate",
+      registerType: "prompt",
       strategies: "injectManifest",
       srcDir: "src",
       filename: "sw.ts",

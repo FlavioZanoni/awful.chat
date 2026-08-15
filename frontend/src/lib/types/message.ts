@@ -170,11 +170,13 @@ export interface WireRoomUsersSync {
 
 export interface WireSyncDigest {
   type: MessageType.SyncDigest;
+  roomCode: string; // the room this digest is for — receiver must have joined it
   watermarks: Record<string, number>; // senderId → maxLamport
 }
 
 export interface WireSyncBatch {
   type: MessageType.SyncBatch;
+  roomCode: string; // the room these messages belong to
   messages: WireChatMessage[];
   batchIndex: number;
   totalBatches: number;
@@ -182,6 +184,7 @@ export interface WireSyncBatch {
 
 export interface WireSyncComplete {
   type: MessageType.SyncComplete;
+  roomCode: string;
 }
 
 // File wire

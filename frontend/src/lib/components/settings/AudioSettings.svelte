@@ -50,6 +50,9 @@
   let noiseGateSlider = $state<number[]>([0.002 * 10000]);
 
   let isMicTesting = $state(false);
+  // Distinct from isMicTesting: set only during async startup so a second
+  // click can't stop-then-orphan a test that hasn't finished starting.
+  let isMicStarting = $state(false);
   let micTestDisconnect: (() => void) | null = null;
   let micLevel = $state(0);
   let micLevelInterval: ReturnType<typeof setInterval> | null = null;
@@ -130,6 +133,11 @@
       return;
     }
 
+    // A click while the test is still starting up is ignored — it must not
+    // fall through and start a second getUserMedia (leaking the first).
+    if (isMicStarting) return;
+    isMicStarting = true;
+
     try {
       // Deafen when starting test (mutes both input and output)
       setDeafened(true);
@@ -178,9 +186,7 @@
           source.disconnect();
           testCtx.close?.();
           stream.getTracks().forEach((t) => t.stop());
-          isMicTesting = false;
         };
-        isMicTesting = true;
       } else {
         // Standard (Non-DTLN) Path
         micTestAudio = new Audio();
@@ -211,7 +217,7 @@
           stream.getTracks().forEach((t) => t.stop());
         };
       }
-
+      // Setup succeeded — now it's a live test.
       isMicTesting = true;
     } catch (e) {
       console.error("Mic test failed:", e);
@@ -219,6 +225,8 @@
       micTestDisconnect = null;
       setDeafened(false);
       isMicTesting = false;
+    } finally {
+      isMicStarting = false;
     }
   }
 
@@ -362,6 +370,7 @@
       size="sm"
       class="w-full font-mono text-xs mt-2"
       onclick={handleMicTest}
+      disabled={isMicStarting}
     >
       {isMicTesting ? "■ Stop Test" : "▶ Test Mic (hear yourself)"}
     </Button>

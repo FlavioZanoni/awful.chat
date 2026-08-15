@@ -8,7 +8,7 @@ import type {
   FileTransferSnapshot,
   FileTransferTransport,
 } from "../types";
-import { defaultIceServerList } from "../ice-server-list";
+import { getIceServers } from "../ice-server-list";
 
 type TorrentLike = {
   infoHash: string;
@@ -26,6 +26,10 @@ type TorrentLike = {
 
 function wtKey(infoHash: string, peerId: string): string {
   return `${infoHash}:${peerId}`;
+}
+
+function isValidInfoHash(h: string): boolean {
+  return /^[a-f0-9]{40}$/i.test(h) || /^[a-z2-7]{32}$/i.test(h);
 }
 
 export class WebTorrentFileTransport implements FileTransferTransport {
@@ -64,6 +68,11 @@ export class WebTorrentFileTransport implements FileTransferTransport {
   }
 
   registerSeeder(file: FileDescriptor, seederPeerId: string): void {
+    if (!isValidInfoHash(file.infoHash)) {
+      console.warn(`Rejecting seeder registration with invalid infoHash: ${file.infoHash}`);
+      return;
+    }
+
     this.knownFiles.set(file.infoHash, file);
 
     if (!this.seedersByHash.has(file.infoHash)) {
@@ -96,6 +105,11 @@ export class WebTorrentFileTransport implements FileTransferTransport {
   }
 
   ensureDownload(file: FileDescriptor): void {
+    if (!isValidInfoHash(file.infoHash)) {
+      console.warn(`Rejecting download with invalid infoHash: ${file.infoHash}`);
+      return;
+    }
+
     this.knownFiles.set(file.infoHash, file);
     const existing = this.transfers.get(file.infoHash);
     if (existing?.status === "complete" || existing?.status === "seeding") {
@@ -138,6 +152,11 @@ export class WebTorrentFileTransport implements FileTransferTransport {
   handleSignal(fromPeerId: string, envelope: FileSignalEnvelope): void {
     if (envelope.kind === "file-seeder") {
       this.registerSeeder(envelope.file, fromPeerId);
+      return;
+    }
+
+    if (!isValidInfoHash(envelope.infoHash)) {
+      console.warn(`Rejecting signal with invalid infoHash: ${envelope.infoHash}`);
       return;
     }
 
@@ -218,7 +237,7 @@ export class WebTorrentFileTransport implements FileTransferTransport {
     this.handlers.get(event)?.delete(handler);
   }
 
-  destroy(): void {
+  resetTransfers(): void {
     for (const peer of this.wtPeers.values()) {
       peer.destroy();
     }
@@ -235,9 +254,13 @@ export class WebTorrentFileTransport implements FileTransferTransport {
     this.knownFiles.clear();
     this.seedersByHash.clear();
     this.localSeedHashes.clear();
-    this.connectedPeers.clear();
     this.attachedTorrents.clear();
     this.seedingByHash.clear();
+  }
+
+  destroy(): void {
+    this.resetTransfers();
+    this.connectedPeers.clear();
     this.client.destroy(() => {});
   }
 
@@ -323,7 +346,7 @@ export class WebTorrentFileTransport implements FileTransferTransport {
       streams: [],
       config: {
         iceCandidatePoolSize: 10,
-        iceServers: defaultIceServerList,
+        iceServers: getIceServers(),
       },
     });
 

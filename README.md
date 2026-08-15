@@ -55,6 +55,22 @@ cd relay && go test ./...   # rendezvous registry
 Traefik. Set `DOMAIN`, `ANNOUNCED_IP` (SFU public IP), `KLIPY_API_KEY`,
 `VITE_API_URL`, `VITE_RELAY_MULTIADDR`.
 
+### TURN credentials (optional hardening)
+
+By default coturn uses a static shared username/password baked into the client
+bundle, so anyone can relay through it. To issue short-lived per-session
+credentials instead:
+
+1. Pick a strong secret and set `TURN_SECRET` (and optionally `TURN_URLS`, a
+   comma-separated TURN URL list) on the relay service.
+2. Switch coturn from `--lt-cred-mech --user=awful:awful` to
+   `--use-auth-secret --static-auth-secret=<same TURN_SECRET>`.
+
+The relay's `/turn-credentials` endpoint then hands the frontend HMAC
+credentials (coturn REST convention) that expire after 12h. With `TURN_SECRET`
+unset the endpoint returns 204 and the client keeps using the static fallback,
+so this is safe to leave off until both sides are configured.
+
 ## Docs
 
 `docs/spec.md` - data model, sync protocol, wire formats, crypto details.

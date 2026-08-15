@@ -56,6 +56,7 @@ import {
   );
   let scanPermission = $state<boolean | null>(null);
   let syncMode = $state<"add" | "replace">("add");
+  let startScanPromise: Promise<void> | null = null;
 
   // Auto-set initial view based on flowMode
   $effect(() => {
@@ -70,6 +71,14 @@ import {
   $effect(() => {
     if (!open) {
       (async () => {
+        // Wait for any in-flight scan start to complete
+        if (startScanPromise) {
+          try {
+            await startScanPromise;
+          } catch (e) {
+            // Ignore - scan start failed
+          }
+        }
         await cancelSync();
       })();
       view = "select";
@@ -109,7 +118,7 @@ async function handleStartScanning() {
   view = "scan";
   await tick();
   try {
-    await startScanning(
+    startScanPromise = startScanning(
         scannerElementId,
         async (payload) => {
           await handleScanSuccess(payload);
@@ -119,10 +128,13 @@ async function handleStartScanning() {
           scanPermission = false;
         }
       );
-      scanPermission = true;
+    await startScanPromise;
+    scanPermission = true;
     } catch (err) {
       scanPermission = false;
       console.error("Failed to start scanner:", err);
+    } finally {
+      startScanPromise = null;
     }
   }
 

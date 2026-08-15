@@ -23,6 +23,9 @@
 
   let password = $state("");
   let remember = $state(false);
+  // Set once the user starts typing, so a slow remembered-password lookup
+  // can't clobber what they're entering.
+  let userEdited = $state(false);
 
   const DURATION_KEY = "awful_remember_duration";
 
@@ -49,7 +52,7 @@
       !identityStore.error
     ) {
       loadRememberedPassword().then((stored) => {
-        if (!stored) return;
+        if (!stored || userEdited || password) return;
         password = stored;
         remember = true;
         if (canUseBiometrics) {
@@ -72,10 +75,11 @@
 
   async function handleUnlock() {
     try {
-      const duration = remember ? getRememberDuration() : 0;
       await unlock(password);
-      if (duration > 0) {
-        await saveRememberedPassword(password, duration);
+      if (remember) {
+        // getRememberDuration() may be -1 ("until logout") — a valid choice
+        // that saveRememberedPassword now handles, not a reason to clear.
+        await saveRememberedPassword(password, getRememberDuration());
       } else {
         await clearRememberedPassword();
       }
@@ -148,6 +152,7 @@
       <Input
         type="password"
         bind:value={password}
+        oninput={() => (userEdited = true)}
         onkeydown={onKeydown}
         placeholder="password"
         autofocus={!canUseBiometrics}

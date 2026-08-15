@@ -15,17 +15,17 @@ import {
   identityStore,
   removeWebAuthn,
 } from "$lib/identity/identity.svelte";
-import DeviceSyncDialog from "$lib/components/DeviceSyncDialog.svelte";
 
 interface Props {
   isMobile?: boolean;
   onClose?: () => void;
+  // Opening the sync dialog is delegated UP to a component that outlives the
+  // settings dialog — otherwise closing settings (on mobile) unmounts the sync
+  // dialog the same instant it opens.
+  onOpenSync?: (mode: "generate-qr" | "scan-qr") => void;
 }
 
-let { isMobile = false, onClose }: Props = $props();
-
-let syncDialogOpen = $state(false);
-let syncFlowMode = $state<"receive" | "generate-qr" | "scan-qr">("receive");
+let { isMobile = false, onClose, onOpenSync }: Props = $props();
 
   let rememberDuration = $state(
     parseInt(localStorage.getItem("awful_remember_duration") ?? "15", 10)
@@ -204,8 +204,7 @@ let syncFlowMode = $state<"receive" | "generate-qr" | "scan-qr">("receive");
       variant="outline"
       class="font-mono flex-col h-auto py-3 gap-2"
       onclick={() => {
-        syncFlowMode = "generate-qr";
-        syncDialogOpen = true;
+        onOpenSync?.("generate-qr");
         if (isMobile) onClose?.();
       }}
     >
@@ -216,8 +215,7 @@ let syncFlowMode = $state<"receive" | "generate-qr" | "scan-qr">("receive");
       variant="outline"
       class="font-mono flex-col h-auto py-3 gap-2"
       onclick={() => {
-        syncFlowMode = "scan-qr";
-        syncDialogOpen = true;
+        onOpenSync?.("scan-qr");
         if (isMobile) onClose?.();
       }}
     >
@@ -226,12 +224,4 @@ let syncFlowMode = $state<"receive" | "generate-qr" | "scan-qr">("receive");
     </Button>
   </div>
 </div>
-
-<DeviceSyncDialog
-  bind:open={syncDialogOpen}
-  flowMode={syncFlowMode}
-  onClose={() => {
-    syncDialogOpen = false;
-  }}
-/>
 </div>

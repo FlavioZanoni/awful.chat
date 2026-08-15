@@ -8,14 +8,34 @@ import { identify, type Identify } from "@libp2p/identify";
 import { gossipsub, type GossipSub } from "@libp2p/gossipsub";
 import { keys } from "@libp2p/crypto";
 import { peerIdFromPrivateKey, peerIdFromString } from "@libp2p/peer-id";
-import { multiaddr } from "@multiformats/multiaddr";
+import { multiaddr, type Multiaddr } from "@multiformats/multiaddr";
 import type { Connection, Stream } from "@libp2p/interface";
 import type { StreamMessageEvent, StreamCloseEvent } from "@libp2p/interface";
+
+// js-libp2p exposes no public "reserve a relay slot now" API. Listening on a
+// `<relay>/p2p-circuit` address is what triggers a reservation, and we need to
+// do it on demand — after dialing the relay ourselves, and again on reconnect —
+// rather than via `addresses.listen`, which would block node startup on relay
+// reachability and hand reconnect re-reservation to libp2p's slower refresh
+// timer. So we reach the internal TransportManager through this narrow typed
+// view (a libp2p rename now fails to compile instead of silently at runtime).
+interface WithTransportManager {
+  components: {
+    transportManager: { listen(addrs: Multiaddr[]): Promise<void> };
+  };
+}
 import type { PeerTransport, TransportEvents } from "../types";
 
 const RELAY_RESERVATION_TIMEOUT_MS = 10_000;
 const DIRECT_MSG_PROTOCOL = "/app/direct/1.0.0";
 const RENDEZVOUS_PROTOCOL = "/awful/rendezvous/1.0.0";
+// Upper bound on a single length-prefixed frame. A peer declares the length
+// up front, so without a cap a malicious 4-byte length forces us to buffer
+// gigabytes waiting for bytes that never come. Direct-stream frames carry app
+// messages (profiles-with-avatar, sync batches); rendezvous frames are tiny
+// REGISTER/UNREGISTER JSON.
+const MAX_DIRECT_FRAME_BYTES = 4 * 1024 * 1024;
+const MAX_RENDEZVOUS_FRAME_BYTES = 16 * 1024;
 const PEER_REDIAL_DELAY_MS = 3_000;
 const RELAY_RECONNECT_DELAY_MS = 3_000;
 const RENDEZVOUS_RECONNECT_DELAY_MS = 2_000;
@@ -224,7 +244,7 @@ export class LibP2PTransport implements PeerTransport {
     } catch {}
   }
 
-  disconnect(): void {
+  async disconnect(): Promise<void> {
     // mark intentional so no reconnect timers fire
     this.intentionalDisconnect = true;
 
@@ -239,7 +259,11 @@ export class LibP2PTransport implements PeerTransport {
       this.rendezvousSend({ type: "UNREGISTER", room });
     }
 
-    this.node.stop();
+    // Await + swallow like connect() does, so a throwing stop() can't leave a
+    // half-stopped node or reject into a fire-and-forget caller.
+    try {
+      await this.node.stop();
+    } catch {}
     this.node = null;
     this.relayPeerId = null;
     this.rendezvousStream = null;
@@ -366,9 +390,9 @@ export class LibP2PTransport implements PeerTransport {
     const relayMa = import.meta.env.VITE_RELAY_MULTIADDR as string;
     const circuitListenAddr = multiaddr(`${relayMa}/p2p-circuit`);
     try {
-      await (this.node as any).components.transportManager.listen([
-        circuitListenAddr,
-      ]);
+      const { transportManager } = (this.node as unknown as WithTransportManager)
+        .components;
+      await transportManager.listen([circuitListenAddr]);
     } catch (err) {
       console.warn("[Transport] reservation request failed:", err);
     }
@@ -469,6 +493,14 @@ export class LibP2PTransport implements PeerTransport {
           0,
           false
         );
+        if (len > MAX_DIRECT_FRAME_BYTES) {
+          console.warn(
+            `[LibP2PTransport] oversized direct frame (${len}b) from ${fromId.slice(-8)}, aborting stream`
+          );
+          this.cleanupPeerStream(fromId);
+          stream.abort(new Error("frame too large"));
+          return;
+        }
         if (buf.byteLength < 4 + len) break;
         const payload = buf.slice(4, 4 + len);
         buf = buf.slice(4 + len);
@@ -538,6 +570,14 @@ export class LibP2PTransport implements PeerTransport {
           this.rendezvousReadBuf.buffer,
           this.rendezvousReadBuf.byteOffset
         ).getUint32(0, false);
+        if (len > MAX_RENDEZVOUS_FRAME_BYTES) {
+          console.warn(
+            `[Rendezvous] oversized frame (${len}b), aborting stream`
+          );
+          this.rendezvousReadBuf = new Uint8Array(0);
+          stream.abort(new Error("frame too large"));
+          return;
+        }
         if (this.rendezvousReadBuf.byteLength < 4 + len) break;
 
         const payload = this.rendezvousReadBuf.slice(4, 4 + len);

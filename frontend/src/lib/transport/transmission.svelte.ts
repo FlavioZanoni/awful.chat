@@ -45,6 +45,9 @@ _video.on("trackRemoved", (peerId, source) => {
     if (source === "screen") {
       transportState.screenSharing = false;
       transportState.localScreenStream = null;
+    } else if (source === "camera") {
+      transportState.cameraOff = true;
+      transportState.localCameraStream = null;
     }
     return;
   }

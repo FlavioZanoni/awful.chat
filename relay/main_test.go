@@ -40,8 +40,9 @@ func (f *fakeStream) decode(t *testing.T, i int) serverMsg {
 
 func newClient(r *registry, peerId string) (*connectedClient, *fakeStream) {
 	s := &fakeStream{}
-	c := &connectedClient{peerId: peerId, stream: s, rooms: make(map[string]struct{})}
 	r.mu.Lock()
+	r.nextGeneration++
+	c := &connectedClient{peerId: peerId, stream: s, rooms: make(map[string]struct{}), generation: r.nextGeneration}
 	r.clients[peerId] = c
 	r.mu.Unlock()
 	return c, s
@@ -115,7 +116,7 @@ func TestDisconnectRemovesFromAllRooms(t *testing.T) {
 	r.register(b, "room1")
 
 	before := len(sb.frames)
-	r.disconnect("peer-a")
+	r.disconnect("peer-a", 0) // generation 0 for backup disconnect (always proceeds)
 
 	if _, ok := r.clients["peer-a"]; ok {
 		t.Fatal("client should be removed on disconnect")
@@ -134,5 +135,5 @@ func TestDisconnectRemovesFromAllRooms(t *testing.T) {
 
 func TestDisconnectUnknownPeerIsNoop(t *testing.T) {
 	r := newRegistry()
-	r.disconnect("ghost") // must not panic
+	r.disconnect("ghost", 0) // must not panic
 }

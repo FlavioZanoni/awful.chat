@@ -23,6 +23,9 @@
   type Tab = "upload" | "klipy" | "url";
   let activeTab = $state<Tab>("klipy");
   let preview = $state<string | undefined>(undefined);
+  let error = $state<string | undefined>(undefined);
+
+  const MAX_AVATAR_BYTES = 512 * 1024;
 
   $effect(() => {
     if (open) {
@@ -122,9 +125,24 @@
   function handleFileChange(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
+
+    error = undefined;
+    if (!file.type.startsWith('image/')) {
+      error = "Only image files are allowed";
+      return;
+    }
+    if (file.size > MAX_AVATAR_BYTES) {
+      error = `File size must be less than 512 KB (your file is ${Math.round(file.size / 1024)} KB)`;
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       preview = reader.result as string;
+      error = undefined;
+    };
+    reader.onerror = () => {
+      error = "Failed to read file";
     };
     reader.readAsDataURL(file);
   }
@@ -134,9 +152,24 @@
     dragOver = false;
     const file = e.dataTransfer?.files?.[0];
     if (!file) return;
+
+    error = undefined;
+    if (!file.type.startsWith('image/')) {
+      error = "Only image files are allowed";
+      return;
+    }
+    if (file.size > MAX_AVATAR_BYTES) {
+      error = `File size must be less than 512 KB (your file is ${Math.round(file.size / 1024)} KB)`;
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       preview = reader.result as string;
+      error = undefined;
+    };
+    reader.onerror = () => {
+      error = "Failed to read file";
     };
     reader.readAsDataURL(file);
   }
@@ -160,6 +193,7 @@
     searchQuery = "";
     debouncedQuery = "";
     activeTab = "upload";
+    error = undefined;
     onClose();
   }
 
@@ -259,6 +293,11 @@
   <div class="h-86">
     {#if activeTab === "upload"}
       <div class="p-4">
+        {#if error}
+          <div class="mb-3 p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-sm text-destructive font-mono">
+            {error}
+          </div>
+        {/if}
         <button
           type="button"
           onclick={() => fileInput?.click()}

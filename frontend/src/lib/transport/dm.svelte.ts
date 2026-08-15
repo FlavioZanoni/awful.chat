@@ -119,8 +119,9 @@ export async function dmConversationCodeFor(
  */
 async function dmConversationCodeAsync(peerIdOrDid: string): Promise<string> {
   const selfDid = identityStore.did ?? _transport.selfId();
-  // Resolve to DID if we have a mapping, otherwise use as-is
-  const peerDid = _peerIdToDid.get(peerIdOrDid) ?? peerIdOrDid;
+  // Resolve to the stable DID (learned mapping, else derived from the peerId)
+  // so a conversation never fragments across a peerId- and a DID-keyed room.
+  const peerDid = resolveToDid(peerIdOrDid, _peerIdToDid);
   return hashDmRoomCode(selfDid, peerDid);
 }
 
@@ -160,7 +161,9 @@ export async function sendDirectMessage(text: string): Promise<void> {
   const ts = Date.now();
   const envelope = encodeDmChatEnvelope({ id, text: body, ts });
 
-  const peerDid = _peerIdToDid.get(peerId) ?? peerId;
+  // Key the offline queue by the STABLE DID so a queued message still matches
+  // once the peer connects — even if we didn't know the DID at queue time.
+  const peerDid = resolveToDid(peerId, _peerIdToDid);
 
   // Resolve to an actual peer ID (not a DID) before checking online status.
   // resolveDmPeerId already handles peerId→peerId and DID→peerId via _peerIdToDid,
@@ -247,12 +250,14 @@ function queueEntryKey(e: QueuedMessage): string {
 }
 
 async function _flushQueuedDmForPeer(peerId: string): Promise<void> {
-  const peerDid = _peerIdToDid.get(peerId);
+  const peerDid = _peerIdToDid.get(peerId) ?? resolveToDid(peerId, _peerIdToDid);
   if (!peerDid) return; // Can't flush if we don't know their DID yet
 
   const sent = new Set<string>();
   for (const entry of loadQueuedDmMessages()) {
-    if (entry.to !== peerDid) continue;
+    // Match entries keyed by the DID *or* by the raw peerId — older entries
+    // queued before the DID was known were stored under the peerId.
+    if (entry.to !== peerDid && entry.to !== peerId) continue;
     const ok = await _transport.send(peerId, new Uint8Array(entry.data));
     if (ok) {
       sent.add(queueEntryKey(entry));

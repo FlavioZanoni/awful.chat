@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // OgPreview represents the Open Graph preview response
@@ -114,6 +117,36 @@ func absolutizeUrl(raw, base string) *string {
 	return &s
 }
 
+// isDisallowedIP checks if an IP is in a disallowed range (loopback, private,
+// link-local, multicast, unspecified). Returns true if the IP should be blocked.
+func isDisallowedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	// Loopback: 127.0.0.0/8 (IPv4), ::1 (IPv6)
+	if ip.IsLoopback() {
+		return true
+	}
+	// Private: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (IPv4), fc00::/7 (IPv6)
+	if ip.IsPrivate() {
+		return true
+	}
+	// Link-local: 169.254.0.0/16 (IPv4), fe80::/10 (IPv6)
+	// Includes cloud metadata endpoint 169.254.169.254
+	if ip.IsLinkLocalUnicast() {
+		return true
+	}
+	// Unspecified: 0.0.0.0 (IPv4), :: (IPv6)
+	if ip.IsUnspecified() {
+		return true
+	}
+	// Multicast: 224.0.0.0/4 (IPv4), ff00::/8 (IPv6)
+	if ip.IsMulticast() {
+		return true
+	}
+	return false
+}
+
 func handleOgPreview(w http.ResponseWriter, r *http.Request) {
 	if !isAllowedOrigin(r.Header.Get("Origin")) {
 		apiError(w, r, "Origin not allowed", http.StatusForbidden)
@@ -141,11 +174,60 @@ func handleOgPreview(w http.ResponseWriter, r *http.Request) {
 	var html string
 	finalUrl := targetURL.String()
 
+	// Custom dialer that validates IP addresses to prevent SSRF
+	redirectCount := 0
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid address: %w", err)
+			}
+			// Resolve and validate all IPs returned by the resolver
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, fmt.Errorf("lookup failed: %w", err)
+			}
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("no IPs resolved for %s", host)
+			}
+			for _, ipAddr := range ips {
+				if isDisallowedIP(ipAddr.IP) {
+					return nil, fmt.Errorf("disallowed IP: %s", ipAddr.IP)
+				}
+			}
+			// Use standard dialer with the validated IP
+			dialer := &net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 5 * time.Second,
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+		},
+	}
+
 	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			redirectCount++
+			if redirectCount > 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			// Re-validate the redirect target host
+			targetHost := req.URL.Hostname()
+			ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), targetHost)
+			if err != nil {
+				return fmt.Errorf("redirect target resolution failed: %w", err)
+			}
+			for _, ipAddr := range ips {
+				if isDisallowedIP(ipAddr.IP) {
+					return fmt.Errorf("redirect target has disallowed IP: %s", ipAddr.IP)
+				}
+			}
 			return nil
 		},
 	}
+
+	const maxBodyBytes = 5 * 1024 * 1024 // 5 MB limit
 
 	for _, candidate := range candidates {
 		req, err := http.NewRequest("GET", candidate, nil)
@@ -165,7 +247,9 @@ func handleOgPreview(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		// Wrap body in size limiter before reading
+		limitedBody := io.LimitReader(resp.Body, maxBodyBytes)
+		body, err := io.ReadAll(limitedBody)
 		if err != nil {
 			continue
 		}

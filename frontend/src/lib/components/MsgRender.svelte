@@ -69,10 +69,28 @@
   }
 
   function isGifUrl(text: string): boolean {
-    return (
-      /^https?:\/\/.+\.(gif|webp)(\?.*)?$/i.test(text) ||
-      /klipy\.co|tenor\.com|giphy\.com/i.test(text)
-    );
+    // Check for direct GIF/WebP file URLs
+    if (/^https?:\/\/.+\.(gif|webp)(\?.*)?$/i.test(text)) {
+      return true;
+    }
+
+    // Check if the entire message is a URL to a known GIF host
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      return false;
+    }
+
+    try {
+      const url = new URL(trimmed);
+      const hostname = url.hostname.toLowerCase();
+      // Allowlist of known GIF hosting domains and their subdomains
+      const allowlist = ['klipy.co', 'tenor.com', 'giphy.com', 'media.giphy.com'];
+      return allowlist.some(host =>
+        hostname === host || hostname.endsWith('.' + host)
+      );
+    } catch {
+      return false;
+    }
   }
 
   function firstUrl(text: string): string | null {
@@ -89,6 +107,24 @@
     const match = msg.content.match(/```([\w-]+)?\n([\s\S]*?)```/m);
     if (!match) return null;
     return { lang: match[1] || "text", code: match[2] };
+  });
+  const codeSegments = $derived.by(() => {
+    const match = msg.content.match(/```([\w-]+)?\n([\s\S]*?)```/m);
+    if (!match) return null;
+    const fullMatch = match[0];
+    const startIdx = msg.content.indexOf(fullMatch);
+    const endIdx = startIdx + fullMatch.length;
+
+    const before = msg.content.slice(0, startIdx).trim();
+    const code = match[2];
+    const after = msg.content.slice(endIdx).trim();
+
+    return {
+      before,
+      lang: match[1] || "text",
+      code,
+      after,
+    };
   });
   const linkedUrl = $derived(firstUrl(msg.content));
   const isGifMessage = $derived(isGifUrl(msg.content));
@@ -297,9 +333,12 @@
         </div>
       {/each}
     </div>
-  {:else if asCodeBlock}
+  {:else if codeSegments}
+    {#if codeSegments.before}
+      <p class="whitespace-pre-wrap mb-2">{@html linkifyText(codeSegments.before)}</p>
+    {/if}
     <div
-      class="relative overflow-x-auto rounded-md border border-border/70 bg-muted/30 p-2 [&_.shiki]:bg-transparent!"
+      class="relative overflow-x-auto rounded-md border border-border/70 bg-muted/30 p-2 [&_.shiki]:bg-transparent! {codeSegments.after ? 'mb-2' : ''}"
     >
       <button
         type="button"
@@ -314,8 +353,11 @@
         {/if}
       </button>
       {@html highlightedCode ??
-        `<pre><code>${asCodeBlock.code.replace(/</g, "&lt;")}</code></pre>`}
+        `<pre><code>${codeSegments.code.replace(/</g, "&lt;")}</code></pre>`}
     </div>
+    {#if codeSegments.after}
+      <p class="whitespace-pre-wrap">{@html linkifyText(codeSegments.after)}</p>
+    {/if}
   {:else if isGifMessage}
     <div class="group relative inline-block">
       <button type="button" onclick={() => (lightboxUrl = msg.content)}>

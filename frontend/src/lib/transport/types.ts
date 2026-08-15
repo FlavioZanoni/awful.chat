@@ -41,7 +41,7 @@ export type TransportStatus =
 
 export interface PeerTransport {
   connect(privateKeyBytes?: Uint8Array | null): Promise<void>;
-  disconnect(): void;
+  disconnect(): void | Promise<void>;
   joinRoom(roomCode: string): void;
   leaveRoom(roomCode: string): void;
   rooms(): string[];

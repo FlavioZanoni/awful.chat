@@ -18,11 +18,21 @@ import {
   getMnemonicRecord,
   putIdentityRecord,
   getWebAuthnRecord,
+  deleteWebAuthnRecord,
 } from "../storage";
+import { clearRememberedPassword } from "./remembered-password";
 import { utf8 } from "../utils";
 
 /** 2-byte multicodec prefix for ed25519 public keys in did:key. */
 const ED25519_MULTICODEC = new Uint8Array([0xed, 0x01]);
+
+/**
+ * PBKDF2 iteration count for password-derived keys. 600k matches current OWASP
+ * guidance for PBKDF2-SHA256. The count is stored per-record so existing
+ * mnemonics encrypted at the old 100k count still decrypt (see unlockIdentity).
+ */
+const PBKDF2_ITERATIONS = 600_000;
+const LEGACY_PBKDF2_ITERATIONS = 100_000;
 
 export interface MnemonicRecord {
   id: "mnemonic";
@@ -32,6 +42,8 @@ export interface MnemonicRecord {
   iv: Uint8Array<ArrayBuffer>;
   /** AES-GCM ciphertext of the BIP39 mnemonic phrase. */
   encrypted: ArrayBuffer;
+  /** PBKDF2 iteration count used to derive the key. Absent = legacy 100k. */
+  iterations?: number;
 }
 
 export interface KeypairRecord {
@@ -183,6 +195,7 @@ export async function createIdentity(
     salt,
     iv,
     encrypted,
+    iterations: PBKDF2_ITERATIONS,
   };
   const keypairRecord: KeypairRecord = { id: "keypair", did, publicKey };
 
@@ -226,11 +239,19 @@ export async function restoreIdentity(
     salt,
     iv,
     encrypted,
+    iterations: PBKDF2_ITERATIONS,
   };
   const keypairRecord: KeypairRecord = { id: "keypair", did, publicKey };
 
   await putIdentityRecord(mnemonicRecord);
   await putIdentityRecord(keypairRecord);
+
+  // The restored identity is encrypted under the NEW password. Any WebAuthn
+  // enrollment or remembered-password record was bound to the OLD password (and
+  // possibly a different identity), so it would silently fail or unlock the
+  // wrong account — drop both. The user can re-enroll after restoring.
+  await deleteWebAuthnRecord().catch(() => {});
+  await clearRememberedPassword().catch(() => {});
 
   session = { privateKey, publicKey, did };
   return keypairRecord;
@@ -260,7 +281,12 @@ export async function unlockIdentity(password: string): Promise<void> {
     throw new Error("No identity found. Call createIdentity first.");
   }
 
-  const aesKey = await AESFromPassword(password, mnemonicRecord.salt);
+  // Records written before per-record iteration counts existed used 100k.
+  const aesKey = await AESFromPassword(
+    password,
+    mnemonicRecord.salt,
+    mnemonicRecord.iterations ?? LEGACY_PBKDF2_ITERATIONS
+  );
 
   let decrypted: ArrayBuffer;
   try {
@@ -302,7 +328,8 @@ export function lockIdentity(): void {
  */
 export async function AESFromPassword(
   password: string,
-  salt: Uint8Array<ArrayBuffer>
+  salt: Uint8Array<ArrayBuffer>,
+  iterations: number = PBKDF2_ITERATIONS
 ): Promise<CryptoKey> {
   const baseKey = await crypto.subtle.importKey(
     "raw",
@@ -313,7 +340,7 @@ export async function AESFromPassword(
   );
 
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
     baseKey,
     { name: "AES-GCM", length: 256 },
     false,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -104,20 +105,23 @@ func handleKlipySearch(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := http.Get(apiURL)
 	if err != nil {
-		apiError(w, r, fmt.Sprintf("Failed to fetch from Klipy: %v", err), http.StatusInternalServerError)
+		log.Printf("[klipy] search fetch error: %v", err)
+		apiError(w, r, "Failed to fetch from Klipy", http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		apiError(w, r, fmt.Sprintf("Klipy API error: %d - %s", resp.StatusCode, string(body)), resp.StatusCode)
+		log.Printf("[klipy] search API error: %d - %s", resp.StatusCode, string(body))
+		apiError(w, r, "Failed to fetch from Klipy", resp.StatusCode)
 		return
 	}
 
 	var result KlipyAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		apiError(w, r, fmt.Sprintf("Failed to decode Klipy response: %v", err), http.StatusInternalServerError)
+		log.Printf("[klipy] search decode error: %v", err)
+		apiError(w, r, "Failed to decode Klipy response", http.StatusInternalServerError)
 		return
 	}
 
@@ -155,20 +159,23 @@ func handleKlipyTrending(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := http.Get(apiURL)
 	if err != nil {
-		apiError(w, r, fmt.Sprintf("Failed to fetch from Klipy: %v", err), http.StatusInternalServerError)
+		log.Printf("[klipy] trending fetch error: %v", err)
+		apiError(w, r, "Failed to fetch from Klipy", http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		apiError(w, r, fmt.Sprintf("Klipy API error: %d - %s", resp.StatusCode, string(body)), resp.StatusCode)
+		log.Printf("[klipy] trending API error: %d - %s", resp.StatusCode, string(body))
+		apiError(w, r, "Failed to fetch from Klipy", resp.StatusCode)
 		return
 	}
 
 	var result KlipyAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		apiError(w, r, fmt.Sprintf("Failed to decode Klipy response: %v", err), http.StatusInternalServerError)
+		log.Printf("[klipy] trending decode error: %v", err)
+		apiError(w, r, "Failed to decode Klipy response", http.StatusInternalServerError)
 		return
 	}
 

@@ -150,7 +150,7 @@ export async function getDB(): Promise<AppDB> {
   if (db) return db;
 
   db = (await openDB("awful-chat", 4, {
-    upgrade(database, oldVersion) {
+    async upgrade(database, oldVersion, _newVersion, transaction) {
       if (oldVersion < 1) {
         // messages
         const msgStore = database.createObjectStore("messages", {
@@ -204,12 +204,24 @@ export async function getDB(): Promise<AppDB> {
 
       if (oldVersion < 3) {
         // Recreate profiles store with keyPath "did" instead of "id".
-        // Existing peer profile data is dropped (it was broken anyway — see fix).
-        // Own profile is preserved below via a cursor copy.
+        // Peer profile data is dropped (it was broken anyway), but the user's
+        // OWN profile (nickname + avatar) must survive — copy it across the
+        // recreate instead of silently wiping it.
+        let ownProfiles: unknown[] = [];
         if (database.objectStoreNames.contains("profiles")) {
+          const all = (await transaction
+            .objectStore("profiles")
+            .getAll()) as unknown[];
+          ownProfiles = all.filter((p) => {
+            const rec = p as { isMe?: unknown; did?: unknown };
+            return !!p && rec.isMe === true && typeof rec.did === "string";
+          });
           database.deleteObjectStore("profiles");
         }
-        database.createObjectStore("profiles", { keyPath: "did" });
+        const store = database.createObjectStore("profiles", {
+          keyPath: "did",
+        });
+        for (const p of ownProfiles) store.put(p as OwnProfile);
       }
 
       if (oldVersion < 4) {
@@ -652,15 +664,16 @@ export async function setWatermark(
 ): Promise<void> {
   const database = await getDB();
   const id = watermarkId(roomCode, senderId);
-  const existing = await database.get("watermarks", id);
+  // Read+write in ONE transaction so concurrent fire-and-forget callers can't
+  // interleave and regress the watermark (a late lower value clobbering a
+  // higher one written between our get and put).
+  const tx = database.transaction("watermarks", "readwrite");
+  const existing = await tx.store.get(id);
   // Never regress — only advance the watermark
-  if (existing && existing.maxLamport >= maxLamport) return;
-  await database.put("watermarks", {
-    id,
-    roomCode,
-    senderId,
-    maxLamport,
-  });
+  if (!existing || existing.maxLamport < maxLamport) {
+    await tx.store.put({ id, roomCode, senderId, maxLamport });
+  }
+  await tx.done;
 }
 
 export async function getWatermarksForRoom(

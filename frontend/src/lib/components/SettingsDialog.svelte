@@ -27,9 +27,10 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    onOpenSync?: (mode: "generate-qr" | "scan-qr") => void;
   }
 
-  let { open = $bindable(), onClose }: Props = $props();
+  let { open = $bindable(), onClose, onOpenSync }: Props = $props();
 
   let activeTab = $state<SettingsTab>("profile");
   let avatarDialogOpen = $state(false);
@@ -115,7 +116,7 @@
       {:else if activeTab === "audio"}
         <AudioSettings />
       {:else if activeTab === "session"}
-        <SessionSettings {isMobile} {onClose} />
+        <SessionSettings {isMobile} {onClose} {onOpenSync} />
       {:else if activeTab === "data"}
         <DataSettings {activeTab} />
       {/if}
@@ -143,7 +144,7 @@
           {:else if activeTab === "audio"}
             <AudioSettings />
           {:else if activeTab === "session"}
-            <SessionSettings {isMobile} {onClose} />
+            <SessionSettings {isMobile} {onClose} {onOpenSync} />
           {:else if activeTab === "data"}
             <DataSettings {activeTab} />
           {/if}

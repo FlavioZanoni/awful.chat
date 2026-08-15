@@ -11,6 +11,7 @@ export class DtlnProcessor {
   private resolveReady!: () => void;
   private initializing = false;
   private transportDest: AudioNode | null = null;
+  private currentSource: MediaStreamAudioSourceNode | null = null;
 
   constructor() {
     this.readyPromise = new Promise((r) => (this.resolveReady = r));
@@ -101,6 +102,16 @@ export class DtlnProcessor {
       await ctx.resume();
     }
 
+    // Disconnect previous graph to prevent node leak
+    this.currentSource?.disconnect();
+    (this as any).inputGainNode?.disconnect();
+    (this as any).outputGainNode?.disconnect();
+    if (this.transportDest) {
+      try {
+        this.node.disconnect(this.transportDest);
+      } catch {}
+    }
+
     const source = ctx.createMediaStreamSource(micStream);
     const inputGainNode = ctx.createGain();
     const outputGainNode = ctx.createGain();
@@ -116,7 +127,8 @@ export class DtlnProcessor {
     this.node.connect(outputGainNode);
     outputGainNode.connect(dest);
 
-    // Store refs for later adjustment
+    // Store refs for later adjustment and cleanup
+    this.currentSource = source;
     (this as any).inputGainNode = inputGainNode;
     (this as any).outputGainNode = outputGainNode;
     this.transportDest = dest;
@@ -153,12 +165,28 @@ export class DtlnProcessor {
     await this.waitUntilReady();
     const ctx = this.ctx;
     if (ctx.state === "suspended") await ctx.resume();
+
+    // Disconnect previous graph to prevent node leak
+    this.currentSource?.disconnect();
+    (this as any).inputGainNode?.disconnect();
+    (this as any).outputGainNode?.disconnect();
+    if (this.transportDest) {
+      try {
+        this.node.disconnect(this.transportDest);
+      } catch {}
+    }
+
     const source = ctx.createMediaStreamSource(micStream);
     const gain = ctx.createGain();
     const dest = ctx.createMediaStreamDestination();
     source.connect(gain);
     gain.connect(this.node);
     this.node.connect(dest);
+
+    // Store refs in case another graph is created while monitor is active
+    this.currentSource = source;
+    (this as any).inputGainNode = gain;
+
     return {
       processedStream: dest.stream,
       cleanup: () => {

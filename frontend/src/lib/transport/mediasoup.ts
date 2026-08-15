@@ -144,8 +144,11 @@ export class MediasoupVideo implements VideoTransport {
   private sfuWs: WebSocket | null = null;
   private currentRoomCode: string | null = null;
   private currentPeerId: string | null = null;
+  private joinGeneration = 0; // incremented on each join() to guard against stale attemptRejoin
 
   async join(roomCode: string, peerId: string): Promise<void> {
+    this.joinGeneration++;
+    const generation = this.joinGeneration;
     try {
       this.currentRoomCode = roomCode;
       this.currentPeerId = peerId;
@@ -398,8 +401,9 @@ export class MediasoupVideo implements VideoTransport {
           // Attempt ONE automatic rejoin after ~2s. The SFU destroyed all
           // of our server-side state on disconnect, so this must be a FULL
           // rebuild (device + transports + producers), not just a re-dial.
+          const rejoinGen = this.joinGeneration;
           setTimeout(() => {
-            this.attemptRejoin().catch((err) => {
+            this.attemptRejoin(rejoinGen).catch((err) => {
               console.warn("[MediasoupVideo] rejoin failed:", err);
               this.emit(
                 "error",
@@ -418,10 +422,12 @@ export class MediasoupVideo implements VideoTransport {
    * join handshake again, then republish local sources whose tracks are
    * still live. Remote consumers come back via the SFU's producer replay.
    */
-  private async attemptRejoin(): Promise<void> {
+  private async attemptRejoin(expectedGeneration: number): Promise<void> {
     const roomCode = this.currentRoomCode;
     const peerId = this.currentPeerId;
     if (!roomCode || !peerId) return;
+    // Bail if joinGeneration changed (manual rejoin happened in the interim)
+    if (this.joinGeneration !== expectedGeneration) return;
     if (this.sfuWs && this.sfuWs.readyState === WebSocket.OPEN) return;
 
     const republish: { source: VideoSource; stream: MediaStream }[] = [];
@@ -548,6 +554,22 @@ export class MediasoupVideo implements VideoTransport {
         }
       }
     );
+
+    this.sendTransport.on("connectionstatechange", (state: string) => {
+      if (state === "failed") {
+        this.emit("error", new Error("Send transport connection failed"));
+        const rejoinGen = this.joinGeneration;
+        setTimeout(() => {
+          this.attemptRejoin(rejoinGen).catch((err) => {
+            console.warn("[MediasoupVideo] rejoin after send transport failed:", err);
+            this.emit(
+              "error",
+              new Error("Video reconnect failed — leave and rejoin the call")
+            );
+          });
+        }, 2000);
+      }
+    });
   }
 
   private async createRecvTransport(): Promise<void> {
@@ -571,6 +593,22 @@ export class MediasoupVideo implements VideoTransport {
         callback();
       }
     );
+
+    this.recvTransport.on("connectionstatechange", (state: string) => {
+      if (state === "failed") {
+        this.emit("error", new Error("Receive transport connection failed"));
+        const rejoinGen = this.joinGeneration;
+        setTimeout(() => {
+          this.attemptRejoin(rejoinGen).catch((err) => {
+            console.warn("[MediasoupVideo] rejoin after recv transport failed:", err);
+            this.emit(
+              "error",
+              new Error("Video reconnect failed — leave and rejoin the call")
+            );
+          });
+        }, 2000);
+      }
+    });
 
     // Drain any ms:new-producer messages that arrived before we were ready
     const queued = this.queuedProducers.splice(0);

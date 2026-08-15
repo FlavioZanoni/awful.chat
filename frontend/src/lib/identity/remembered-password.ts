@@ -60,13 +60,18 @@ export async function saveRememberedPassword(
     key,
     new TextEncoder().encode(password)
   );
+  // days < 0 is the "remember until I log out" sentinel: no time-based expiry
+  // (the record is cleared explicitly on logout). Without this, -1 computes a
+  // timestamp in the past and the record is deleted on the very next read.
+  const expires =
+    days < 0 ? Number.MAX_SAFE_INTEGER : Date.now() + days * 86_400_000;
   const db = await authDb();
   await db.put("auth", {
     id: "remembered",
     key,
     iv,
     ct,
-    expires: Date.now() + days * 86_400_000,
+    expires,
   });
 }
 

@@ -153,14 +153,27 @@ export async function fileFingerprint(file: File): Promise<string> {
 
 export function withFileTransfer(snapshot: FileTransferSnapshot): void {
   const prev = transportState.fileTransfers.get(snapshot.infoHash);
+
+  // Determine which blobURL to use: defensively prefer existing one unless
+  // snapshot provides a new one with a status indicating completion
+  let blobURLToUse = prev?.blobURL;
+  if (snapshot.blobURL) {
+    // Only accept snapshot's blobURL if we don't have one yet, or if status
+    // indicates a fresh transfer (complete or seeding)
+    if (!prev?.blobURL || snapshot.status === "complete" || snapshot.status === "seeding") {
+      blobURLToUse = snapshot.blobURL;
+    }
+  }
+
   // Revoke previous blobURL if we're replacing it with a different one
-  if (prev?.blobURL && snapshot.blobURL && prev.blobURL !== snapshot.blobURL) {
+  if (prev?.blobURL && blobURLToUse && prev.blobURL !== blobURLToUse) {
     URL.revokeObjectURL(prev.blobURL);
   }
+
   const nextSnapshot: FileTransferSnapshot = {
     ...(prev ?? {}),
     ...snapshot,
-    blobURL: snapshot.blobURL ?? prev?.blobURL,
+    blobURL: blobURLToUse,
   } as FileTransferSnapshot;
   const next = new Map(transportState.fileTransfers);
   next.set(snapshot.infoHash, nextSnapshot);

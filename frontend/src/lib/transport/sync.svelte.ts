@@ -121,6 +121,15 @@ let _syncRoomCode: string | null = null;
 let _syncToken: string | null = null;
 let _syncExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 let _isSourceDevice = false;
+// Target-side: the one source peer we're syncing with. Once set, data from any
+// other peer that joined the (ephemeral) sync room is ignored — otherwise a
+// second joiner could inject a forged database/identity export.
+let _targetSourcePeerId: string | null = null;
+
+/** Reduce a full or short-code token to its comparable 8-char prefix. */
+function tokenPrefix(t: string | undefined | null): string {
+  return (t ?? "").slice(0, 8);
+}
 
 const SYNC_ROOM_PREFIX = "__sync_";
 const SYNC_TIMEOUT = 5 * 60 * 1000; // 5 minutes
@@ -385,12 +394,16 @@ async function sendExportData(
     // In "add" mode, we skip identity export since target keeps its own
     const exportData = await exportDatabase(mode === "add");
 
+    // Echo the proof-of-scan token in every data frame so the target can
+    // reject data from a peer that never proved it holds the shared secret.
+    const token = _syncToken ?? undefined;
+
     // Send identity first
     _transport.send(
       peerId,
       encode({
         type: SyncMessageType.ExportData,
-        payload: { section: "identity", data: exportData.identity },
+        payload: { section: "identity", data: exportData.identity, token },
       })
     );
 
@@ -426,6 +439,7 @@ async function sendExportData(
               batchIndex: i,
               totalBatches: batches,
               data: batch,
+              token,
             },
           })
         );
@@ -489,6 +503,16 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
 
     // Target sends ExportRequest after connecting
     _transport.on("connect", (peerId: string) => {
+      // Pin to the first source peer. Ignore any additional peer that joins
+      // this ephemeral room so it can't hand us a forged export.
+      if (_targetSourcePeerId && _targetSourcePeerId !== peerId) {
+        console.warn(
+          "[Sync][Target] Ignoring extra peer in sync room:",
+          peerId.slice(0, 8)
+        );
+        return;
+      }
+      _targetSourcePeerId = peerId;
       console.log("[Sync][Target] Connected to source:", peerId.slice(0, 8));
       syncState.isConnecting = false;
       syncState.isSyncing = true;
@@ -511,6 +535,14 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
     });
 
     _transport.on("message", async (peerId: string, data: Uint8Array) => {
+      // Only accept sync traffic from the pinned source peer.
+      if (_targetSourcePeerId && peerId !== _targetSourcePeerId) {
+        console.warn(
+          "[Sync][Target] Dropping message from non-source peer:",
+          peerId.slice(0, 8)
+        );
+        return;
+      }
       console.log("[Sync][Target] Received message from:", peerId.slice(0, 8));
       try {
         const msg = decode(data) as SyncMessage;
@@ -522,12 +554,21 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
             data: sectionData,
             batchIndex,
             totalBatches,
+            token: echoedToken,
           } = msg.payload as {
             section: string;
             data: unknown;
             batchIndex?: number;
             totalBatches?: number;
+            token?: string;
           };
+
+          // The source must echo the proof-of-scan token. A peer that never
+          // saw the QR/short code can't produce it, so its data is dropped.
+          if (tokenPrefix(echoedToken) !== tokenPrefix(payload.token)) {
+            console.warn("[Sync][Target] Dropping ExportData: token mismatch");
+            return;
+          }
 
           if (section === "identity") {
             receivedIdentity = sectionData as DatabaseExport["identity"];
@@ -897,6 +938,7 @@ async function cleanup(): Promise<void> {
   _syncRoomCode = null;
   _syncToken = null;
   _isSourceDevice = false;
+  _targetSourcePeerId = null;
 }
 
 /**
