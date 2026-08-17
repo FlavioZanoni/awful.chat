@@ -73,7 +73,24 @@ if (typeof document !== "undefined") {
   });
 }
 
-export async function joinCall(): Promise<void> {
+/**
+ * In flight join. `transportState.inCall` only flips once the awaits below
+ * finish, so a second tap on "Join call" used to re-enter and race the first:
+ * both registered the /voice/1.0.0 handler and libp2p threw "Handler already
+ * registered", failing the whole join.
+ */
+let _joinPromise: Promise<void> | null = null;
+
+export function joinCall(): Promise<void> {
+  if (_joinPromise) return _joinPromise;
+  if (transportState.inCall) return Promise.resolve();
+  _joinPromise = _joinCall().finally(() => {
+    _joinPromise = null;
+  });
+  return _joinPromise;
+}
+
+async function _joinCall(): Promise<void> {
   transportState.error = null;
   try {
     // Ensure transport is connected before joining voice

@@ -44,7 +44,12 @@ export class LibP2PVoice implements VoiceTransport {
   private processedStream: MediaStream | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
   private inputGain: GainNode | null = null;
-  private voiceHandlerRegistered = false;
+  /**
+   * The node the voice handler is currently registered on. Tracked per node,
+   * not as a boolean: a reconnect builds a fresh node, and a stale "already
+   * registered" flag would leave the new one with no handler at all.
+   */
+  private handlerNode: Libp2p<AppServices> | null = null;
 
   private activeInputDevice: string | null = null;
   private activeOutputDevice: string | null = null;
@@ -82,16 +87,21 @@ export class LibP2PVoice implements VoiceTransport {
       // listen-only mode
     }
 
-    if (!this.voiceHandlerRegistered) {
+    if (this.handlerNode !== this.node) {
+      // force: registering the same protocol twice throws "Handler already
+      // registered", which used to abort the whole join. Replacing is always
+      // the right outcome here - the handler only closes over `this` - so a
+      // re-entrant join heals instead of failing.
       await this.node.handle(
         VOICE_PROTO,
         (stream: Stream, connection: Connection) => {
           const peerId = connection.remotePeer.toString();
           const remote = this.ensureRemotePeer(peerId);
           this.attachStream(peerId, remote, stream);
-        }
+        },
+        { force: true }
       );
-      this.voiceHandlerRegistered = true;
+      this.handlerNode = this.node;
     }
 
     this.onTransportConnect = (peerId: string) => {
@@ -150,9 +160,11 @@ export class LibP2PVoice implements VoiceTransport {
       this.teardownRemotePeer(peerId);
       this.emit("peerLeft", peerId);
     }
-    if (this.voiceHandlerRegistered) {
-      this.node?.unhandle(VOICE_PROTO);
-      this.voiceHandlerRegistered = false;
+    if (this.handlerNode) {
+      // Unregister on the node it was registered on, which is not necessarily
+      // the current one after a reconnect.
+      this.handlerNode.unhandle(VOICE_PROTO).catch(() => {});
+      this.handlerNode = null;
     }
 
     this.micStream?.getTracks().forEach((t) => t.stop());

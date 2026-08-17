@@ -197,6 +197,7 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
     state: transportState,
     peerIdToDid: _peerIdToDid,
     selfId: () => _transport.selfId(),
+    node: () => _transport.p2pNode,
   };
 }
 

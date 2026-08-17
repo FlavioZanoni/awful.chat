@@ -149,7 +149,9 @@ export class LibP2PTransport implements PeerTransport {
       DIRECT_MSG_PROTOCOL,
       (stream: Stream, connection: Connection) => {
         this.handleInboundStream(connection.remotePeer.toString(), stream);
-      }
+      },
+      // Never let a duplicate registration abort a (re)connect; see voice.ts.
+      { force: true }
     );
 
     await this.node.start();
