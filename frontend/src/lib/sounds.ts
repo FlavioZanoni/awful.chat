@@ -52,6 +52,21 @@ export async function playLeaveSound() {
   }, 60);
 }
 
+/**
+ * Someone ELSE joined or left the call. Lighter and higher than your own
+ * join/leave: you already know when you pressed the button, so those stay the
+ * prominent ones, but you still hear the room fill up behind you.
+ */
+export async function playPeerJoinSound() {
+  playOsc(660, 0.07, "sine", 0.07);
+  setTimeout(() => playOsc(880, 0.1, "sine", 0.06), 55);
+}
+
+export async function playPeerLeaveSound() {
+  playOsc(660, 0.07, "sine", 0.06);
+  setTimeout(() => playOsc(440, 0.12, "sine", 0.05), 55);
+}
+
 export async function playMuteSound() {
   playOsc(400, 0.04, "sine", 0.15);
   playOsc(300, 0.04, "triangle", 0.1);

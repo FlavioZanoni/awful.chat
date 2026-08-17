@@ -85,6 +85,8 @@ import {
 import { initVoice } from "./voice.svelte";
 import { initTransmission } from "./transmission.svelte";
 import { notifyMessage } from "../notify.svelte";
+import { playPeerJoinSound, playPeerLeaveSound } from "../sounds";
+import { peerCallChime } from "./call-chime";
 
 export type { Message };
 
@@ -533,16 +535,33 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
     .catch(() => {});
 }
 
+/** Chime when somebody else joins or leaves the call we are sitting in. */
+function _peerCallSound(room: string | undefined, nowInCall: boolean, wasInCall: boolean): void {
+  const chime = peerCallChime({
+    imInCall: transportState.inCall,
+    myCallRoom: transportState.callRoomCode,
+    room,
+    wasInCall,
+    nowInCall,
+  });
+  if (chime === "join") playPeerJoinSound();
+  else if (chime === "leave") playPeerLeaveSound();
+}
+
 function _handleCallPresence(peerId: string, inCall: boolean, roomCode?: string): void {
   const next = new Set(transportState.callPeerIds);
   const roomNext = new Map(transportState.callPeerRooms);
+  const wasInCall = next.has(peerId);
+  const theirRoom = roomNext.get(peerId);
 
   if (inCall && roomCode) {
     next.add(peerId);
     roomNext.set(peerId, roomCode);
+    _peerCallSound(roomCode, true, wasInCall);
   } else {
     next.delete(peerId);
     roomNext.delete(peerId);
+    _peerCallSound(theirRoom, false, wasInCall);
 
     const parts = new Map(transportState.participants);
     parts.delete(peerId);
@@ -822,7 +841,13 @@ _transport.on("disconnect", (peerId) => {
   parts.delete(peerId);
   transportState.participants = parts;
 
+  // A peer that drops out never sends a leave, so the chime belongs here too.
   const calls = new Set(transportState.callPeerIds);
+  _peerCallSound(
+    transportState.callPeerRooms.get(peerId),
+    false,
+    calls.has(peerId)
+  );
   calls.delete(peerId);
   transportState.callPeerIds = calls;
 
