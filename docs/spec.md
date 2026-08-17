@@ -473,9 +473,6 @@ binding fails check 1, and forging one fails check 2. A peerId is never turned
 into a DID by guesswork - an unbound peer keeps showing as its peerId rather
 than being attributed to an identity that may not be theirs.
 
-Mixed versions do not interoperate: a client from before this change computes
-DIDs from peerIds and reads the wrong identity for anyone running the new one.
-
 ---
 
 ## DM Encryption
