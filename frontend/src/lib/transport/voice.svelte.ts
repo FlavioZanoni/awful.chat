@@ -71,7 +71,7 @@ function restoreVoicePrefs(): void {
   const voice = getVoice();
   voice.setInputGain(prefs.inputGain);
   voice.setOutputVolume(prefs.outputVolume);
-  voice.setDtlnEnabled(prefs.dtlnEnabled);
+  void voice.setDtlnEnabled(prefs.dtlnEnabled);
   getDtln().setNoiseGate(prefs.noiseGate);
   if (prefs.inputDevice) voice.setInputDevice(prefs.inputDevice);
   if (prefs.outputDevice) voice.setOutputDevice(prefs.outputDevice);
@@ -142,9 +142,13 @@ export function getVoiceDtlnNoiseGate(): number {
   return getDtln().getNoiseGate();
 }
 
-export function setVoiceDtlnEnabled(enabled: boolean): void {
+export async function setVoiceDtlnEnabled(enabled: boolean): Promise<void> {
   saveAudioPrefs({ dtlnEnabled: enabled });
-  getVoice().setDtlnEnabled(enabled);
+  await getVoice().setDtlnEnabled(enabled);
+  // Toggling this restarts the mic, so the old stream's tracks are stopped.
+  // Anything still holding the previous stream (the speaking-ring analyser)
+  // would read silence from a dead track for the rest of the call.
+  transportState.localMicStream = getVoice().getMicStream();
 }
 
 export function getVoiceDtlnEnabled(): boolean {

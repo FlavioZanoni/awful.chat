@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import {
     transportState,
     selfId,
@@ -97,32 +98,44 @@
   const analysers = new Map<
     string,
     {
-      ctx: AudioContext;
       analyser: AnalyserNode;
       source: MediaStreamAudioSourceNode;
+      track: MediaStreamTrack;
     }
   >();
 
+  // One context for everyone. A context per peer meant every track event closed
+  // and reopened all of them, and browsers cap how many can exist at once - once
+  // that cap was hit the constructor threw and the ring never came back.
+  let sharedCtx: AudioContext | null = null;
+
+  function speakerCtx(): AudioContext {
+    if (!sharedCtx || sharedCtx.state === "closed") {
+      sharedCtx = new AudioContext();
+    }
+    // A context created without a user gesture, or suspended while the tab sat
+    // in the background, reports silence until it is resumed - which is the
+    // other way the ring used to stop for good.
+    if (sharedCtx.state === "suspended") sharedCtx.resume().catch(() => {});
+    return sharedCtx;
+  }
+
   function startSpeakerDetection(peerId: string, track: MediaStreamTrack) {
-    // If there's a stale entry for a different track, tear it down first
     const existing = analysers.get(peerId);
     if (existing) {
-      // Same track - nothing to do
-      if (
-        analysers.get(peerId)?.source.mediaStream.getAudioTracks()[0] === track
-      )
-        return;
+      // Same track and still live: nothing to do. A track that has ended (the
+      // mic was restarted underneath us) has to be rewired, not kept.
+      if (existing.track === track && track.readyState === "live") return;
       stopSpeakerDetection(peerId);
     }
+    if (track.readyState !== "live") return;
     try {
-      const ctx = new AudioContext();
+      const ctx = speakerCtx();
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 512;
       const source = ctx.createMediaStreamSource(new MediaStream([track]));
       source.connect(analyser);
-      analysers.set(peerId, { ctx, analyser, source });
-      // Resume in case the context started suspended (common for remote tracks)
-      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      analysers.set(peerId, { analyser, source, track });
     } catch {
       // ignore
     }
@@ -132,8 +145,8 @@
     const entry = analysers.get(peerId);
     if (!entry) return;
     entry.source.disconnect();
-    entry.ctx.close().catch(() => {});
     analysers.delete(peerId);
+    lastLoudAt.delete(peerId);
     speakingPeers = new Set([...speakingPeers].filter((p) => p !== peerId));
   }
 
@@ -148,6 +161,7 @@
   const lastLoudAt = new Map<string, number>();
 
   function pollSpeakers() {
+    if (sharedCtx?.state === "suspended") sharedCtx.resume().catch(() => {});
     const buf = new Uint8Array(512);
     const now = performance.now();
     const next = new Set<string>();
@@ -214,16 +228,22 @@
     if (!rafId && desiredPeers.size > 0) {
       rafId = requestAnimationFrame(pollSpeakers);
     }
+    if (rafId && desiredPeers.size === 0) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    // No teardown on re-run: this effect re-runs on every track event, and
+    // tearing every analyser down each time is what left peers without one.
+  });
 
-    return () => {
-      if (rafId) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      for (const peerId of [...analysers.keys()]) {
-        stopSpeakerDetection(peerId);
-      }
-    };
+  onDestroy(() => {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    for (const peerId of [...analysers.keys()]) {
+      stopSpeakerDetection(peerId);
+    }
+    sharedCtx?.close().catch(() => {});
+    sharedCtx = null;
   });
 
   // ── Video / Audio actions ─────────────────────────────────────────────────
