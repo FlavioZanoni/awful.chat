@@ -3,6 +3,7 @@ import {
   getOwnProfile,
   putOwnProfile,
   updateOwnProfile,
+  rekeyOwnProfile,
   pfpBlobURL,
 } from "$lib/storage";
 import { broadcastProfile } from "$lib/transport/transport.svelte";
@@ -22,6 +23,11 @@ let _blobUrl: string | undefined;
 export async function loadProfile(): Promise<void> {
   const p = await getOwnProfile();
   if (!p) return;
+  // Repair profiles written before the identity was known: the row was keyed
+  // by an empty did, which detaches it from the identity it belongs to.
+  if (!p.did && identityStore.did) {
+    await rekeyOwnProfile(p.did ?? "", identityStore.did);
+  }
   profileStore.nickname = p.nickname || "Anonymous";
   if (_blobUrl) {
     URL.revokeObjectURL(_blobUrl);

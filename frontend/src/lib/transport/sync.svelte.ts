@@ -679,6 +679,7 @@ async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
     salt: Uint8Array;
     iv: Uint8Array;
     encrypted: ArrayBuffer;
+    iterations?: number;
   };
   const keypair = keypairRaw as { did: string; publicKey: Uint8Array };
 
@@ -690,6 +691,9 @@ async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
         salt: Array.from(new Uint8Array(mnemonic.salt)),
         iv: Array.from(new Uint8Array(mnemonic.iv)),
         encrypted: Array.from(new Uint8Array(mnemonic.encrypted)),
+        // Without this the target derives the key with the legacy iteration
+        // count and rejects the correct password as wrong.
+        iterations: mnemonic.iterations,
       },
       keypair: {
         did: keypair.did,
@@ -766,6 +770,11 @@ async function importDatabase(
       salt: new Uint8Array(data.identity.mnemonic.salt),
       iv: new Uint8Array(data.identity.mnemonic.iv),
       encrypted: new Uint8Array(data.identity.mnemonic.encrypted).buffer,
+      // Absent = written before per-record counts existed = legacy 100k,
+      // which is exactly what unlockIdentity assumes when it is undefined.
+      ...(typeof data.identity.mnemonic.iterations === "number"
+        ? { iterations: data.identity.mnemonic.iterations }
+        : {}),
     };
 
     const keypairRecord = {

@@ -31,7 +31,18 @@ export interface AttachmentExport {
 
 export interface DatabaseExport {
   identity?: {
-    mnemonic: { salt: number[]; iv: number[]; encrypted: number[] };
+    mnemonic: {
+      salt: number[];
+      iv: number[];
+      encrypted: number[];
+      /**
+       * PBKDF2 iteration count the mnemonic was encrypted with. MUST travel
+       * with the record: the receiving device derives the key with it, and
+       * guessing wrong makes the correct password look wrong. Absent means the
+       * legacy 100k count (records written before this field existed).
+       */
+      iterations?: number;
+    };
     keypair: { did: string; publicKey: number[] };
     // webauthn is intentionally NOT exported: the credential is bound to the
     // source device's authenticator and would only present a broken

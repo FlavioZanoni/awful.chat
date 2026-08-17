@@ -148,8 +148,13 @@
     step = "profile";
   }
 
-  function handleFinish() {
-    saveName(profileStore.nickname);
+  async function handleFinish() {
+    // The profile row is keyed by did, so the identity has to be known before
+    // the name is written - otherwise it lands under an empty key and the name
+    // looks like it was never saved. Awaited for the same reason: the biometric
+    // step can sit here for a while before finalizeSession() runs.
+    if (pendingKeypair) identityStore.did = pendingKeypair.did;
+    await saveName(profileStore.nickname);
     if (
       identityStore.webAuthnCapabilities?.supported &&
       identityStore.webAuthnCapabilities?.canEnroll

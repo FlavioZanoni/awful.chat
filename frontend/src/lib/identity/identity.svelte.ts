@@ -28,6 +28,7 @@ import {
   getWebAuthnCapabilities,
 } from "./identity";
 import { deleteWebAuthnRecord, requestPersistentStorage } from "../storage";
+import { clearRememberedPassword } from "./remembered-password";
 
 interface IdentityStore {
   /** True when the private key is held in memory and signing is available. */
@@ -47,6 +48,12 @@ interface IdentityStore {
   webAuthnCapabilities: WebAuthnCapabilities | null;
   /** True while app is initializing (loading identity + auto-login attempt). */
   initializing: boolean;
+  /**
+   * Set when the user deliberately locked/logged out. Blocks the unlock
+   * screen's auto-login, which would otherwise sign them straight back in
+   * from the remembered password before the record is even cleared.
+   */
+  justLoggedOut: boolean;
 }
 
 export const identityStore = $state<IdentityStore>({
@@ -59,6 +66,7 @@ export const identityStore = $state<IdentityStore>({
   hasWebAuthn: false,
   webAuthnCapabilities: null,
   initializing: true,
+  justLoggedOut: false,
 });
 
 function setUnlocked(keypair: KeypairRecord): void {
@@ -181,9 +189,17 @@ export async function unlock(password: string): Promise<void> {
  * Zero out the private key in memory and update the store.
  * Call this on logout or when the app goes to the background.
  */
+/**
+ * Lock the session and log out.
+ *
+ * The remembered password has to go too: leaving it behind meant the unlock
+ * screen auto-logged straight back in, so the button appeared to do nothing.
+ */
 export function lock(): void {
+  identityStore.justLoggedOut = true;
   lockIdentity();
   setLocked();
+  clearRememberedPassword().catch(() => {});
 }
 
 /**

@@ -20,12 +20,33 @@
     loadRememberedPassword,
     clearRememberedPassword,
   } from "$lib/identity/remembered-password";
+  import { wipeLocalDatabase, deleteWebAuthnRecord } from "$lib/storage";
 
   let password = $state("");
   let remember = $state(false);
   // Set once the user starts typing, so a slow remembered-password lookup
   // can't clobber what they're entering.
   let userEdited = $state(false);
+  let confirmSwitch = $state(false);
+  let switching = $state(false);
+
+  /**
+   * Swap to another account. A device holds exactly one identity, so this
+   * clears the local database and drops back to the setup screen where the
+   * user can create, restore or sync one.
+   */
+  async function handleSwitchAccount() {
+    switching = true;
+    try {
+      await clearRememberedPassword().catch(() => {});
+      await deleteWebAuthnRecord().catch(() => {});
+      await wipeLocalDatabase();
+      window.location.reload();
+    } catch (e) {
+      switching = false;
+      identityStore.error = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   const DURATION_KEY = "awful_remember_duration";
 
@@ -46,6 +67,8 @@
   );
 
   $effect(() => {
+    // Do not sign the user back in right after they asked to log out.
+    if (identityStore.justLoggedOut) return;
     if (
       !identityStore.isUnlocked &&
       !identityStore.loading &&
@@ -75,6 +98,7 @@
 
   async function handleUnlock() {
     try {
+      identityStore.justLoggedOut = false;
       await unlock(password);
       if (remember) {
         // getRememberDuration() may be -1 ("until logout") — a valid choice
@@ -90,6 +114,7 @@
 
   async function handleBiometrics() {
     try {
+      identityStore.justLoggedOut = false;
       await unlockWithBiometrics();
       const resetTimer =
         localStorage.getItem("awful_remember_reset_timer") === "true";
@@ -185,6 +210,45 @@
       <Button variant="outline" class="w-full font-mono" onclick={onRecover}>
         Restore from phrase
       </Button>
+
+      {#if !confirmSwitch}
+        <button
+          type="button"
+          onclick={() => (confirmSwitch = true)}
+          class="mt-1 text-xs text-muted-foreground hover:text-foreground font-mono transition-colors"
+        >
+          Use a different account
+        </button>
+      {:else}
+        <div
+          class="mt-1 w-full flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3"
+        >
+          <p
+            class="text-xs font-mono text-muted-foreground leading-relaxed text-left"
+          >
+            Only one account lives on a device at a time. Switching erases this
+            one from here: its messages, rooms and files go with it, and without
+            the 12 word phrase it cannot be recovered.
+          </p>
+          <div class="flex gap-2">
+            <Button
+              variant="outline"
+              class="flex-1 font-mono text-xs"
+              onclick={() => (confirmSwitch = false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              class="flex-1 font-mono text-xs"
+              disabled={switching}
+              onclick={handleSwitchAccount}
+            >
+              {switching ? "Erasing…" : "Erase and switch"}
+            </Button>
+          </div>
+        </div>
+      {/if}
     </CardFooter>
   </Card>
 </div>

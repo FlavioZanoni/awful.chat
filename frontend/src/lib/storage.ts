@@ -591,6 +591,25 @@ export async function putOwnProfile(profile: OwnProfile): Promise<void> {
 }
 
 /**
+ * Move the own-profile row to a new key. Used to repair rows written before
+ * the identity existed, which landed under an empty did.
+ */
+export async function rekeyOwnProfile(
+  from: string,
+  to: string
+): Promise<void> {
+  if (from === to) return;
+  const database = await getDB();
+  const tx = database.transaction("profiles", "readwrite");
+  const existing = await tx.store.get(from);
+  if (existing) {
+    await tx.store.put({ ...existing, did: to, isMe: true as const });
+    await tx.store.delete(from);
+  }
+  await tx.done;
+}
+
+/**
  * Patch own profile.
  * pfpData and pfpURL are mutually exclusive — setting one clears the other.
  */
