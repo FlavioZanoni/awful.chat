@@ -138,7 +138,14 @@ export function maybePeerIdFromSenderId(senderId: string): string | null {
 }
 
 export function shouldAutoDownload(mimeType: string): boolean {
-  return mimeType.startsWith("image/") || mimeType.startsWith("video/");
+  // Audio joins the list so a track can just be played: the inline player has
+  // nothing to play until the bytes are here, and audio is smaller than the
+  // video already being fetched.
+  return (
+    mimeType.startsWith("image/") ||
+    mimeType.startsWith("video/") ||
+    mimeType.startsWith("audio/")
+  );
 }
 
 export async function fileFingerprint(file: File): Promise<string> {

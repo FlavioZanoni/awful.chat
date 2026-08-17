@@ -16,6 +16,7 @@
     type FileEntry,
   } from "$lib/types/message";
   import type { FileTransferSnapshot } from "$lib/transport/types";
+  import AudioPlayer from "./AudioPlayer.svelte";
   import { putSavedGif, deleteSavedGif, isGifSaved } from "$lib/storage";
 
   interface Props {
@@ -322,6 +323,12 @@
               preload="metadata"
               class="mt-2 max-w-xs max-h-56 rounded-md"
             ></video>
+          {:else if transfer?.blobURL && file.mimeType.startsWith("audio/")}
+            <AudioPlayer
+              src={transfer.blobURL}
+              label={file.filename}
+              class="mt-2 max-w-xs"
+            />
           {:else if transfer?.blobURL}
             <a
               href={transfer.blobURL}
