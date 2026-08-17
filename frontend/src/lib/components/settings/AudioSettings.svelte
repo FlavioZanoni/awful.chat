@@ -331,7 +331,7 @@
         </span>
         <Switch
           bind:checked={dtlnEnabled}
-          onCheckedChange={() => setVoiceDtlnEnabled(dtlnEnabled)}
+          onCheckedChange={(checked) => setVoiceDtlnEnabled(checked)}
         />
       </label>
     </div>

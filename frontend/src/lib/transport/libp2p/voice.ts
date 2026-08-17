@@ -156,6 +156,7 @@ export class LibP2PVoice implements VoiceTransport {
     }
 
     this.micStream?.getTracks().forEach((t) => t.stop());
+    this.dtln?.releaseTransport();
     this.audioCtx?.close();
 
     this.audioCtx = null;
@@ -329,6 +330,9 @@ export class LibP2PVoice implements VoiceTransport {
         this.currentInputGain
       );
     } else {
+      // DTLN off: drop its graph so the worklet stops processing the (now
+      // stopped) previous mic and peers are fed by the plain path only.
+      this.dtln?.releaseTransport();
       const ctx = this.audioCtx!;
       this.inputSource = ctx.createMediaStreamSource(this.micStream);
       this.inputGain = ctx.createGain();

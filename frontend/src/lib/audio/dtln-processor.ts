@@ -10,8 +10,22 @@ export class DtlnProcessor {
   private readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private initializing = false;
-  private transportDest: AudioNode | null = null;
-  private currentSource: MediaStreamAudioSourceNode | null = null;
+
+  // Two independent graphs share the single DTLN worklet node:
+  //
+  //   transport: mic -> txInputGain -> worklet -> txOutputGain -> dest (peers)
+  //   monitor:   mic -> monGain     -> worklet -> dest (your speakers)
+  //
+  // They are tracked separately so a mic test can never tear down the audio
+  // path of a live call (and vice versa).
+  private txSource: MediaStreamAudioSourceNode | null = null;
+  private txInputGain: GainNode | null = null;
+  private txOutputGain: GainNode | null = null;
+  private transportDest: MediaStreamAudioDestinationNode | null = null;
+
+  private monSource: MediaStreamAudioSourceNode | null = null;
+  private monGain: GainNode | null = null;
+  private monDest: MediaStreamAudioDestinationNode | null = null;
 
   constructor() {
     this.readyPromise = new Promise((r) => (this.resolveReady = r));
@@ -102,15 +116,8 @@ export class DtlnProcessor {
       await ctx.resume();
     }
 
-    // Disconnect previous graph to prevent node leak
-    this.currentSource?.disconnect();
-    (this as any).inputGainNode?.disconnect();
-    (this as any).outputGainNode?.disconnect();
-    if (this.transportDest) {
-      try {
-        this.node.disconnect(this.transportDest);
-      } catch {}
-    }
+    // Replace only the previous transport graph - a running mic test keeps its own.
+    this.releaseTransport();
 
     const source = ctx.createMediaStreamSource(micStream);
     const inputGainNode = ctx.createGain();
@@ -125,37 +132,55 @@ export class DtlnProcessor {
     source.connect(inputGainNode);
     inputGainNode.connect(this.node);
     this.node.connect(outputGainNode);
-    outputGainNode.connect(dest);
+    // If a mic test is monitoring right now, leave the peer-facing edge cut:
+    // the test's cleanup reconnects it, so rebuilding the mic mid-test does
+    // not start broadcasting the test to the call.
+    if (!this.monDest) outputGainNode.connect(dest);
 
-    // Store refs for later adjustment and cleanup
-    this.currentSource = source;
-    (this as any).inputGainNode = inputGainNode;
-    (this as any).outputGainNode = outputGainNode;
+    this.txSource = source;
+    this.txInputGain = inputGainNode;
+    this.txOutputGain = outputGainNode;
     this.transportDest = dest;
     return dest.stream;
   }
 
-  setInputGain(gain: number): void {
-    const node = (this as any).inputGainNode as GainNode | undefined;
-    if (node) {
-      node.gain.value = gain;
-    }
-  }
-
-  disconnectFromTransport() {
-    if (this.transportDest) {
+  /**
+   * Tear the peer-facing graph down entirely. Call when rebuilding the mic,
+   * when DTLN is switched off, or when a call ends, so the worklet stops
+   * chewing CPU on a dead mic.
+   */
+  releaseTransport(): void {
+    this.txSource?.disconnect();
+    this.txInputGain?.disconnect();
+    this.txOutputGain?.disconnect();
+    if (this.txOutputGain && this.workletNode) {
       try {
-        this.node.disconnect(this.transportDest);
+        this.workletNode.disconnect(this.txOutputGain);
       } catch {}
     }
+    this.txSource = null;
+    this.txInputGain = null;
+    this.txOutputGain = null;
+    this.transportDest = null;
   }
 
-  reconnectToTransport() {
-    if (this.transportDest) {
-      try {
-        this.node.connect(this.transportDest);
-      } catch {}
-    }
+  /**
+   * Temporarily stop feeding peers without dismantling the graph, so a mic
+   * test is not broadcast to everyone in the call. The cut is made at
+   * outputGain -> dest, which is the edge that actually exists.
+   */
+  disconnectFromTransport(): void {
+    if (!this.txOutputGain || !this.transportDest) return;
+    try {
+      this.txOutputGain.disconnect(this.transportDest);
+    } catch {}
+  }
+
+  reconnectToTransport(): void {
+    if (!this.txOutputGain || !this.transportDest) return;
+    try {
+      this.txOutputGain.connect(this.transportDest);
+    } catch {}
   }
 
   // for mic test - connect to speakers directly so user can hear themselves
@@ -166,15 +191,8 @@ export class DtlnProcessor {
     const ctx = this.ctx;
     if (ctx.state === "suspended") await ctx.resume();
 
-    // Disconnect previous graph to prevent node leak
-    this.currentSource?.disconnect();
-    (this as any).inputGainNode?.disconnect();
-    (this as any).outputGainNode?.disconnect();
-    if (this.transportDest) {
-      try {
-        this.node.disconnect(this.transportDest);
-      } catch {}
-    }
+    // Replace only a previous monitor graph - never touch the call's path.
+    this.releaseMonitor();
 
     const source = ctx.createMediaStreamSource(micStream);
     const gain = ctx.createGain();
@@ -183,17 +201,26 @@ export class DtlnProcessor {
     gain.connect(this.node);
     this.node.connect(dest);
 
-    // Store refs in case another graph is created while monitor is active
-    this.currentSource = source;
-    (this as any).inputGainNode = gain;
+    this.monSource = source;
+    this.monGain = gain;
+    this.monDest = dest;
 
     return {
       processedStream: dest.stream,
-      cleanup: () => {
-        source.disconnect();
-        gain.disconnect();
-        this.node.disconnect(dest);
-      },
+      cleanup: () => this.releaseMonitor(),
     };
+  }
+
+  private releaseMonitor(): void {
+    this.monSource?.disconnect();
+    this.monGain?.disconnect();
+    if (this.monDest && this.workletNode) {
+      try {
+        this.workletNode.disconnect(this.monDest);
+      } catch {}
+    }
+    this.monSource = null;
+    this.monGain = null;
+    this.monDest = null;
   }
 }

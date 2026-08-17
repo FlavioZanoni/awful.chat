@@ -12,7 +12,17 @@
     MessageSquare,
     Users,
     Database,
+    Download,
+    Upload,
   } from "@lucide/svelte";
+  import {
+    downloadBackup,
+    readBackupFile,
+    applyBackup,
+    summarizeBackup,
+    type BackupFile,
+    type BackupSummary,
+  } from "$lib/transport/sync.svelte";
 
   interface Props {
     activeTab?: string;
@@ -49,6 +59,59 @@
   async function handleEraseLocalData() {
     await wipeLocalDatabase();
     window.location.reload();
+  }
+
+  // ── Backup / restore ──────────────────────────────────────────────────────
+  let fileInput = $state<HTMLInputElement | null>(null);
+  let backupBusy = $state(false);
+  let backupError = $state<string | null>(null);
+  // The parsed backup is deliberately NOT $state: a rune proxy cannot be
+  // structured-cloned, so handing it to IndexedDB throws and the import
+  // silently does nothing. Only the summary needs to be reactive.
+  let pendingBackup: BackupFile | null = null;
+  let pendingSummary = $state<BackupSummary | null>(null);
+
+  async function handleDownload() {
+    backupError = null;
+    backupBusy = true;
+    try {
+      await downloadBackup();
+    } catch (e) {
+      backupError = e instanceof Error ? e.message : String(e);
+    } finally {
+      backupBusy = false;
+    }
+  }
+
+  async function handleFilePicked(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ""; // let the same file be picked again after a cancel
+    if (!file) return;
+    backupError = null;
+    backupBusy = true;
+    try {
+      const data = await readBackupFile(file);
+      pendingBackup = data;
+      pendingSummary = summarizeBackup(data);
+    } catch (e) {
+      backupError = e instanceof Error ? e.message : String(e);
+    } finally {
+      backupBusy = false;
+    }
+  }
+
+  async function handleApply(mode: "add" | "replace") {
+    if (!pendingBackup) return;
+    backupError = null;
+    backupBusy = true;
+    try {
+      await applyBackup(pendingBackup, mode);
+      window.location.reload();
+    } catch (e) {
+      backupError = e instanceof Error ? e.message : String(e);
+      backupBusy = false;
+    }
   }
 </script>
 
@@ -207,6 +270,107 @@
         </div>
       </div>
     {/if}
+  </div>
+
+  <!-- Backup / Restore -->
+  <div
+    class="flex flex-col gap-4 p-4 bg-muted/30 rounded-lg border border-border/50"
+  >
+    <div class="flex items-center gap-2">
+      <div class="w-1 h-4 bg-cyan-500 rounded-full"></div>
+      <Label
+        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+        >Backup</Label
+      >
+    </div>
+    <p class="text-xs text-muted-foreground font-mono leading-relaxed">
+      Save everything on this device to a file, or restore from one. Same data
+      as a QR device sync, without needing both devices online at once. The file
+      contains your encrypted identity: anyone who has it and your password has
+      your account, so keep it somewhere safe.
+    </p>
+
+    {#if backupError}
+      <p
+        class="text-xs font-mono text-destructive bg-destructive/10 border border-destructive/30 rounded-md p-2"
+      >
+        {backupError}
+      </p>
+    {/if}
+
+    {#if pendingSummary}
+      {@const s = pendingSummary}
+      <div class="flex flex-col gap-3 bg-muted/50 rounded-lg p-3">
+        <p class="text-xs font-mono text-muted-foreground">
+          {s.messages.toLocaleString()} messages · {s.rooms} rooms · {s.attachments}
+          files · {s.profiles} profiles{s.exportedAt
+            ? ` · from ${new Date(s.exportedAt).toLocaleDateString()}`
+            : ""}
+        </p>
+        <p class="text-xs font-mono text-muted-foreground">
+          {s.hasIdentity
+            ? "Includes an identity, so it can replace this device entirely."
+            : "No identity in this file, so it can only be merged."}
+        </p>
+        <div class="flex flex-col gap-2 sm:flex-row">
+          <Button
+            variant="outline"
+            class="flex-1 font-mono text-xs"
+            disabled={backupBusy}
+            onclick={() => handleApply("add")}
+          >
+            Merge into this device
+          </Button>
+          <Button
+            variant="destructive"
+            class="flex-1 font-mono text-xs"
+            disabled={backupBusy || !s.hasIdentity}
+            onclick={() => handleApply("replace")}
+          >
+            Replace everything
+          </Button>
+        </div>
+        <Button
+          variant="ghost"
+          class="font-mono text-xs text-muted-foreground"
+          disabled={backupBusy}
+          onclick={() => {
+            pendingBackup = null;
+            pendingSummary = null;
+          }}
+        >
+          Cancel
+        </Button>
+      </div>
+    {:else}
+      <div class="flex flex-col gap-2 sm:flex-row">
+        <Button
+          variant="outline"
+          class="flex-1 font-mono text-xs"
+          disabled={backupBusy}
+          onclick={handleDownload}
+        >
+          <Download class="w-3.5 h-3.5 mr-2" />
+          Download my data
+        </Button>
+        <Button
+          variant="outline"
+          class="flex-1 font-mono text-xs"
+          disabled={backupBusy}
+          onclick={() => fileInput?.click()}
+        >
+          <Upload class="w-3.5 h-3.5 mr-2" />
+          Restore from file
+        </Button>
+      </div>
+    {/if}
+    <input
+      bind:this={fileInput}
+      type="file"
+      accept="application/json,.json"
+      class="hidden"
+      onchange={handleFilePicked}
+    />
   </div>
 
   <!-- Danger Zone -->

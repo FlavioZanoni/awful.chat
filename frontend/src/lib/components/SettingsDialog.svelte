@@ -14,15 +14,31 @@
   import { viewportHeight } from "$lib/actions/viewport-height";
   import { Button } from "$lib/components/ui/button";
   import { lock } from "$lib/identity/identity.svelte";
-  import { LogOut, User, Volume2, RefreshCw, ChartPie } from "@lucide/svelte";
+  import {
+    LogOut,
+    User,
+    Volume2,
+    RefreshCw,
+    ChartPie,
+    Info,
+    Heart,
+  } from "@lucide/svelte";
 
   import ProfileSettings from "./settings/ProfileSettings.svelte";
   import AudioSettings from "./settings/AudioSettings.svelte";
   import SessionSettings from "./settings/SessionSettings.svelte";
   import DataSettings from "./settings/DataSettings.svelte";
   import AvatarPickerDialog from "./AvatarPickerDialog.svelte";
+  import QuirksNotice from "./QuirksNotice.svelte";
+  import OssCredits from "./OssCredits.svelte";
 
-  type SettingsTab = "profile" | "audio" | "session" | "data";
+  type SettingsTab =
+    | "profile"
+    | "audio"
+    | "session"
+    | "data"
+    | "quirks"
+    | "oss";
 
   interface Props {
     open: boolean;
@@ -41,6 +57,8 @@
     { id: "audio" as SettingsTab, label: "Audio", icon: Volume2 },
     { id: "session" as SettingsTab, label: "Session/Sync", icon: RefreshCw },
     { id: "data" as SettingsTab, label: "Data", icon: ChartPie },
+    { id: "quirks" as SettingsTab, label: "Quirks", icon: Info },
+    { id: "oss" as SettingsTab, label: "OSS", icon: Heart },
   ]);
 
   $effect(() => {
@@ -83,6 +101,27 @@
   </div>
 {/snippet}
 
+{#snippet QuirksTab()}
+  <div class="flex flex-col gap-3">
+    <p class="text-xs font-mono text-muted-foreground leading-relaxed">
+      Awful.chat is peer to peer: no accounts on a server, no copy of your data
+      anywhere but your own devices. Here is what that changes compared to apps
+      like WhatsApp or Discord.
+    </p>
+    <QuirksNotice />
+  </div>
+{/snippet}
+
+{#snippet OssTab()}
+  <div class="flex flex-col gap-3">
+    <p class="text-xs font-mono text-muted-foreground leading-relaxed">
+      Awful.chat is built entirely on open source. These are the projects doing
+      the heavy lifting, and they deserve the credit.
+    </p>
+    <OssCredits />
+  </div>
+{/snippet}
+
 {#snippet DesktopSidebar()}
   <div class="flex flex-col h-full">
     <div class="flex-1">
@@ -91,7 +130,8 @@
     <div class="pt-2 border-t border-border mt-2">
       <Button
         variant="ghost"
-        class="w-full font-mono text-xs text-muted-foreground justify-start"
+        class="w-full font-mono text-xs text-muted-foreground justify-start
+          hover:bg-destructive/10! hover:text-destructive!"
         onclick={handleLockLogout}
       >
         <LogOut class="w-4 h-4 mr-2" />
@@ -119,6 +159,10 @@
         <SessionSettings {isMobile} {onClose} {onOpenSync} />
       {:else if activeTab === "data"}
         <DataSettings {activeTab} />
+      {:else if activeTab === "quirks"}
+        {@render QuirksTab()}
+      {:else if activeTab === "oss"}
+        {@render OssTab()}
       {/if}
     </div>
   </div>
@@ -147,6 +191,10 @@
             <SessionSettings {isMobile} {onClose} {onOpenSync} />
           {:else if activeTab === "data"}
             <DataSettings {activeTab} />
+          {:else if activeTab === "quirks"}
+            {@render QuirksTab()}
+          {:else if activeTab === "oss"}
+            {@render OssTab()}
           {/if}
         </div>
       </div>

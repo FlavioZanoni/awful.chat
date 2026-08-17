@@ -183,7 +183,7 @@
             onclick={handleCreate}
             class="bg-primary hover:bg-primary/90 text-primary-foreground font-mono cursor-pointer"
           >
-            <Plus class="size-4 mr-1" />
+            <Plus class="size-4" />
             Create Room
           </Button>
         </div>

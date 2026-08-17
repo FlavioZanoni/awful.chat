@@ -15,9 +15,18 @@
   import { profileStore, loadProfile, saveName } from "$lib/profile.svelte";
   import type { KeypairRecord } from "$lib/identity/identity";
   import { enroll } from "$lib/identity/identity.svelte";
-  import { ArrowLeft, Smartphone } from "@lucide/svelte";
+  import { ArrowLeft, Smartphone, Info } from "@lucide/svelte";
   import { saveRememberedPassword } from "$lib/identity/remembered-password";
   import DeviceSyncDialog from "$lib/components/DeviceSyncDialog.svelte";
+  import QuirksNotice from "$lib/components/QuirksNotice.svelte";
+  import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+  } from "$lib/components/ui/dialog";
 
   type Step =
     | "entry"
@@ -51,6 +60,36 @@
   let restorePasswordConfirm = $state("");
 
   let syncDialogOpen = $state(false);
+
+  // First-run "how this app behaves" notice. Shown before any credential step,
+  // once per browser; always reachable again from Settings > Quirks.
+  const QUIRKS_SEEN_KEY = "awful:quirks-seen:v1";
+  let quirksOpen = $state(false);
+  // Only a real open -> close counts as "seen". The dialog primitive can emit
+  // onOpenChange(false) while mounting, and persisting on that would silently
+  // burn the notice for someone who merely reloaded the page.
+  let quirksWasOpened = false;
+
+  function openQuirks(): void {
+    quirksWasOpened = true;
+    quirksOpen = true;
+  }
+
+  function markQuirksSeen(): void {
+    if (!quirksWasOpened) return;
+    try {
+      localStorage.setItem(QUIRKS_SEEN_KEY, "1");
+    } catch {}
+  }
+
+  $effect(() => {
+    if (step !== "entry") return;
+    let seen = false;
+    try {
+      seen = localStorage.getItem(QUIRKS_SEEN_KEY) === "1";
+    } catch {}
+    if (!seen) openQuirks();
+  });
 
   let createdPassword = $state(""); // hold password through steps for enrollment
   let biometricLoading = $state(false);
@@ -204,6 +243,14 @@
           <Smartphone class="w-4 h-4 mr-2" />
           Sync from another device
         </Button>
+        <button
+          type="button"
+          onclick={openQuirks}
+          class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground font-mono transition-colors"
+        >
+          <Info class="w-3.5 h-3.5" />
+          How this app works
+        </button>
       </CardFooter>
     </Card>
   {:else if step === "create-password"}
@@ -536,6 +583,45 @@
       </CardFooter>
     </Card>
   {/if}
+
+  <Dialog
+    bind:open={quirksOpen}
+    onOpenChange={(v: boolean) => {
+      if (!v) markQuirksSeen();
+    }}
+  >
+    <DialogContent
+      class="bg-card border-border text-card-foreground font-mono w-full sm:max-w-lg flex flex-col max-h-[85vh] p-0"
+    >
+      <DialogHeader class="px-5 pt-5 pb-3 border-b border-border shrink-0">
+        <DialogTitle class="font-mono text-base font-semibold">
+          Read this first
+        </DialogTitle>
+        <DialogDescription
+          class="text-muted-foreground text-xs font-mono leading-relaxed"
+        >
+          Awful.chat is peer to peer: there are no accounts on a server and no
+          copy of your data anywhere but your own devices. That buys you
+          privacy, and it makes a few things behave differently from apps like
+          WhatsApp or Discord.
+        </DialogDescription>
+      </DialogHeader>
+      <div class="overflow-y-auto px-5 py-4 min-h-0">
+        <QuirksNotice />
+      </div>
+      <DialogFooter class="px-5 pb-5 pt-3 border-t border-border shrink-0">
+        <Button
+          onclick={() => {
+            markQuirksSeen();
+            quirksOpen = false;
+          }}
+          class="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-mono"
+        >
+          Got it
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 
   <DeviceSyncDialog
     bind:open={syncDialogOpen}

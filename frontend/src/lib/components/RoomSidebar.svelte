@@ -167,9 +167,9 @@
       sm:static sm:translate-x-0 sm:z-auto sm:transition-none
       {isOpen ? 'translate-x-0' : '-translate-x-full'}"
 >
-  <!-- Header -->
+  <!-- Header - h-13 is shared with the chat header (ChatView) so they align. -->
   <div
-    class="flex items-center justify-between border-b border-sidebar-border px-3 py-3 shrink-0"
+    class="flex h-13 items-center justify-between border-b border-sidebar-border px-3 shrink-0"
   >
     <div class="flex items-center gap-2">
       <MessageSquare class="size-4 text-muted-foreground" />

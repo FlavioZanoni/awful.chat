@@ -802,8 +802,9 @@
     </div>
   {/if}
 
-  <header class="border-b border-border px-4 py-3 shrink-0">
-    <div class="flex items-center justify-between gap-2">
+  <!-- h-13 keeps this row exactly level with the sidebar header (RoomSidebar). -->
+  <header class="flex h-13 items-center border-b border-border px-4 shrink-0">
+    <div class="flex w-full items-center justify-between gap-2">
       <div class="flex items-center gap-2 min-w-0">
         {#if onOpenSidebar}
           <Button
@@ -896,7 +897,7 @@
           size="icon"
           onclick={onLeave}
           aria-label="Leave room"
-          class="text-red-400 hover:text-red-600"
+          class="text-red-400 hover:bg-destructive/10! hover:text-destructive!"
         >
           <LogOut class="size-4" />
         </Button>

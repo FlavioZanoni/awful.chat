@@ -29,6 +29,19 @@ import type {
   SavedGif,
   WatermarkRecord,
 } from "../storage";
+import {
+  BACKUP_FORMAT,
+  BACKUP_VERSION,
+  parseBackup,
+  pfpFromJson,
+  pfpToJson,
+  type AttachmentExport,
+  type BackupFile,
+  type DatabaseExport,
+} from "./backup";
+
+export { summarizeBackup } from "./backup";
+export type { BackupFile, BackupSummary } from "./backup";
 
 export interface SyncPayload {
   roomCode: string;
@@ -36,44 +49,6 @@ export interface SyncPayload {
   expires: number;
   mode?: "add" | "replace";
   password?: string;
-}
-
-interface DatabaseExport {
-  identity?: {
-    mnemonic: {
-      salt: number[];
-      iv: number[];
-      encrypted: number[];
-    };
-    keypair: {
-      did: string;
-      publicKey: number[];
-    };
-    // webauthn is intentionally NOT synced: the credential is bound to the
-    // source device's authenticator and would only present a broken
-    // biometric-unlock option on the target.
-  };
-  messages: Message[];
-  attachments: AttachmentExport[];
-  pending: PendingMessage[];
-  watermarks: WatermarkRecord[];
-  yjsDocs: { id: string; update: number[] }[];
-  rooms: (Room | DMRoom)[];
-  profiles: (PeerProfile | OwnProfile)[];
-  savedGifs: SavedGif[];
-}
-
-interface AttachmentExport {
-  id: string;
-  roomCode: string;
-  messageId: string;
-  filename: string;
-  mimeType: string;
-  size: number;
-  infoHash: string;
-  data?: number[]; // ArrayBuffer converted to number[] for JSON serialization
-  status: "seeding" | "pending" | "downloading" | "complete" | "failed";
-  createdAt: number;
 }
 
 enum SyncMessageType {
@@ -755,8 +730,8 @@ async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
       id: doc.id,
       update: Array.from(doc.update),
     })),
-    rooms,
-    profiles,
+    rooms: (rooms as (Room | DMRoom)[]).map(pfpToJson),
+    profiles: (profiles as (PeerProfile | OwnProfile)[]).map(pfpToJson),
     savedGifs,
   };
 
@@ -815,8 +790,9 @@ async function importDatabase(
         data: a.data ? new Uint8Array(a.data).buffer : undefined,
       } as Attachment)
     ),
-    ...data.rooms.map((r) => putRoom(r)),
-    ...data.profiles.map((p) => {
+    ...data.rooms.map((r) => putRoom(pfpFromJson(r))),
+    ...data.profiles.map((raw) => {
+      const p = pfpFromJson(raw);
       if (p.isMe) {
         return putOwnProfile(p as OwnProfile);
       } else {
@@ -846,6 +822,63 @@ async function importDatabase(
       })();
     }),
   ]);
+}
+
+// ── File backup (QR-less alternative to device sync) ─────────────────────────
+
+/**
+ * Build a full backup and hand it to the browser as a download.
+ * Includes the identity record, which is the AES-GCM encrypted mnemonic - the
+ * file is only as safe as the password that encrypts it, so the UI warns.
+ */
+export async function downloadBackup(): Promise<void> {
+  const data = await exportDatabase(false);
+  const backup: BackupFile = {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    exportedAt: Date.now(),
+    ...data,
+  };
+  const blob = new Blob([JSON.stringify(backup)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `awful-backup-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke on the next tick so the download has taken the URL.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
+ * Parse and validate a backup file chosen by the user.
+ * @throws if the file is not a backup this build understands.
+ */
+export async function readBackupFile(file: File): Promise<BackupFile> {
+  return parseBackup(await file.text());
+}
+
+/**
+ * Apply a parsed backup.
+ * "add" merges into the current identity; "replace" wipes local data first and
+ * adopts the identity stored in the file (you then unlock with the password
+ * that was in use when the backup was taken).
+ */
+export async function applyBackup(
+  data: BackupFile,
+  mode: "add" | "replace"
+): Promise<void> {
+  if (mode === "replace" && !data.identity) {
+    throw new Error("This backup has no identity, so it cannot replace yours");
+  }
+  await importDatabase(
+    mode === "add" ? { ...data, identity: undefined } : data,
+    mode
+  );
 }
 
 /**

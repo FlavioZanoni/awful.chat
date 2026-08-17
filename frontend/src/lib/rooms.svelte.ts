@@ -9,6 +9,17 @@ import {
   type PhonebookEntry,
   type Room,
 } from "./storage";
+import { identityStore } from "./identity/identity.svelte";
+
+/**
+ * Your own messages must never count as unread - they arrive back through
+ * sync (another device, or a peer replaying history) with a lamport above your
+ * last-seen mark and would otherwise light up a badge for something you wrote.
+ * The DM counters already do this; rooms need the same.
+ */
+function selfSenderId(): string | undefined {
+  return identityStore.did ?? undefined;
+}
 
 interface RoomsStore {
   rooms: Room[];
@@ -50,7 +61,11 @@ export async function refreshDmRooms(): Promise<void> {
 export async function refreshUnreadCount(roomCode: string): Promise<void> {
   const room = roomsStore.rooms.find((r) => r.roomCode === roomCode);
   if (!room) return;
-  const count = await getUnreadCount(roomCode, room.lastSeenLamport);
+  const count = await getUnreadCount(
+    roomCode,
+    room.lastSeenLamport,
+    selfSenderId()
+  );
   const next = new Map(roomsStore.unreadCounts);
   next.set(roomCode, count);
   roomsStore.unreadCounts = next;
@@ -59,7 +74,11 @@ export async function refreshUnreadCount(roomCode: string): Promise<void> {
 async function _refreshAllUnread(): Promise<void> {
   const entries = await Promise.all(
     roomsStore.rooms.map(async (r) => {
-      const count = await getUnreadCount(r.roomCode, r.lastSeenLamport);
+      const count = await getUnreadCount(
+        r.roomCode,
+        r.lastSeenLamport,
+        selfSenderId()
+      );
       return [r.roomCode, count] as [string, number];
     })
   );
