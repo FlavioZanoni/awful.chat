@@ -2,6 +2,17 @@
   import { onDestroy } from "svelte";
   import { Tip } from "$lib/components/ui/tooltip";
   import { RELAY_TIP } from "$lib/copy";
+  import { openDmConversation } from "$lib/transport/dm.svelte";
+  import {
+    getVoicePeerVolume,
+    setVoicePeerVolume,
+  } from "$lib/transport/voice.svelte";
+  import {
+    UNITY_STOP,
+    formatGain,
+    gainToSlider,
+    sliderToGain,
+  } from "$lib/audio/volume-curve";
   import {
     transportState,
     selfId,
@@ -40,7 +51,7 @@
     VolumeX,
     Workflow,
   } from "@lucide/svelte";
-  import { MonitorIcon } from "@lucide/svelte";
+  import { MessageSquare, MonitorIcon } from "@lucide/svelte";
   import { profileStore, loadProfile } from "$lib/profile.svelte";
   import { cn } from "$lib/utils";
   import { Slider } from "./ui/slider";
@@ -94,6 +105,49 @@
   function getPeerAvatar(peerId: string): string | null {
     const did = peerIdToDid(peerId);
     return peerAvatars.get(did) ?? peerAvatars.get(peerId) ?? null;
+  }
+
+  // ── Per-peer volume menu ──────────────────────────────────────────────────
+
+  let peerMenu = $state<{
+    peerId: string;
+    label: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  let peerVolumeSlider = $state(UNITY_STOP);
+
+  const peerVolumePercent = $derived(formatGain(sliderToGain(peerVolumeSlider)));
+
+  function openPeerMenu(e: MouseEvent, tile: TileData): void {
+    if (tile.isLocal || !tile.peerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    peerVolumeSlider = gainToSlider(getVoicePeerVolume(tile.peerId));
+    const width = 224;
+    const height = 132;
+    const pad = 8;
+    peerMenu = {
+      peerId: tile.peerId,
+      label: tile.label,
+      x: Math.max(pad, Math.min(e.clientX, window.innerWidth - width - pad)),
+      y: Math.max(pad, Math.min(e.clientY, window.innerHeight - height - pad)),
+    };
+  }
+
+  function closePeerMenu(): void {
+    peerMenu = null;
+  }
+
+  function onPeerVolume(value: number): void {
+    peerVolumeSlider = value;
+    if (peerMenu) setVoicePeerVolume(peerMenu.peerId, sliderToGain(value));
+  }
+
+  async function dmFromPeerMenu(): Promise<void> {
+    const peerId = peerMenu?.peerId;
+    closePeerMenu();
+    if (peerId) await openDmConversation(peerId);
   }
 
   let speakingPeers = $state(new Set<string>());
@@ -588,6 +642,7 @@
   {@const isPendingTx = tile.kind === "transmission" && tile.isPending}
   <button
     type="button"
+    oncontextmenu={(e) => openPeerMenu(e, tile)}
     class="group relative flex items-center justify-center overflow-hidden rounded-lg bg-muted/30 cursor-pointer transition-shadow duration-200
       {isFocused ? 'w-full h-full' : ''}
       {compact ? 'aspect-video' : ''}
@@ -1106,5 +1161,63 @@
         <Maximize class="size-4" />
       {/if}
     </button>
+  </div>
+{/if}
+
+<svelte:window
+  onclick={closePeerMenu}
+  onkeydown={(e) => {
+    if (e.key === "Escape") closePeerMenu();
+  }}
+/>
+
+{#if peerMenu}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div
+    role="menu"
+    tabindex="-1"
+    class="fixed z-50 w-56 rounded-md border border-border bg-popover py-1 shadow-xl font-mono"
+    style="top: {peerMenu.y}px; left: {peerMenu.x}px"
+    onkeydown={() => {}}
+    onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
+  >
+    <p class="truncate px-3 pb-1 pt-0.5 text-xs text-muted-foreground">
+      {peerMenu.label}
+    </p>
+
+    <button
+      type="button"
+      class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
+      onclick={dmFromPeerMenu}
+    >
+      <MessageSquare class="size-4" />
+      Message
+    </button>
+
+    <div class="mt-1 border-t border-border px-3 pb-2 pt-2">
+      <div class="flex items-center justify-between pb-1.5">
+        <span class="text-xs text-muted-foreground">Volume</span>
+        <span
+          class="text-xs tabular-nums {peerVolumeSlider <= 0
+            ? 'text-destructive'
+            : 'text-primary'}">{peerVolumePercent}</span
+        >
+      </div>
+      <input
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={peerVolumeSlider}
+        aria-label={`Volume for ${peerMenu.label}`}
+        oninput={(e) => onPeerVolume(Number(e.currentTarget.value))}
+        class="h-1 w-full cursor-pointer appearance-none rounded-full accent-primary"
+        style={`background: linear-gradient(to right, var(--primary) ${peerVolumeSlider}%, var(--muted) ${peerVolumeSlider}%)`}
+      />
+      <p class="pt-1 text-[10px] text-muted-foreground">
+        Only changes what you hear
+      </p>
+    </div>
   </div>
 {/if}

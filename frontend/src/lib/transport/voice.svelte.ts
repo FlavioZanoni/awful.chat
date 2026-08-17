@@ -133,6 +133,15 @@ export function getVoiceOutputVolume(): number {
   return getVoice().getOutputVolume();
 }
 
+/** Per-peer listening volume. Local to this device and this call. */
+export function setVoicePeerVolume(peerId: string, volume: number): void {
+  getVoice().setPeerVolume(peerId, volume);
+}
+
+export function getVoicePeerVolume(peerId: string): number {
+  return getVoice().getPeerVolume(peerId);
+}
+
 export function setVoiceDtlnNoiseGate(threshold: number): void {
   saveAudioPrefs({ noiseGate: threshold });
   getDtln().setNoiseGate(threshold);

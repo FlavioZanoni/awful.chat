@@ -7,6 +7,8 @@ import type { DtlnProcessor } from "$lib/audio/dtln-processor";
 import { getIceServers } from "../ice-server-list";
 
 const VOICE_PROTO = "/voice/1.0.0";
+/** Same ceiling as the output slider in audio settings. */
+export const MAX_PEER_VOLUME = 2.5;
 const MAX_FRAME_BYTES = 256 * 1024; // 256 KB max frame size; signaling payloads are tiny
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
@@ -58,6 +60,12 @@ export class LibP2PVoice implements VoiceTransport {
   private muted = false;
 
   private remotePeers = new Map<string, RemotePeer>();
+  /**
+   * Per-peer listening volume, multiplied with the master output volume.
+   * Kept outside RemotePeer so the setting survives that peer dropping and
+   * rejoining during the same call.
+   */
+  private peerVolumes = new Map<string, number>();
   private active = new Set<string>();
   private signalQueues = new Map<string, VoiceSignal[]>();
   private handlers = new Map<keyof VoiceEvents, Set<Function>>();
@@ -267,16 +275,27 @@ export class LibP2PVoice implements VoiceTransport {
   }
 
   setOutputVolume(volume: number): void {
-    const clamped = Math.max(0, Math.min(2, volume));
-    this.currentOutputVolume = clamped;
-    for (const remote of this.remotePeers.values()) {
-      if (remote.gainNode) {
-        remote.gainNode.gain.linearRampToValueAtTime(
-          clamped,
-          this.audioCtx!.currentTime + 0.05
-        );
-      }
-    }
+    this.currentOutputVolume = Math.max(0, Math.min(2, volume));
+    for (const peerId of this.remotePeers.keys()) this.applyPeerGain(peerId);
+  }
+
+  /** How loud one peer is for us alone; 1 is unchanged, 0 is muted. */
+  setPeerVolume(peerId: string, volume: number): void {
+    this.peerVolumes.set(peerId, Math.max(0, Math.min(MAX_PEER_VOLUME, volume)));
+    this.applyPeerGain(peerId);
+  }
+
+  getPeerVolume(peerId: string): number {
+    return this.peerVolumes.get(peerId) ?? 1;
+  }
+
+  private applyPeerGain(peerId: string): void {
+    const remote = this.remotePeers.get(peerId);
+    if (!remote?.gainNode || !this.audioCtx) return;
+    remote.gainNode.gain.linearRampToValueAtTime(
+      this.currentOutputVolume * this.getPeerVolume(peerId),
+      this.audioCtx.currentTime + 0.05
+    );
   }
 
   getOutputVolume(): number {
@@ -643,7 +662,7 @@ export class LibP2PVoice implements VoiceTransport {
 
     const sourceNode = this.audioCtx.createMediaStreamSource(stream);
     const gainNode = this.audioCtx.createGain();
-    gainNode.gain.value = this.currentOutputVolume;
+    gainNode.gain.value = this.currentOutputVolume * this.getPeerVolume(peerId);
 
     sourceNode.connect(gainNode);
     gainNode.connect(this.audioCtx.destination);
