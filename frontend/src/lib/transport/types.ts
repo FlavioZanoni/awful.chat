@@ -72,8 +72,8 @@ export interface VoiceEvents {
 }
 
 /**
- * P2P audio — piggybacks on SimplePeer connections.
- * No SFU — fully private.
+ * P2P audio - piggybacks on SimplePeer connections.
+ * No SFU - fully private.
  * Implemented by SimplePeerVoice.
  */
 export interface VoiceTransport {
@@ -81,7 +81,7 @@ export interface VoiceTransport {
   join(roomCode: string): Promise<void>;
   leave(): void;
 
-  // mute — disables track, connection stays warm
+  // mute - disables track, connection stays warm
   mute(): void;
   unmute(): void;
   isMuted(): boolean;
@@ -91,16 +91,16 @@ export interface VoiceTransport {
   getInputDevices(): Promise<MediaDeviceInfo[]>;
   getActiveInputDevice(): string | null;
 
-  // input gain — 0.0 to 2.0, 1.0 = unity, >1.0 = boost
+  // input gain - 0.0 to 2.0, 1.0 = unity, >1.0 = boost
   setInputGain(gain: number): void;
   getInputGain(): number;
 
-  // output device — routes remote audio to specific speaker
+  // output device - routes remote audio to specific speaker
   setOutputDevice(deviceId: string): Promise<void>;
   getOutputDevices(): Promise<MediaDeviceInfo[]>;
   getActiveOutputDevice(): string | null;
 
-  // output volume — 0.0 to 2.0, 1.0 = unity, >1.0 = boost via Web Audio
+  // output volume - 0.0 to 2.0, 1.0 = unity, >1.0 = boost via Web Audio
   setOutputVolume(volume: number): void;
   getOutputVolume(): number;
 
@@ -137,7 +137,7 @@ export interface VideoEvents {
 }
 
 /**
- * SFU video — routes video through mediasoup server.
+ * SFU video - routes video through mediasoup server.
  * Connects directly to the SFU via its own WebSocket (VITE_SFU_URL).
  * Implemented by MediasoupVideo.
  *

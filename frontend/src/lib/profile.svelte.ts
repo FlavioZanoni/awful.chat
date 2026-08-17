@@ -43,11 +43,11 @@ export async function loadProfile(): Promise<void> {
   }
 }
 
-async function ensureProfile(): Promise<void> {
+async function ensureProfile(did?: string): Promise<void> {
   const existing = await getOwnProfile();
   if (!existing) {
     await putOwnProfile({
-      did: identityStore.did ?? "",
+      did: did ?? identityStore.did ?? "",
       isMe: true,
       nickname: profileStore.nickname || "Anonymous",
       updatedAt: Date.now(),
@@ -62,9 +62,13 @@ export async function saveAvatar(url: string | undefined): Promise<void> {
   broadcastProfile();
 }
 
-export async function saveName(name: string): Promise<void> {
+/**
+ * @param did - pass explicitly during signup: the profile row is keyed by did,
+ * and identityStore.did is not populated until the session is finalised.
+ */
+export async function saveName(name: string, did?: string): Promise<void> {
   profileStore.nickname = name;
-  await ensureProfile();
+  await ensureProfile(did);
   await updateOwnProfile({ nickname: name });
   broadcastProfile();
 }

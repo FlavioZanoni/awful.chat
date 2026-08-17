@@ -1,25 +1,25 @@
 import type { FileSignalEnvelope } from "$lib/transport/types";
 
 export enum MessageType {
-  // chat — persisted to IDB, sent over wire
+  // chat - persisted to IDB, sent over wire
   Text = "text",
   Reply = "reply",
   Reaction = "reaction",
   File = "file",
-  // presence — wire only, never persisted
+  // presence - wire only, never persisted
   Profile = "profile",
   CallPresence = "call_presence",
   CallState = "call_state",
   RoomName = "room_name",
-  // room users — wire only, never persisted
+  // room users - wire only, never persisted
   JoinRoom = "join_room",
   LeaveRoom = "leave_room",
   RoomUsersSync = "room_users_sync",
-  // sync — wire only, never persisted
+  // sync - wire only, never persisted
   SyncDigest = "sync_digest",
   SyncBatch = "sync_batch",
   SyncComplete = "sync_complete",
-  // DM delivery/read receipts do NOT use MessageType — they are tagged
+  // DM delivery/read receipts do NOT use MessageType - they are tagged
   // binary envelopes over the direct stream (see dm-codec.ts)
 }
 
@@ -170,7 +170,7 @@ export interface WireRoomUsersSync {
 
 export interface WireSyncDigest {
   type: MessageType.SyncDigest;
-  roomCode: string; // the room this digest is for — receiver must have joined it
+  roomCode: string; // the room this digest is for - receiver must have joined it
   watermarks: Record<string, number>; // senderId → maxLamport
 }
 
@@ -257,7 +257,7 @@ export function messageToWire(msg: Message): WireChatMessage {
   };
 }
 
-/** Type guard — is this a chat message that should be persisted? */
+/** Type guard - is this a chat message that should be persisted? */
 export function isChatMessage(msg: AnyWireMessage): msg is WireChatMessage {
   return (
     msg.type === MessageType.Text ||

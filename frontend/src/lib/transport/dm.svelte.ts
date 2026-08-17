@@ -140,7 +140,7 @@ export async function openDmConversation(peerIdOrDid: string): Promise<void> {
   transportState.roomName = resolveDmDisplayName(resolvedPeerId);
   transportState.connected = true;
 
-  // Everything now on screen counts as read — tell the sender.
+  // Everything now on screen counts as read - tell the sender.
   const selfDid = identityStore.did ?? _transport.selfId();
   const theirMessageIds = transportState.messages
     .filter((m) => m.roomCode === roomCode && m.senderId !== selfDid)
@@ -162,7 +162,7 @@ export async function sendDirectMessage(text: string): Promise<void> {
   const envelope = encodeDmChatEnvelope({ id, text: body, ts });
 
   // Key the offline queue by the STABLE DID so a queued message still matches
-  // once the peer connects — even if we didn't know the DID at queue time.
+  // once the peer connects - even if we didn't know the DID at queue time.
   const peerDid = resolveToDid(peerId, _peerIdToDid);
 
   // Resolve to an actual peer ID (not a DID) before checking online status.
@@ -220,7 +220,7 @@ export async function sendDirectMessage(text: string): Promise<void> {
 
 /**
  * Send read acks to a peer for messages we just displayed.
- * Fire-and-forget: if the peer is offline the acks are simply dropped —
+ * Fire-and-forget: if the peer is offline the acks are simply dropped -
  * they'll be re-sent the next time the conversation is opened while
  * both peers are online (idempotent on the receiving side).
  */
@@ -255,7 +255,7 @@ async function _flushQueuedDmForPeer(peerId: string): Promise<void> {
 
   const sent = new Set<string>();
   for (const entry of loadQueuedDmMessages()) {
-    // Match entries keyed by the DID *or* by the raw peerId — older entries
+    // Match entries keyed by the DID *or* by the raw peerId - older entries
     // queued before the DID was known were stored under the peerId.
     if (entry.to !== peerDid && entry.to !== peerId) continue;
     const ok = await _transport.send(peerId, new Uint8Array(entry.data));

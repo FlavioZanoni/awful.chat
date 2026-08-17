@@ -61,11 +61,18 @@
 
   let persistBusy = $state(false);
 
+  let persistDenied = $state(false);
+
   async function handleRequestPersist() {
     persistBusy = true;
+    persistDenied = false;
     try {
       const granted = await requestPersistentStorage();
       if (metrics) metrics = { ...metrics, persisted: granted };
+      // Browsers decide this themselves: Chrome grants it once the app is
+      // installed or used enough, Firefox asks. Saying nothing made the button
+      // look broken, so be explicit when the answer is no.
+      persistDenied = !granted;
     } finally {
       persistBusy = false;
     }
@@ -221,8 +228,21 @@
               disabled={persistBusy}
               onclick={handleRequestPersist}
             >
-              Ask the browser to keep it
+              {persistBusy ? "Asking…" : "Ask the browser to keep it"}
             </Button>
+            {#if persistDenied}
+              <p
+                class="text-xs font-mono text-muted-foreground leading-relaxed"
+              >
+                The browser said no. This is its call, not the app's: Chrome
+                and Android grant it once the app is installed to your home
+                screen or you have used it a few times, Firefox asks for
+                permission, and Safari never grants it. Installing the app is
+                the most reliable way to get it. Your data is still here either
+                way, it just is not protected from automatic cleanup, so keep a
+                backup from below.
+              </p>
+            {/if}
           {/if}
         </div>
 

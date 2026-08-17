@@ -4,7 +4,7 @@ RUN npm install -g pnpm@10
 WORKDIR /app
 
 FROM base AS deps
-# pnpm-workspace.yaml carries the build-script approvals — without it pnpm
+# pnpm-workspace.yaml carries the build-script approvals - without it pnpm
 # refuses to run postinstall scripts and the install fails
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile

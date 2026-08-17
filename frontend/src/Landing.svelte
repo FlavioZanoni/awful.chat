@@ -138,7 +138,7 @@
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet"
   />
-  <!-- landing page only — the app itself stays analytics-free -->
+  <!-- landing page only - the app itself stays analytics-free -->
   <script
     defer
     src="https://analytics.frav.in/script.js"
@@ -166,7 +166,7 @@
   <!-- Hero -->
   <section id="hero" class="hero-section">
     <div class="container">
-      <div class="section-num">01 — INTRODUCTION</div>
+      <div class="section-num">01 - INTRODUCTION</div>
       <h1 class="display-huge glitch">
         <span class="text-accent glow-text">Privacy</span><br />
         is
@@ -245,7 +245,7 @@
   <section id="features" class="section-center">
     <div class="grid-2col container">
       <div>
-        <div class="section-num">02 — IDENTITY</div>
+        <div class="section-num">02 - IDENTITY</div>
         <h2 class="display-large">
           12 words.<br />
           <span class="text-accent">That's you.</span>
@@ -303,7 +303,7 @@
   <!-- Architecture Section -->
   <section class="section-center elevated">
     <div class="container">
-      <div class="section-num">03 — ARCHITECTURE</div>
+      <div class="section-num">03 - ARCHITECTURE</div>
       <div class="grid-2col">
         <div>
           <h2 class="display-large">
@@ -379,7 +379,7 @@
   <!-- Stack Section -->
   <section id="stack" class="section-padded">
     <div class="container">
-      <div class="section-num">04 — STACK</div>
+      <div class="section-num">04 - STACK</div>
       <h2 class="display-large section-title">
         Built for the<br /><span class="text-accent">privacy concerned.</span>
       </h2>
@@ -403,7 +403,7 @@
   <!-- Self-host Section -->
   <section id="deploy" class="section-center">
     <div class="container">
-      <div class="section-num">05 — DEPLOY</div>
+      <div class="section-num">05 - DEPLOY</div>
       <div class="grid-2col">
         <div>
           <h2 class="display-large">
@@ -504,7 +504,7 @@
 </div>
 
 <style>
-  /* CSS variables scoped to the root wrapper — no :root or :global needed */
+  /* CSS variables scoped to the root wrapper - no :root or :global needed */
   .app {
     --bg: #09090b;
     --bg-elevated: #121212;
@@ -587,7 +587,7 @@
     animation: glitch 0.5s ease infinite;
   }
 
-  /* Scanlines — fixed overlays scoped via the wrapper */
+  /* Scanlines - fixed overlays scoped via the wrapper */
   .scanlines::before {
     content: "";
     position: fixed;

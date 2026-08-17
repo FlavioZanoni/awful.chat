@@ -22,6 +22,7 @@
   } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
+  import { Tip } from "$lib/components/ui/tooltip";
   import { Separator } from "$lib/components/ui/separator";
   import VoiceVideoCallView from "./VoiceVideoCallView.svelte";
   import MsgRender from "./MsgRender.svelte";
@@ -832,7 +833,10 @@
       </div>
       <div class="flex items-center gap-2 shrink-0">
         {#if !isDmChat}
+          <Tip text={copied ? "Copied" : "Copy room code"}>
+            {#snippet children(props)}
           <button
+            {...props}
             type="button"
             onclick={copyCode}
             aria-label="Copy room code"
@@ -845,40 +849,56 @@
               <Copy class="size-3 mb-0.5" />
             {/if}
           </button>
+            {/snippet}
+          </Tip>
         {/if}
         {#if !inCall}
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={joinCall}
-            aria-label="Join call"
-            class="text-muted-foreground hover:text-foreground cursor-pointer"
-          >
-            <Phone class="size-4" />
-          </Button>
+          <Tip text="Join call">
+            {#snippet children(props)}
+              <Button
+                {...props}
+                variant="ghost"
+                size="icon"
+                onclick={joinCall}
+                aria-label="Join call"
+                class="text-muted-foreground hover:text-foreground cursor-pointer"
+              >
+                <Phone class="size-4" />
+              </Button>
+            {/snippet}
+          </Tip>
         {/if}
         {#if !isDmChat}
-          <Button
-            variant="ghost"
-            size="icon"
-            onclick={() => (showUserList = !showUserList)}
-            aria-label="Toggle user list"
-            class="flex text-muted-foreground hover:text-foreground cursor-pointer {showUserList
-              ? 'text-primary'
-              : ''}"
-          >
-            <Users class="size-4" />
-          </Button>
+          <Tip text={showUserList ? "Hide members" : "Show members"}>
+            {#snippet children(props)}
+              <Button
+                {...props}
+                variant="ghost"
+                size="icon"
+                onclick={() => (showUserList = !showUserList)}
+                aria-label="Toggle user list"
+                class="flex text-muted-foreground hover:text-foreground cursor-pointer {showUserList
+                  ? 'text-primary'
+                  : ''}"
+              >
+                <Users class="size-4" />
+              </Button>
+            {/snippet}
+          </Tip>
         {/if}
         {#if isDmChat}
+          <Tip
+            text={dmPeerInPhonebook
+              ? "Remove from phonebook"
+              : "Add to phonebook"}
+          >
+            {#snippet children(props)}
           <Button
+            {...props}
             variant="ghost"
             size="icon"
             onclick={toggleActiveDmPhonebook}
             aria-label={dmPeerInPhonebook
-              ? "Remove from phonebook"
-              : "Add to phonebook"}
-            title={dmPeerInPhonebook
               ? "Remove from phonebook"
               : "Add to phonebook"}
             class={dmPeerInPhonebook
@@ -891,16 +911,23 @@
               <UserPlus class="size-4" />
             {/if}
           </Button>
+            {/snippet}
+          </Tip>
         {/if}
-        <Button
-          variant="ghost"
-          size="icon"
-          onclick={onLeave}
-          aria-label="Leave room"
-          class="text-red-400 hover:bg-destructive/10! hover:text-destructive!"
-        >
-          <LogOut class="size-4" />
-        </Button>
+        <Tip text="Leave room">
+          {#snippet children(props)}
+            <Button
+              {...props}
+              variant="ghost"
+              size="icon"
+              onclick={onLeave}
+              aria-label="Leave room"
+              class="text-red-400 hover:bg-destructive/10! hover:text-destructive!"
+            >
+              <LogOut class="size-4" />
+            </Button>
+          {/snippet}
+        </Tip>
       </div>
     </div>
   </header>
@@ -1294,26 +1321,36 @@
         <div
           class="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1"
         >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onclick={() => fileInputEl?.click()}
-            aria-label="Attach files"
-            class="size-8 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
-          >
-            <Paperclip class="size-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onclick={() => (gifPickerOpen = true)}
-            aria-label="Send a GIF"
-            class="size-8 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
-          >
-            <ImagePlay class="size-4" />
-          </Button>
+          <Tip text="Attach files">
+            {#snippet children(props)}
+              <Button
+                {...props}
+                type="button"
+                variant="ghost"
+                size="icon"
+                onclick={() => fileInputEl?.click()}
+                aria-label="Attach files"
+                class="size-8 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
+              >
+                <Paperclip class="size-4" />
+              </Button>
+            {/snippet}
+          </Tip>
+          <Tip text="Send a GIF">
+            {#snippet children(props)}
+              <Button
+                {...props}
+                type="button"
+                variant="ghost"
+                size="icon"
+                onclick={() => (gifPickerOpen = true)}
+                aria-label="Send a GIF"
+                class="size-8 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
+              >
+                <ImagePlay class="size-4" />
+              </Button>
+            {/snippet}
+          </Tip>
         </div>
       </div>
       <Button

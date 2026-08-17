@@ -21,7 +21,7 @@ interface Props {
   isMobile?: boolean;
   onClose?: () => void;
   // Opening the sync dialog is delegated UP to a component that outlives the
-  // settings dialog — otherwise closing settings (on mobile) unmounts the sync
+  // settings dialog - otherwise closing settings (on mobile) unmounts the sync
   // dialog the same instant it opens.
   onOpenSync?: (mode: "generate-qr" | "scan-qr") => void;
 }

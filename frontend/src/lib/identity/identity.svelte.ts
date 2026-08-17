@@ -9,7 +9,7 @@
  *
  *   import { identityStore } from "$lib/identity.svelte";
  *
- *   // Reactive — re-renders when the session locks/unlocks
+ *   // Reactive - re-renders when the session locks/unlocks
  *   {#if identityStore.isUnlocked}
  *     <p>Signed in as {identityStore.did}</p>
  *   {/if}
@@ -88,7 +88,7 @@ function setLocked(): void {
 /**
  * Load the persisted keypair record from IndexedDB (public data only).
  * Call this once on app startup to know whether an identity exists.
- * Does not unlock the session — use unlock() for that.
+ * Does not unlock the session - use unlock() for that.
  */
 export async function init(): Promise<void> {
   identityStore.loading = true;
@@ -121,7 +121,7 @@ export function startAutoLogin(promise: Promise<void>): void {
  * Generate a new identity and immediately unlock the session.
  * Updates the store reactively on success.
  *
- * @returns The plaintext mnemonic — show it to the user once for backup.
+ * @returns The plaintext mnemonic - show it to the user once for backup.
  * @throws Re-throws any underlying error after setting store.error.
  */
 export async function create(password: string): Promise<string> {

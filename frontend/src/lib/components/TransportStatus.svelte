@@ -36,11 +36,11 @@
 
   let statusItems = $state<StatusItem[]>([]);
   let itemId = 0;
-  // Single source of truth — transport.svelte.ts keeps this in sync with
+  // Single source of truth - transport.svelte.ts keeps this in sync with
   // relay status events, so the indicator can't drift from reality.
   const relayConnected = $derived(transportState.relayConnected);
   // Don't show "Relay disconnected" before any connection was attempted
-  // (e.g. on the identity setup screens) — only after a relay event fired.
+  // (e.g. on the identity setup screens) - only after a relay event fired.
   let sawRelayEvent = $state(false);
   let peerCount = $state(0);
   let isMobile = $state(false);

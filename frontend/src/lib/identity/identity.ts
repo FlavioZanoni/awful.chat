@@ -1,5 +1,5 @@
 /**
- * identity.ts — DID identity, keypair derivation, and session lifecycle
+ * identity.ts - DID identity, keypair derivation, and session lifecycle
  *
  * Responsible for:
  *   - BIP39 mnemonic generation and validation
@@ -48,11 +48,11 @@ export interface MnemonicRecord {
 
 export interface KeypairRecord {
   id: "keypair";
-  /** did:key identifier — permanent, deterministic public identity. */
+  /** did:key identifier - permanent, deterministic public identity. */
   did: string;
   /** Cached ed25519 public key bytes (32 bytes). */
   publicKey: Uint8Array<ArrayBuffer>;
-  // privateKey is intentionally NOT stored — derived at unlock, held in memory only.
+  // privateKey is intentionally NOT stored - derived at unlock, held in memory only.
 }
 
 /** In-memory session. Private key exists only while unlocked. */
@@ -90,7 +90,7 @@ let session: UnlockedSession | null = null;
 
 /**
  * Return the active session or throw if the identity is locked.
- * Used internally by messaging.ts — do not call from UI code.
+ * Used internally by messaging.ts - do not call from UI code.
  */
 export function requireSession(): UnlockedSession {
   if (!session) {
@@ -129,7 +129,7 @@ export function deriveKeypairFromMnemonic(mnemonic: string): {
   const seed = bip39.mnemonicToSeedSync(mnemonic);
   const privateKey = seed.slice(0, 32) as Uint8Array<ArrayBuffer>;
   const publicKey = ed25519.getPublicKey(privateKey) as Uint8Array<ArrayBuffer>;
-  // slice() copied the scalar — wipe the seed so the only remaining copy
+  // slice() copied the scalar - wipe the seed so the only remaining copy
   // is the session privateKey (zeroed later by lockIdentity)
   seed.fill(0);
   return { privateKey, publicKey };
@@ -171,7 +171,7 @@ export function didToPublicKey(did: string): Uint8Array<ArrayBuffer> {
  * The session is unlocked immediately after creation.
  *
  * @returns The KeypairRecord and the plaintext mnemonic.
- *          Show the mnemonic to the user exactly once for backup —
+ *          Show the mnemonic to the user exactly once for backup -
  *          it is never retrievable again without the password.
  */
 export async function createIdentity(
@@ -249,7 +249,7 @@ export async function restoreIdentity(
   // The restored identity is encrypted under the NEW password. Any WebAuthn
   // enrollment or remembered-password record was bound to the OLD password (and
   // possibly a different identity), so it would silently fail or unlock the
-  // wrong account — drop both. The user can re-enroll after restoring.
+  // wrong account - drop both. The user can re-enroll after restoring.
   await deleteWebAuthnRecord().catch(() => {});
   await clearRememberedPassword().catch(() => {});
 
@@ -259,7 +259,7 @@ export async function restoreIdentity(
 
 /**
  * Read the public keypair record from IndexedDB.
- * Does not require an unlocked session — public data only.
+ * Does not require an unlocked session - public data only.
  *
  * @returns The KeypairRecord, or null if no identity has been created yet.
  */
@@ -453,7 +453,7 @@ export async function unlockWithWebAuthn(): Promise<void> {
       record.encrypted
     );
   } catch {
-    throw new Error("WebAuthn decryption failed — wrong authenticator?");
+    throw new Error("WebAuthn decryption failed - wrong authenticator?");
   }
 
   const password = new TextDecoder().decode(decrypted);

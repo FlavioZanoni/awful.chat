@@ -112,7 +112,7 @@ interface Consumer {
 /**
  * Mediasoup SFU video implementation.
  * Handles camera and screen share via server-side fan-out.
- * Audio is NOT handled here — stays p2p via SimplePeerVoice.
+ * Audio is NOT handled here - stays p2p via SimplePeerVoice.
  *
  * Signaling flows over a dedicated WebSocket connection to the SFU server.
  * The SFU URL is resolved from VITE_SFU_URL env var, defaulting to /sfu on
@@ -140,7 +140,7 @@ export class MediasoupVideo implements VideoTransport {
   // ms:new-producer messages that arrived before recvTransport was ready
   private queuedProducers: MSNewProducer[] = [];
 
-  // SFU WebSocket — opened on join(), closed on leave()
+  // SFU WebSocket - opened on join(), closed on leave()
   private sfuWs: WebSocket | null = null;
   private currentRoomCode: string | null = null;
   private currentPeerId: string | null = null;
@@ -290,7 +290,7 @@ export class MediasoupVideo implements VideoTransport {
     await this.consumeProducer(peerId, producerId, "screen");
   }
 
-  /** Stop watching a transmission — close all screen consumers for that peer. */
+  /** Stop watching a transmission - close all screen consumers for that peer. */
   stopWatchingTransmission(peerId: string): void {
     this.watchingTransmissionPeers.delete(peerId);
     const peerConsumers = this.consumers.get(peerId);
@@ -407,7 +407,7 @@ export class MediasoupVideo implements VideoTransport {
               console.warn("[MediasoupVideo] rejoin failed:", err);
               this.emit(
                 "error",
-                new Error("Video reconnect failed — leave and rejoin the call")
+                new Error("Video reconnect failed - leave and rejoin the call")
               );
             });
           }, 2000);
@@ -564,7 +564,7 @@ export class MediasoupVideo implements VideoTransport {
             console.warn("[MediasoupVideo] rejoin after send transport failed:", err);
             this.emit(
               "error",
-              new Error("Video reconnect failed — leave and rejoin the call")
+              new Error("Video reconnect failed - leave and rejoin the call")
             );
           });
         }, 2000);
@@ -603,7 +603,7 @@ export class MediasoupVideo implements VideoTransport {
             console.warn("[MediasoupVideo] rejoin after recv transport failed:", err);
             this.emit(
               "error",
-              new Error("Video reconnect failed — leave and rejoin the call")
+              new Error("Video reconnect failed - leave and rejoin the call")
             );
           });
         }, 2000);
@@ -643,7 +643,7 @@ export class MediasoupVideo implements VideoTransport {
           break;
         }
         // Camera is auto-consumed as before.
-        // Screen share is opt-in — emit transmissionAvailable so the UI can show a tile.
+        // Screen share is opt-in - emit transmissionAvailable so the UI can show a tile.
         if (msg.source === "screen") {
           if (!this.pendingScreenProducerIds.has(msg.peerId)) {
             this.pendingScreenProducerIds.set(msg.peerId, new Set());

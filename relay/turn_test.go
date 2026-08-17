@@ -42,7 +42,7 @@ func TestTurnCredentials_HMACIsValid(t *testing.T) {
 	if body.Username == "" || body.Credential == "" || len(body.URLs) == 0 {
 		t.Fatalf("incomplete response: %+v", body)
 	}
-	// The credential must be HMAC-SHA1(secret, username), base64-encoded —
+	// The credential must be HMAC-SHA1(secret, username), base64-encoded -
 	// exactly what coturn recomputes to authenticate.
 	mac := hmac.New(sha1.New, []byte(secret))
 	mac.Write([]byte(body.Username))

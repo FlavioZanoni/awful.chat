@@ -14,7 +14,7 @@ import type { StreamMessageEvent, StreamCloseEvent } from "@libp2p/interface";
 
 // js-libp2p exposes no public "reserve a relay slot now" API. Listening on a
 // `<relay>/p2p-circuit` address is what triggers a reservation, and we need to
-// do it on demand — after dialing the relay ourselves, and again on reconnect —
+// do it on demand - after dialing the relay ourselves, and again on reconnect -
 // rather than via `addresses.listen`, which would block node startup on relay
 // reachability and hand reconnect re-reservation to libp2p's slower refresh
 // timer. So we reach the internal TransportManager through this narrow typed
@@ -38,6 +38,7 @@ const MAX_DIRECT_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_RENDEZVOUS_FRAME_BYTES = 16 * 1024;
 const PEER_REDIAL_DELAY_MS = 3_000;
 const RELAY_RECONNECT_DELAY_MS = 3_000;
+const CONNECTION_RECONCILE_MS = 5_000;
 const RENDEZVOUS_RECONNECT_DELAY_MS = 2_000;
 
 type RendezvousClientMsg =
@@ -81,10 +82,11 @@ export class LibP2PTransport implements PeerTransport {
   private dialingPeers = new Set<string>();
   private joinedRooms = new Set<string>();
 
-  // set to true only by disconnect() — prevents any reconnect logic from firing
+  // set to true only by disconnect() - prevents any reconnect logic from firing
   private intentionalDisconnect = false;
 
   private relayReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private privateKeyBytes: Uint8Array | null = null;
 
   get p2pNode(): Libp2p<AppServices> | null {
@@ -94,7 +96,7 @@ export class LibP2PTransport implements PeerTransport {
   async connect(privateKeyBytes?: Uint8Array | null): Promise<void> {
     this.intentionalDisconnect = false;
 
-    // A previous failed connect may have left a half-started node behind —
+    // A previous failed connect may have left a half-started node behind -
     // stop it so retries don't leak libp2p nodes.
     if (this.node) {
       try {
@@ -104,7 +106,7 @@ export class LibP2PTransport implements PeerTransport {
     }
     // All per-connection state belongs to the old node. Stale connectedPeers
     // would suppress future "connect" events; stale streams can't be reused.
-    // joinedRooms is intentionally KEPT — it's re-subscribed below.
+    // joinedRooms is intentionally KEPT - it's re-subscribed below.
     this.connectedPeers.clear();
     this.relayedPeers.clear();
     this.peerStreams.clear();
@@ -153,19 +155,12 @@ export class LibP2PTransport implements PeerTransport {
     const myId = this.node.peerId.toString();
     console.log("[LibP2PTransport] node started, selfId:", myId);
 
-    try {
-      await this.dialRelay();
-    } catch (err) {
-      // Don't leave a running node behind on a failed connect
-      try {
-        await this.node.stop();
-      } catch {}
-      this.node = null;
-      throw err;
-    }
-    await this.requestRelayReservation();
-    await this.waitForRelayReservation();
-
+    // These MUST be attached before the relay dial. waitForRelayReservation()
+    // can block for seconds while the node is already reachable, and any peer
+    // that connected in that window used to fire peer:identify into the void:
+    // never added to connectedPeers, never sent our profile or the room name.
+    // That is why peers showed as offline with a raw did while chat, files and
+    // voice all worked - those paths do not depend on this event.
     this.node.services.pubsub.addEventListener("message", (evt: any) => {
       const from = evt.detail.from.toString();
       if (from === myId || this.isRelayPeer(from)) return;
@@ -183,6 +178,28 @@ export class LibP2PTransport implements PeerTransport {
       this.updateRelayedStatus(id);
       this.emit("connect", id);
     });
+
+
+    try {
+      await this.dialRelay();
+    } catch (err) {
+      // Don't leave a running node behind on a failed connect
+      try {
+        await this.node.stop();
+      } catch {}
+      this.node = null;
+      throw err;
+    }
+    await this.requestRelayReservation();
+    await this.waitForRelayReservation();
+
+    // Anything that connected before the listeners existed (or whose event we
+    // missed for any other reason) is picked up here.
+    this.reconcileConnections();
+    this.reconcileTimer = setInterval(
+      () => this.reconcileConnections(),
+      CONNECTION_RECONCILE_MS
+    );
 
     this.node.addEventListener(
       "connection:open",
@@ -218,7 +235,7 @@ export class LibP2PTransport implements PeerTransport {
       }
     });
 
-    // Re-subscribe rooms joined before a reconnect — the new node starts
+    // Re-subscribe rooms joined before a reconnect - the new node starts
     // with no subscriptions, and joinRoom() early-returns for known rooms.
     // (startRendezvous re-REGISTERs them with the relay itself.)
     for (const room of this.joinedRooms) {
@@ -252,6 +269,10 @@ export class LibP2PTransport implements PeerTransport {
       clearTimeout(this.relayReconnectTimer);
       this.relayReconnectTimer = null;
     }
+    if (this.reconcileTimer) {
+      clearInterval(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
 
     if (!this.node) return;
 
@@ -279,7 +300,7 @@ export class LibP2PTransport implements PeerTransport {
   /**
    * Send to a peer over the direct-message stream.
    * Resolves true once the frame is handed to an open stream, false if the
-   * stream could not be opened or the write failed — so callers (e.g. the
+   * stream could not be opened or the write failed - so callers (e.g. the
    * DM retry queue) can requeue instead of messages vanishing silently.
    */
   async send(peerId: string, data: Uint8Array): Promise<boolean> {
@@ -359,6 +380,24 @@ export class LibP2PTransport implements PeerTransport {
 
   rooms(): string[] {
     return Array.from(this.joinedRooms);
+  }
+
+  /**
+   * Emit "connect" for peers that are live but unknown to us.
+   * peer:identify is a one-shot event: if it fires while we are still setting
+   * up (or is missed), that peer would otherwise stay invisible forever even
+   * though messages flow over it.
+   */
+  private reconcileConnections(): void {
+    if (!this.node) return;
+    for (const connection of this.node.getConnections()) {
+      const id = connection.remotePeer.toString();
+      if (this.isRelayPeer(id) || this.connectedPeers.has(id)) continue;
+      console.log("[Transport] reconciled missed peer:", id.slice(-8));
+      this.connectedPeers.add(id);
+      this.updateRelayedStatus(id);
+      this.emit("connect", id);
+    }
   }
 
   private isRelayPeer(peerId: string): boolean {
@@ -700,7 +739,7 @@ export class LibP2PTransport implements PeerTransport {
 
         this.emit("status", {
           type: "reservation-timeout",
-          message: "Relay reservation timed out — you may not be reachable",
+          message: "Relay reservation timed out - you may not be reachable",
         });
         resolve();
       }, RELAY_RESERVATION_TIMEOUT_MS);

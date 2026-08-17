@@ -1,4 +1,4 @@
-// STUN servers — safe to ship, no credentials.
+// STUN servers - safe to ship, no credentials.
 const STUN_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
@@ -9,7 +9,7 @@ const STUN_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.twilio.com:3478" },
 ];
 
-// Static TURN for awful.frav.in — only a FALLBACK, used until the relay hands
+// Static TURN for awful.frav.in - only a FALLBACK, used until the relay hands
 // out short-lived HMAC credentials (see refreshTurnCredentials). Shipping a
 // permanent shared secret lets anyone relay through the server, so the relay's
 // /turn-credentials endpoint (coturn use-auth-secret) supersedes this whenever
@@ -24,7 +24,7 @@ const STATIC_TURN: RTCIceServer = {
   credential: "awful",
 };
 
-// Free public TURN fallback (rate-limited) — kept in all cases as a last resort.
+// Free public TURN fallback (rate-limited) - kept in all cases as a last resort.
 const FALLBACK_TURN: RTCIceServer[] = [
   {
     urls: "turn:openrelay.metered.ca:80",
@@ -94,7 +94,7 @@ export async function refreshTurnCredentials(): Promise<void> {
 }
 
 /**
- * @deprecated Use getIceServers() — this is a snapshot and won't reflect a
+ * @deprecated Use getIceServers() - this is a snapshot and won't reflect a
  * later credential refresh. Retained for any external import.
  */
 export const defaultIceServerList: RTCIceServer[] = cached;

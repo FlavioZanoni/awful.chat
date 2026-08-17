@@ -22,13 +22,14 @@
   import { profileStore, loadProfile } from "$lib/profile.svelte";
   import AvatarPickerDialog from "$lib/components/AvatarPickerDialog.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
+  import { Tip } from "$lib/components/ui/tooltip";
   import DeviceSyncDialog from "$lib/components/DeviceSyncDialog.svelte";
   import { toggleDeafen } from "$lib/transport/call.svelte";
 
   let avatarDialogOpen = $state(false);
   let audioSettingsOpen = $state(false);
   // Owned here (not in SettingsDialog) so the sync dialog survives the settings
-  // dialog closing on mobile — see SessionSettings onOpenSync.
+  // dialog closing on mobile - see SessionSettings onOpenSync.
   let syncDialogOpen = $state(false);
   let syncFlowMode = $state<"receive" | "generate-qr" | "scan-qr">("receive");
 
@@ -62,7 +63,12 @@
     <div
       class="flex items-center justify-stretch gap-1 px-2 py-2 border-b border-sidebar-border"
     >
+      <Tip
+        text={transportState.cameraOff ? "Turn on camera" : "Turn off camera"}
+      >
+        {#snippet children(props)}
       <button
+        {...props}
         type="button"
         onclick={toggleCamera}
         aria-label={transportState.cameraOff
@@ -79,8 +85,17 @@
           <CameraOff class="size-4" />
         {/if}
       </button>
+        {/snippet}
+      </Tip>
 
+      <Tip
+        text={transportState.screenSharing
+          ? "Stop screen share"
+          : "Share screen"}
+      >
+        {#snippet children(props)}
       <button
+        {...props}
         type="button"
         onclick={transportState.screenSharing
           ? stopScreenShare
@@ -99,8 +114,13 @@
           <Monitor class="size-4" />
         {/if}
       </button>
+        {/snippet}
+      </Tip>
 
+      <Tip text="Leave call">
+        {#snippet children(props)}
       <button
+        {...props}
         type="button"
         onclick={leaveCall}
         aria-label="Leave call"
@@ -108,6 +128,8 @@
       >
         <PhoneOff class="size-4" />
       </button>
+        {/snippet}
+      </Tip>
     </div>
   {/if}
 
@@ -156,7 +178,10 @@
 
     <!-- Mic, Deafen, Settings -->
     <div class="flex items-center gap-0.5 justify-end">
+      <Tip text={transportState.muted ? "Unmute" : "Mute"}>
+        {#snippet children(props)}
       <button
+        {...props}
         type="button"
         onclick={toggleMute}
         aria-label={transportState.muted ? "Unmute" : "Mute"}
@@ -171,8 +196,13 @@
           <Mic class="size-4" />
         {/if}
       </button>
+        {/snippet}
+      </Tip>
 
+      <Tip text={transportState.deafened ? "Undeafen" : "Deafen"}>
+        {#snippet children(props)}
       <button
+        {...props}
         type="button"
         onclick={toggleDeafen}
         aria-label={transportState.deafened ? "Undeafen" : "Deafen"}
@@ -187,8 +217,13 @@
           <Headphones class="size-4" />
         {/if}
       </button>
+        {/snippet}
+      </Tip>
 
+      <Tip text="Settings">
+        {#snippet children(props)}
       <button
+        {...props}
         type="button"
         onclick={() => (audioSettingsOpen = true)}
         aria-label="Settings"
@@ -196,6 +231,8 @@
       >
         <Settings class="size-4" />
       </button>
+        {/snippet}
+      </Tip>
     </div>
   </div>
 </div>

@@ -188,7 +188,7 @@ const mediaCodecs: mediasoup.types.RouterOptions["mediaCodecs"] = [
 ];
 
 let worker: mediasoup.types.Worker;
-// One router per room for now — keyed by roomCode.
+// One router per room for now - keyed by roomCode.
 // Stores promises to avoid TOCTOU race: concurrent callers await the same pending creation.
 const routers = new Map<string, Promise<mediasoup.types.Router>>();
 
@@ -614,7 +614,7 @@ async function main(): Promise<void> {
         const oldPeer = room.get(peer.peerId);
         if (oldPeer && oldPeer !== peer) {
           // Duplicate peerId: replace the old (usually silently-dead) session.
-          // Close its media directly — do NOT call handlePeerLeft(), which
+          // Close its media directly - do NOT call handlePeerLeft(), which
           // would delete the room and close the router this new session needs
           // (and its async ws-close would otherwise evict the new peer).
           console.log(

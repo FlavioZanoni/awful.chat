@@ -133,7 +133,7 @@
       return;
     }
 
-    // A click while the test is still starting up is ignored — it must not
+    // A click while the test is still starting up is ignored - it must not
     // fall through and start a second getUserMedia (leaking the first).
     if (isMicStarting) return;
     isMicStarting = true;
@@ -217,7 +217,7 @@
           stream.getTracks().forEach((t) => t.stop());
         };
       }
-      // Setup succeeded — now it's a live test.
+      // Setup succeeded - now it's a live test.
       isMicTesting = true;
     } catch (e) {
       console.error("Mic test failed:", e);

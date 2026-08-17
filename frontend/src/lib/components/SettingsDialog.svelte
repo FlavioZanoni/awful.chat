@@ -94,8 +94,11 @@
           ? 'bg-background text-foreground shadow-sm'
           : 'text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10'}"
       >
-        <tab.icon class="w-4 h-4" />
-        <span class="hidden sm:inline">{tab.label}</span>
+        <!-- shrink-0: without it a long label like "Session/Sync" squeezes its
+             own icon narrower than the others, so the labels no longer start
+             at the same x and the column looks ragged. -->
+        <tab.icon class="w-4 h-4 shrink-0" />
+        <span class="hidden sm:inline truncate">{tab.label}</span>
       </button>
     {/each}
   </div>

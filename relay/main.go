@@ -41,7 +41,7 @@ type serverMsg struct {
 	Peer  string   `json:"peer,omitempty"` // PEER_JOINED | PEER_LEFT
 }
 
-// rvStream is the slice of network.Stream the registry needs — an
+// rvStream is the slice of network.Stream the registry needs - an
 // interface so tests can stub it without a real libp2p stream.
 type rvStream interface {
 	io.Writer
@@ -242,7 +242,7 @@ func (r *registry) handleStream(s network.Stream) {
 	r.clients[peerId] = c
 	r.mu.Unlock()
 
-	// Read loop — reassemble length-prefixed frames
+	// Read loop - reassemble length-prefixed frames
 	const maxMsgLen = 8192 // Max size for a single frame (REGISTER/UNREGISTER payloads are tiny)
 	buf := make([]byte, 0, 512)
 	tmp := make([]byte, 4096)
@@ -258,7 +258,7 @@ readLoop:
 		for len(buf) >= 4 {
 			msgLen := int(buf[0])<<24 | int(buf[1])<<16 | int(buf[2])<<8 | int(buf[3])
 			// Reject oversized frames to prevent memory DoS. Abort the whole
-			// stream — a plain `break` here would leave the bad length header in
+			// stream - a plain `break` here would leave the bad length header in
 			// buf and re-trip on every subsequent read while buf grows unbounded.
 			if msgLen > maxMsgLen {
 				log.Printf("[rv] message too large from %s: %d bytes, closing stream", short(peerId), msgLen)
@@ -361,7 +361,7 @@ func main() {
 		},
 		DisconnectedF: func(n network.Network, c network.Conn) {
 			peerId := c.RemotePeer()
-			// A peer that reconnected on a fresh connection is still Connected —
+			// A peer that reconnected on a fresh connection is still Connected -
 			// don't let this old connection's teardown evict the new session.
 			// Only clean up when the peer is genuinely gone. (handleStream's
 			// stream-close path is the authoritative cleanup.)

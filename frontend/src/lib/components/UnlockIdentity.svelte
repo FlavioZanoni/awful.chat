@@ -101,7 +101,7 @@
       identityStore.justLoggedOut = false;
       await unlock(password);
       if (remember) {
-        // getRememberDuration() may be -1 ("until logout") — a valid choice
+        // getRememberDuration() may be -1 ("until logout") - a valid choice
         // that saveRememberedPassword now handles, not a reason to clear.
         await saveRememberedPassword(password, getRememberDuration());
       } else {

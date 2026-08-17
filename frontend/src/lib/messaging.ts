@@ -1,5 +1,5 @@
 /**
- * messaging.ts — message signing, verification, and DM encryption
+ * messaging.ts - message signing, verification, and DM encryption
  *
  * Responsible for:
  *   - Canonical message serialization (the form that gets signed)
@@ -40,11 +40,11 @@ type Signable = Pick<
 > & { sigV?: number };
 
 /**
- * v2 canonical form — additionally covers reaction fields, the replied-to
+ * v2 canonical form - additionally covers reaction fields, the replied-to
  * message id, and file metadata (infoHashes!) so none of them can be
  * swapped in transit on a validly signed message. JSON array encoding is
  * deterministic and unambiguous regardless of content characters.
- * Excludes `timestamp` — wall-clock time is untrusted.
+ * Excludes `timestamp` - wall-clock time is untrusted.
  */
 export function canonicalContentV2(msg: Signable): string {
   return JSON.stringify([
@@ -83,7 +83,7 @@ export function signMessage(message: Message): Message {
 
 /**
  * Verify an ed25519 signature over a canonical content string.
- * Pure function — does not require an unlocked session.
+ * Pure function - does not require an unlocked session.
  * Returns false (never throws) on any verification failure.
  *
  * @param senderDid - The signer's did:key identifier.
@@ -132,7 +132,7 @@ export function computeSharedSecret(
     theirEd25519PubKey
   ) as Uint8Array<ArrayBuffer>;
   const raw = x25519.getSharedSecret(myX25519Priv, theirX25519Pub);
-  // Never use raw ECDH output as a key directly — hash for key separation
+  // Never use raw ECDH output as a key directly - hash for key separation
   // (domain tag) and to erase the curve point's algebraic structure.
   return sha256
     .create()

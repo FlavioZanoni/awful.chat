@@ -79,9 +79,24 @@
           url: "https://tailwindcss.com",
         },
         {
+          name: "shadcn-svelte",
+          what: "the component layer this UI is built from",
+          url: "https://shadcn-svelte.com",
+        },
+        {
           name: "bits-ui",
-          what: "dialogs, drawers and other primitives",
+          what: "the primitives under it: dialogs, drawers, tooltips",
           url: "https://bits-ui.com",
+        },
+        {
+          name: "Vaul",
+          what: "the drawer that slides up on mobile",
+          url: "https://github.com/huntabyte/vaul-svelte",
+        },
+        {
+          name: "TanStack Query",
+          what: "caching for GIF search and link previews",
+          url: "https://tanstack.com/query",
         },
         {
           name: "Lucide",

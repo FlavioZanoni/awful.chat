@@ -9,6 +9,7 @@
     Users,
   } from "@lucide/svelte";
   import SidebarControls from "./SidebarControls.svelte";
+  import { Tip } from "$lib/components/ui/tooltip";
   import CallStatus from "./CallStatus.svelte";
 
   interface DmPreview {
@@ -40,6 +41,7 @@
     activeTab: "rooms" | "users";
     onChangeTab: (tab: "rooms" | "users") => void;
     unreadCounts: Map<string, number>;
+    roomActivity: Map<string, number>;
     isOpen?: boolean;
     onClose?: () => void;
     onSelectRoom: (code: string) => void;
@@ -64,6 +66,7 @@
     activeTab,
     onChangeTab,
     unreadCounts,
+    roomActivity,
     isOpen = false,
     onClose,
     onSelectRoom,
@@ -180,25 +183,33 @@
       </span>
     </div>
     {#if activeTab === "rooms" && onOpenCreateJoin && shouldShowAddBtn}
-      <button
-        type="button"
-        onclick={onOpenCreateJoin}
-        class="inline-flex size-7 items-center justify-center rounded-md border border-sidebar-border bg-sidebar-accent/40 text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
-        aria-label="Create or join room"
-        title="Create / Join room"
-      >
-        <Plus class="size-4" />
-      </button>
+      <Tip text="Create or join a room" side="bottom">
+        {#snippet children(props)}
+          <button
+            {...props}
+            type="button"
+            onclick={onOpenCreateJoin}
+            class="inline-flex size-7 items-center justify-center rounded-md border border-sidebar-border bg-sidebar-accent/40 text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
+            aria-label="Create or join room"
+          >
+            <Plus class="size-4" />
+          </button>
+        {/snippet}
+      </Tip>
     {:else if activeTab === "users" && onOpenPhonebook}
-      <button
-        type="button"
-        onclick={onOpenPhonebook}
-        class="inline-flex size-7 items-center justify-center rounded-md border border-sidebar-border bg-sidebar-accent/40 text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
-        aria-label="Open phonebook"
-        title="Phonebook"
-      >
-        <Users class="size-4" />
-      </button>
+      <Tip text="Phonebook" side="bottom">
+        {#snippet children(props)}
+          <button
+            {...props}
+            type="button"
+            onclick={onOpenPhonebook}
+            class="inline-flex size-7 items-center justify-center rounded-md border border-sidebar-border bg-sidebar-accent/40 text-muted-foreground hover:text-foreground hover:bg-sidebar-accent"
+            aria-label="Open phonebook"
+          >
+            <Users class="size-4" />
+          </button>
+        {/snippet}
+      </Tip>
     {/if}
   </div>
 
@@ -275,7 +286,7 @@
                 {room.name || room.roomCode}
               </div>
               <div class="truncate text-xs opacity-60 font-mono">
-                {timeAgo(room.createdAt)}
+                {timeAgo(roomActivity.get(room.roomCode) ?? room.createdAt)}
               </div>
             </div>
             {#if (unreadCounts.get(room.roomCode) ?? 0) > 0 && activeRoomCode !== room.roomCode}

@@ -290,7 +290,9 @@
             {/if}
           </div>
 
-          {#if transfer?.status === "downloading"}
+          <!-- Only while bytes are actually moving: a finished or seeding
+               transfer has nothing left to report. -->
+          {#if transfer?.status === "downloading" && !transfer.done && (transfer.progress ?? 0) < 1}
             <div class="mt-2 h-1.5 overflow-hidden rounded bg-muted">
               <div
                 class="h-full bg-primary transition-[width]"
@@ -444,7 +446,7 @@
             />
           </a>
         {/if}
-        <!-- text meta — always a link to the site -->
+        <!-- text meta - always a link to the site -->
         <a
           href={linkedUrl}
           target="_blank"
@@ -521,7 +523,7 @@
     <span
       class="ml-1.5 inline-flex items-center align-text-bottom"
       title={msg.status === "sending"
-        ? "Queued — will send when the recipient is reachable"
+        ? "Queued - will send when the recipient is reachable"
         : msg.status.charAt(0).toUpperCase() + msg.status.slice(1)}
       aria-label="Message {msg.status}"
     >

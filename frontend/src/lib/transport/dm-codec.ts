@@ -1,12 +1,12 @@
 /**
- * dm-codec.ts — pure encode/decode for the DM wire envelopes and the
+ * dm-codec.ts - pure encode/decode for the DM wire envelopes and the
  * deterministic DM room-code hash. No transport or Svelte dependencies,
  * so it is unit-testable in isolation.
  *
  * Envelope layout: 1 tag byte + payload.
- *   0x01 chat  — JSON { id, text, ts }
- *   0x02 ack   — raw messageId string (delivery receipt)
- *   0x03 read  — JSON string[] of messageIds (read receipt)
+ *   0x01 chat  - JSON { id, text, ts }
+ *   0x02 ack   - raw messageId string (delivery receipt)
+ *   0x03 read  - JSON string[] of messageIds (read receipt)
  */
 
 export interface DmPayload {

@@ -21,8 +21,8 @@ export interface Room {
   name: string;
   lastSeenLamport: number; // unread count = messages with lamport > this
   createdAt: number;
-  pfpData?: ArrayBuffer; // local upload — blobURL generated at runtime, never stored
-  pfpURL?: string; // external URL (tenor, giphy, etc) — stored as-is
+  pfpData?: ArrayBuffer; // local upload - blobURL generated at runtime, never stored
+  pfpURL?: string; // external URL (tenor, giphy, etc) - stored as-is
   participants: string[]; // DIDs of users in the room (stable identity)
   participantLastSeen?: Record<string, number>; // DID -> timestamp of last seen
 }
@@ -36,11 +36,11 @@ export interface DMRoom extends Room {
 }
 
 export interface OwnProfile {
-  did: string; // PK — the local identity DID
+  did: string; // PK - the local identity DID
   isMe: true;
   nickname: string;
   pfpData?: ArrayBuffer; // local upload
-  pfpURL?: string; // external URL — stored as-is
+  pfpURL?: string; // external URL - stored as-is
   updatedAt: number;
 }
 
@@ -176,25 +176,25 @@ export async function getDB(): Promise<AppDB> {
         });
         penStore.createIndex("byRecipient", "to", { unique: false });
 
-        // identity — keyed by "mnemonic" | "keypair"
+        // identity - keyed by "mnemonic" | "keypair"
         database.createObjectStore("identity", { keyPath: "id" });
 
-        // watermarks — keyed by "roomCode:senderId"
+        // watermarks - keyed by "roomCode:senderId"
         const wmStore = database.createObjectStore("watermarks", {
           keyPath: "id",
         });
         wmStore.createIndex("byRoom", "roomCode", { unique: false });
 
-        // Yjs snapshots — keyed by "channel:{roomCode}"
+        // Yjs snapshots - keyed by "channel:{roomCode}"
         database.createObjectStore("yjsDocs", { keyPath: "id" });
 
-        // rooms — keyed by roomCode
+        // rooms - keyed by roomCode
         const roomStore = database.createObjectStore("rooms", {
           keyPath: "roomCode",
         });
         roomStore.createIndex("byType", "type", { unique: false });
 
-        // profiles — keyed by did for both own and peer profiles
+        // profiles - keyed by did for both own and peer profiles
         database.createObjectStore("profiles", { keyPath: "did" });
       }
 
@@ -205,7 +205,7 @@ export async function getDB(): Promise<AppDB> {
       if (oldVersion < 3) {
         // Recreate profiles store with keyPath "did" instead of "id".
         // Peer profile data is dropped (it was broken anyway), but the user's
-        // OWN profile (nickname + avatar) must survive — copy it across the
+        // OWN profile (nickname + avatar) must survive - copy it across the
         // recreate instead of silently wiping it.
         let ownProfiles: unknown[] = [];
         if (database.objectStoreNames.contains("profiles")) {
@@ -271,7 +271,7 @@ export async function getMessages(
 
 /**
  * Fetch every message for a room with no page limit.
- * Only used for sync — do not use for display.
+ * Only used for sync - do not use for display.
  */
 export async function getAllMessages(roomCode: string): Promise<Message[]> {
   const database = await getDB();
@@ -611,7 +611,7 @@ export async function rekeyOwnProfile(
 
 /**
  * Patch own profile.
- * pfpData and pfpURL are mutually exclusive — setting one clears the other.
+ * pfpData and pfpURL are mutually exclusive - setting one clears the other.
  */
 export async function updateOwnProfile(
   patch: Partial<Pick<OwnProfile, "nickname" | "pfpData" | "pfpURL">>
@@ -688,7 +688,7 @@ export async function setWatermark(
   // higher one written between our get and put).
   const tx = database.transaction("watermarks", "readwrite");
   const existing = await tx.store.get(id);
-  // Never regress — only advance the watermark
+  // Never regress - only advance the watermark
   if (!existing || existing.maxLamport < maxLamport) {
     await tx.store.put({ id, roomCode, senderId, maxLamport });
   }

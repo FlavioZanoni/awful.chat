@@ -1,12 +1,12 @@
 /**
- * remembered-password.ts — encrypted-at-rest "remember my password".
+ * remembered-password.ts - encrypted-at-rest "remember my password".
  *
  * Replaces the old plaintext `awful_password` cookie. The password is
  * AES-GCM encrypted under a NON-EXTRACTABLE CryptoKey that lives only in
  * IndexedDB: it never travels with requests, can't be read via
  * document.cookie, and the key bytes can't be exfiltrated even by code
  * running in the origin. (Code running in the origin can still *use* the
- * key — that's the inherent ceiling of any client-only secret storage;
+ * key - that's the inherent ceiling of any client-only secret storage;
  * use the WebAuthn/biometric unlock for a hardware-backed alternative.)
  */
 

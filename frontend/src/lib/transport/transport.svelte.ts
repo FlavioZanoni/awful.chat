@@ -38,6 +38,8 @@ import {
 import {
   refreshUnreadCount,
   refreshDmRooms,
+  renameRoom,
+  noteRoomActivity,
   roomsStore,
 } from "../rooms.svelte";
 import { WebTorrentFileTransport } from "./file/webtorrent";
@@ -258,17 +260,24 @@ async function _sendProfile(peerId?: string): Promise<void> {
     avatarUrl = `data:image/jpeg;base64,${btoa(binary)}`;
   }
 
+  const payload = encode({ type: MessageType.Profile, name, did, avatarUrl });
+
   if (peerId) {
-    _transport.send(
-      peerId,
-      encode({ type: MessageType.Profile, name, did, avatarUrl })
-    );
+    _transport.send(peerId, payload);
     return;
   }
-  _transport.broadcast(
-    encode({ type: MessageType.Profile, name, did, avatarUrl }),
-    transportState.roomCode!
-  );
+
+  // Reach everyone who could care: every room we are in (not just the one on
+  // screen) and every connected peer directly. A single broadcast to the
+  // active room missed peers in other shared rooms, and was silently dropped
+  // when the gossipsub mesh had not formed yet - which is why a changed
+  // nickname or avatar often never showed up for anyone.
+  for (const room of _transport.rooms()) {
+    _transport.broadcast(payload, room);
+  }
+  for (const pid of _transport.peers()) {
+    _transport.send(pid, payload).catch(() => {});
+  }
 }
 
 async function _broadcastProfile(): Promise<void> {
@@ -293,7 +302,7 @@ export async function _loadHistory(roomCode: string): Promise<void> {
     getAllPeerProfiles(),
   ]);
   transportState.messages = msgs;
-  // DM rooms use wall-clock ms as their lamport — absorbing those here would
+  // DM rooms use wall-clock ms as their lamport - absorbing those here would
   // catapult the shared room clock to ~1.7e12 and skew every room after.
   if (msgs.length > 0 && !roomCode.startsWith("dm-")) {
     _lamport = Math.max(_lamport, ...msgs.map((m) => m.lamport));
@@ -333,7 +342,7 @@ async function _handleDigest(
   roomCode: string,
   theirWatermarks: Record<string, number>
 ): Promise<void> {
-  // Only reconcile a room we have actually joined — never a room the sender
+  // Only reconcile a room we have actually joined - never a room the sender
   // merely named, and never fall back to whatever room the UI has open.
   if (!roomCode || !_transport.rooms().includes(roomCode)) return;
   const mine = await getWatermarksForRoom(roomCode);
@@ -386,7 +395,7 @@ async function _handleSyncBatch(
   messages: WireChatMessage[]
 ): Promise<void> {
   // Bind incoming history to the room named in the (signed-message-bearing)
-  // batch, and only if we actually joined it — a peer cannot inject history
+  // batch, and only if we actually joined it - a peer cannot inject history
   // into whatever room the receiver currently has open.
   if (
     !messages.length ||
@@ -412,6 +421,7 @@ async function _handleSyncBatch(
   }
 
   refreshUnreadCount(roomCode).catch(() => {});
+  for (const m of fullMessages) noteRoomActivity(m.roomCode, m.timestamp);
 
   const existingIds = new Set(transportState.messages.map((m) => m.id));
   const newMsgs = fullMessages.filter((m) => !existingIds.has(m.id));
@@ -440,14 +450,14 @@ function _handleSyncComplete(peerId: string): void {
 
 function _handleProfile(peerId: string, msg: WireProfile): void {
   // Trust the DID derived from the authenticated peerId, NOT the (unsigned,
-  // spoofable) `did` field — otherwise any peer could claim someone else's
+  // spoofable) `did` field - otherwise any peer could claim someone else's
   // identity and hijack their DM conversation / poison their cached profile.
   const did = didFromPeerId(peerId) ?? msg.did ?? peerId;
   const isNewMapping = _peerIdToDid.get(peerId) !== did;
   _peerIdToDid.set(peerId, did);
 
   // Queued DMs are keyed by DID, and the "connect" event fires before we
-  // know the peer's DID — so the real flush happens here, once the profile
+  // know the peer's DID - so the real flush happens here, once the profile
   // (and with it the DID) has arrived.
   if (isNewMapping) flushQueuedDmForPeer(peerId).catch(() => {});
 
@@ -524,7 +534,15 @@ function _handleCallState(peerId: string, msg: WireCallState): void {
 
 function _handleRoomName(name: string): void {
   const trimmed = name.trim().slice(0, 64);
-  if (trimmed.length > 0) transportState.roomName = trimmed;
+  if (!trimmed) return;
+  // A peer that joined from a bare invite link has no name yet and sends the
+  // room code as a placeholder. Accepting it would overwrite the real name for
+  // everyone in the room.
+  if (trimmed === transportState.roomCode) return;
+  transportState.roomName = trimmed;
+  if (transportState.roomCode) {
+    renameRoom(transportState.roomCode, trimmed).catch(() => {});
+  }
 }
 
 function _handleJoinRoom(peerId: string): void {
@@ -591,7 +609,7 @@ function _broadcastLeaveRoom(): void {
  * did:key senderId) or it is dropped. Unsigned messages are accepted:
  * history predating signing and DM messages mirrored by the receiver are
  * stored without a sig, and rejecting them silently destroys sync.
- * ponytail: unsigned did:key claims are still spoofable — tighten to
+ * ponytail: unsigned did:key claims are still spoofable - tighten to
  * mandatory signatures once legacy history has aged out.
  */
 async function _verifyIncoming(wire: WireChatMessage): Promise<boolean> {
@@ -624,6 +642,7 @@ function _handleChatMessage(
   putMessage(msg).catch(() => {});
   setWatermark(msg.roomCode, msg.senderId, msg.lamport).catch(() => {});
   refreshUnreadCount(msg.roomCode).catch(() => {});
+  noteRoomActivity(msg.roomCode, msg.timestamp);
 
   const isNewMessage = !transportState.messages.some((m) => m.id === msg.id);
 
@@ -726,7 +745,7 @@ _transport.on("status", (status) => {
 _transport.on("connect", (peerId) => {
   transportState.peers = _transport.peers();
   // The peer's DID is the SAME Ed25519 key as their authenticated libp2p
-  // peerId, so bind it now (no need to wait for — or trust — a Profile).
+  // peerId, so bind it now (no need to wait for - or trust - a Profile).
   const authDid = didFromPeerId(peerId);
   if (authDid) _peerIdToDid.set(peerId, authDid);
   flushQueuedDmForPeer(peerId).catch(() => {});
@@ -843,7 +862,7 @@ _transport.on("message", (peerId, data, room) => {
             }
             await refreshDmRooms();
             transportState.dmVersion += 1;
-            // Conversation is on screen — this message is read, not just delivered
+            // Conversation is on screen - this message is read, not just delivered
             _transport
               .send(peerId, encodeDmReadEnvelope([envelope.payload.id]))
               .catch(() => {});
@@ -918,7 +937,7 @@ _transport.on("message", (peerId, data, room) => {
         // A bare chat message is only legitimate over a room's pubsub topic
         // (room !== null). The same message type arriving over a direct
         // stream (room === null) would otherwise be stamped with whatever
-        // room the receiver has open — letting any connected peer inject
+        // room the receiver has open - letting any connected peer inject
         // forged history into a room they never joined. Drop it.
         if (room === null) {
           console.warn(
@@ -1074,7 +1093,7 @@ function _disconnectWithoutBroadcasting(): void {
   for (const transfer of transportState.fileTransfers.values()) {
     if (transfer.blobURL) URL.revokeObjectURL(transfer.blobURL);
   }
-  // Clear the file transport's internal maps too — it's a session-long
+  // Clear the file transport's internal maps too - it's a session-long
   // singleton, so without this its stale (revoked) blobURLs get replayed on
   // rejoin and revoke freshly-hydrated ones. Keeps the client alive for reuse.
   _fileTransport.resetTransfers();
@@ -1084,7 +1103,7 @@ function _disconnectWithoutBroadcasting(): void {
   // disconnect() fully stops and nulls the libp2p node, so the relay
   // connection is gone too. Without clearing this flag, connect()/joinRoom()
   // short-circuit on the stale `relayConnected === true` and never rebuild
-  // the node — reconnect stays broken until a full page reload.
+  // the node - reconnect stays broken until a full page reload.
   transportState.relayConnected = false;
   transportState.connected = false;
   transportState.roomCode = null;
@@ -1153,6 +1172,7 @@ export async function sendMessage(
   );
 
   markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
+  noteRoomActivity(msg.roomCode, msg.timestamp);
 }
 
 export async function sendReply(text: string, target: Message): Promise<void> {
@@ -1263,6 +1283,7 @@ export async function sendFiles(
   );
 
   markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
+  noteRoomActivity(msg.roomCode, msg.timestamp);
 }
 
 export function requestFileDownload(

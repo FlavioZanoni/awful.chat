@@ -176,15 +176,21 @@
     joinError = null;
     try {
       await joinRoom(roomCode);
-      const label =
-        roomName ||
-        roomsStore.rooms.find((r) => r.roomCode === roomCode)?.name ||
-        roomCode;
+      const known =
+        roomName || roomsStore.rooms.find((r) => r.roomCode === roomCode)?.name;
+      const label = known || roomCode;
       activeRoomCode = roomCode;
       activeRoomName = label;
       activeDmPeerId = null;
       sidebarTab = "rooms";
-      setRoomName(label);
+      if (known) {
+        // Only announce a name we actually have. Joining from a bare invite
+        // link used to broadcast the room code as the name and overwrite it
+        // for everyone already in the room.
+        setRoomName(known);
+      } else {
+        transportState.roomName = label;
+      }
       await saveRoom(roomCode, label);
       history.pushState({ roomCode }, "", `/r/${roomCode}`);
     } catch (err) {
@@ -617,6 +623,7 @@
         activeTab={sidebarTab}
         onChangeTab={(tab) => (sidebarTab = tab)}
         unreadCounts={roomsStore.unreadCounts}
+        roomActivity={roomsStore.lastActivity}
         isOpen={sidebarOpen}
         onClose={() => (sidebarOpen = false)}
         onSelectRoom={handleSelectRoom}

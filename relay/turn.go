@@ -27,7 +27,7 @@ var defaultTurnURLs = []string{
 //
 // coturn must be configured with `use-auth-secret` and the same
 // `static-auth-secret` as TURN_SECRET. When TURN_SECRET is unset the endpoint
-// returns 204 so the client keeps using its bundled fallback ICE servers —
+// returns 204 so the client keeps using its bundled fallback ICE servers -
 // nothing breaks until an operator opts in.
 func handleTurnCredentials(w http.ResponseWriter, r *http.Request) {
 	if !isAllowedOrigin(r.Header.Get("Origin")) {
@@ -43,7 +43,7 @@ func handleTurnCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	const ttl = 12 * 60 * 60 // 12h — comfortably longer than any call/transfer
+	const ttl = 12 * 60 * 60 // 12h - comfortably longer than any call/transfer
 	expiry := time.Now().Unix() + ttl
 	username := strconv.FormatInt(expiry, 10)
 

@@ -59,7 +59,7 @@
     deafened?: boolean;
     /** True when this is a screen-share transmission tile that hasn't been joined yet. */
     isPending?: boolean;
-    /** The SFU producerId — only set on pending transmission tiles. */
+    /** The SFU producerId - only set on pending transmission tiles. */
     producerId?: string;
   }
 
@@ -107,7 +107,7 @@
     // If there's a stale entry for a different track, tear it down first
     const existing = analysers.get(peerId);
     if (existing) {
-      // Same track — nothing to do
+      // Same track - nothing to do
       if (
         analysers.get(peerId)?.source.mediaStream.getAudioTracks()[0] === track
       )
@@ -139,15 +139,38 @@
 
   let rafId: number | null = null;
 
+  // Speech has gaps between syllables, so a bare per-frame threshold makes the
+  // ring strobe. Hold it on briefly after the last loud frame, and use a lower
+  // threshold to stay on than to switch on.
+  const SPEAKING_HOLD_MS = 500;
+  const SPEAKING_ON = 8;
+  const SPEAKING_OFF = 4;
+  const lastLoudAt = new Map<string, number>();
+
   function pollSpeakers() {
     const buf = new Uint8Array(512);
+    const now = performance.now();
     const next = new Set<string>();
+
     for (const [peerId, { analyser }] of analysers) {
       analyser.getByteFrequencyData(buf);
-      const avg = buf.reduce((s, v) => s + v, 0) / buf.length;
-      if (avg > 5) next.add(peerId);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i];
+      const avg = sum / buf.length;
+      const threshold = speakingPeers.has(peerId) ? SPEAKING_OFF : SPEAKING_ON;
+      if (avg > threshold) lastLoudAt.set(peerId, now);
+      if (now - (lastLoudAt.get(peerId) ?? -Infinity) < SPEAKING_HOLD_MS) {
+        next.add(peerId);
+      }
     }
-    speakingPeers = next;
+
+    // This runs every frame: only publish when the set actually changed, or
+    // every consumer re-renders 60 times a second for nothing.
+    const changed =
+      next.size !== speakingPeers.size ||
+      [...next].some((peerId) => !speakingPeers.has(peerId));
+    if (changed) speakingPeers = next;
+
     rafId = requestAnimationFrame(pollSpeakers);
   }
 
@@ -309,7 +332,7 @@
         });
       }
     }
-    // Pending transmission tiles — remote peers sharing their screen (opt-in)
+    // Pending transmission tiles - remote peers sharing their screen (opt-in)
     for (const [peerId, producerId] of pendingTransmissions) {
       const label = getPeerLabel(peerId);
       const avatarUrl = getPeerAvatar(peerId);
@@ -402,7 +425,7 @@
   let transmissionVolumeSettleTimer: ReturnType<typeof setTimeout> | null =
     null;
 
-  // Docked only when there is nothing to watch — pure audio call
+  // Docked only when there is nothing to watch - pure audio call
   const dockedControls = $derived(!hasActiveVideo && !isWatchingTransmission);
 
   $effect(() => {
@@ -596,7 +619,7 @@
       </div>
     {/if}
 
-    <!-- Pending transmission overlay — "Click to watch" -->
+    <!-- Pending transmission overlay - "Click to watch" -->
     {#if isPendingTx}
       <div class="absolute inset-0 grid place-items-center bg-muted/30">
         <div

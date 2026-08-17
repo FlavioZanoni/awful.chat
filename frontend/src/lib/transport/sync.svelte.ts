@@ -97,7 +97,7 @@ let _syncToken: string | null = null;
 let _syncExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 let _isSourceDevice = false;
 // Target-side: the one source peer we're syncing with. Once set, data from any
-// other peer that joined the (ephemeral) sync room is ignored — otherwise a
+// other peer that joined the (ephemeral) sync room is ignored - otherwise a
 // second joiner could inject a forged database/identity export.
 let _targetSourcePeerId: string | null = null;
 
@@ -303,7 +303,7 @@ async function startSyncServer(): Promise<void> {
           token?: string;
         };
 
-        // The room code alone is only 32 bits of entropy — the token from
+        // The room code alone is only 32 bits of entropy - the token from
         // the QR/short code is the actual proof the requester scanned it.
         // Short codes truncate the token to its first 8 chars, so accept
         // either the full token or that prefix.
@@ -319,7 +319,7 @@ async function startSyncServer(): Promise<void> {
               type: SyncMessageType.SyncError,
               payload: {
                 error:
-                  "Sync token mismatch — refresh/update the app on both devices and generate a new code",
+                  "Sync token mismatch - refresh/update the app on both devices and generate a new code",
               },
             })
           );

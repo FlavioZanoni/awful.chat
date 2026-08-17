@@ -4,6 +4,7 @@ import {
   putRoom,
   deleteRoom,
   getUnreadCount,
+  getMessages,
   getPhonebookEntries,
   type DMRoom,
   type PhonebookEntry,
@@ -27,6 +28,8 @@ interface RoomsStore {
   phonebook: PhonebookEntry[];
   loading: boolean;
   unreadCounts: Map<string, number>;
+  /** roomCode -> timestamp of the newest message from anyone. */
+  lastActivity: Map<string, number>;
 }
 
 export const roomsStore = $state<RoomsStore>({
@@ -35,7 +38,21 @@ export const roomsStore = $state<RoomsStore>({
   phonebook: [],
   loading: false,
   unreadCounts: new Map(),
+  lastActivity: new Map(),
 });
+
+/**
+ * Record that a room saw a message, whoever sent it.
+ * The sidebar used to show room.createdAt, so the "x minutes ago" line never
+ * moved no matter how much was said in the room.
+ */
+export function noteRoomActivity(roomCode: string, timestamp: number): void {
+  if (!roomCode || !timestamp) return;
+  if ((roomsStore.lastActivity.get(roomCode) ?? 0) >= timestamp) return;
+  const next = new Map(roomsStore.lastActivity);
+  next.set(roomCode, timestamp);
+  roomsStore.lastActivity = next;
+}
 
 export async function loadRooms(): Promise<void> {
   roomsStore.loading = true;
@@ -45,6 +62,7 @@ export async function loadRooms(): Promise<void> {
     roomsStore.dmRooms = await getDMRooms();
     roomsStore.phonebook = await getPhonebookEntries();
     await _refreshAllUnread();
+    await _refreshAllActivity();
   } finally {
     roomsStore.loading = false;
   }
@@ -69,6 +87,18 @@ export async function refreshUnreadCount(roomCode: string): Promise<void> {
   const next = new Map(roomsStore.unreadCounts);
   next.set(roomCode, count);
   roomsStore.unreadCounts = next;
+}
+
+/** Seed the last-activity map from stored history on startup. */
+async function _refreshAllActivity(): Promise<void> {
+  const entries = await Promise.all(
+    roomsStore.rooms.map(async (r) => {
+      const msgs = await getMessages(r.roomCode).catch(() => []);
+      const last = msgs[msgs.length - 1];
+      return [r.roomCode, last?.timestamp ?? r.createdAt] as [string, number];
+    })
+  );
+  roomsStore.lastActivity = new Map(entries);
 }
 
 async function _refreshAllUnread(): Promise<void> {
@@ -101,6 +131,25 @@ export async function saveRoom(roomCode: string, name: string): Promise<void> {
 
   await putRoom(room);
   roomsStore.rooms = [...roomsStore.rooms, room];
+}
+
+/**
+ * Persist a room name learned from a peer (or set locally).
+ * Without this a name broadcast only lived in transportState, so the sidebar
+ * and the next join still showed the raw room code.
+ */
+export async function renameRoom(
+  roomCode: string,
+  name: string
+): Promise<void> {
+  const trimmed = name.trim().slice(0, 64);
+  if (!trimmed || trimmed === roomCode) return;
+  const idx = roomsStore.rooms.findIndex((r) => r.roomCode === roomCode);
+  if (idx === -1) return;
+  if (roomsStore.rooms[idx].name === trimmed) return;
+  const updated = { ...roomsStore.rooms[idx], name: trimmed };
+  roomsStore.rooms[idx] = updated;
+  await putRoom(updated);
 }
 
 export async function removeRoom(roomCode: string): Promise<void> {

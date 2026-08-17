@@ -98,7 +98,7 @@ export class LibP2PVoice implements VoiceTransport {
       if (this.transport.isRelay(peerId)) return;
       if (this.remotePeers.has(peerId)) return;
       if (peerId > this.transport.selfId()) return;
-      // always dial from both sides — ensureRemotePeer + pc state guards duplication
+      // always dial from both sides - ensureRemotePeer + pc state guards duplication
       this.dialAndOffer(peerId).catch((err) => {
         this.emit("status", {
           type: "voice-dial-failed",
@@ -560,7 +560,7 @@ export class LibP2PVoice implements VoiceTransport {
         this.emit("status", {
           type: "voice-degraded",
           peerId: peerId.slice(-8),
-          message: `Voice signal lost from ${peerId.slice(-8)} — reconnecting...`,
+          message: `Voice signal lost from ${peerId.slice(-8)} - reconnecting...`,
         });
         // attempt ICE restart if signaling stream is still alive
         if (remote.sigStream && remote.pc.signalingState === "stable") {
@@ -674,7 +674,7 @@ export class LibP2PVoice implements VoiceTransport {
             return;
           }
         } else if (state !== "stable") {
-          // unexpected state — log and bail
+          // unexpected state - log and bail
           console.warn(
             `[Voice] unexpected signaling state ${state} on offer from ${peerId}`
           );
