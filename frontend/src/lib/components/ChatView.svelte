@@ -36,6 +36,7 @@
     sendMessage,
     selfId,
     didToPeerId,
+    peerIdToDid,
     sendReply,
     sendFiles,
     toggleReaction,
@@ -257,7 +258,7 @@
         replyTo: replyTarget
           ? {
               id: replyTarget.id,
-              senderName: replyTarget.senderName,
+              senderName: displayName(replyTarget),
               content:
                 replyTarget.content.length > 160
                   ? `${replyTarget.content.slice(0, 157)}...`
@@ -685,14 +686,39 @@
     });
   }
 
+  /**
+   * senderId is usually a DID, but messages stored before the sender's DID was
+   * known carry their peerId instead - and peerNames/peerAvatars are keyed by
+   * DID only, so looking up the raw senderId silently missed and the message
+   * kept whatever name it was saved with, with no avatar at all.
+   */
+  function senderDid(senderId: string): string {
+    return peerIdToDid(senderId);
+  }
+
   function initials(msg: Message): string {
-    return (msg.senderName || msg.senderId).charAt(0).toUpperCase();
+    return (displayName(msg) || msg.senderId).charAt(0).toUpperCase();
+  }
+
+  function senderAvatar(senderId: string): string | undefined {
+    return (
+      peerAvatars.get(senderDid(senderId)) ?? peerAvatars.get(senderId)
+    );
+  }
+
+  /** Live name wins over the one stored with the message, so a rename shows up
+   *  on everything that person ever said, not just what they say next. */
+  function displayNameFor(senderId: string, stored?: string): string {
+    return (
+      peerNames.get(senderDid(senderId)) ||
+      peerNames.get(senderId) ||
+      stored ||
+      senderId.slice(0, 8)
+    );
   }
 
   function displayName(msg: Message): string {
-    return (
-      peerNames.get(msg.senderId) || msg.senderName || msg.senderId.slice(0, 8)
-    );
+    return displayNameFor(msg.senderId, msg.senderName);
   }
 
   function peerIdForSender(senderId: string): string | null {
@@ -1066,9 +1092,9 @@
                           alt="You"
                           class="size-full object-cover"
                         />
-                      {:else if !isOwn && peerAvatars.get(msg.senderId)}
+                      {:else if !isOwn && senderAvatar(msg.senderId)}
                         <img
-                          src={peerAvatars.get(msg.senderId)}
+                          src={senderAvatar(msg.senderId)}
                           alt={displayName(msg)}
                           class="size-full object-cover"
                         />
@@ -1220,7 +1246,7 @@
         <div class="truncate mt-0.5 flex flex-row items-center gap-1 w-full">
           Replying to
           <span class="font-semibold text-foreground"
-            >{replyTarget.senderName}</span
+            >{displayName(replyTarget)}</span
           >
           <span class="mx-1">•</span>
           <span class="truncate">{replyTarget.content}</span>

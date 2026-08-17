@@ -7,7 +7,7 @@ import { yamux } from "@chainsafe/libp2p-yamux";
 import { identify, type Identify } from "@libp2p/identify";
 import { gossipsub, type GossipSub } from "@libp2p/gossipsub";
 import { keys } from "@libp2p/crypto";
-import { peerIdFromPrivateKey, peerIdFromString } from "@libp2p/peer-id";
+import { peerIdFromString } from "@libp2p/peer-id";
 import { multiaddr, type Multiaddr } from "@multiformats/multiaddr";
 import type { Connection, Stream } from "@libp2p/interface";
 import type { StreamMessageEvent, StreamCloseEvent } from "@libp2p/interface";
@@ -117,12 +117,17 @@ export class LibP2PTransport implements PeerTransport {
 
     if (privateKeyBytes) this.privateKeyBytes = privateKeyBytes;
 
-    const peerId = this.privateKeyBytes
-      ? await this.peerIdFromRawKey(this.privateKeyBytes)
+    // js-libp2p keys the node by `privateKey`; there is no `peerId` option any
+    // more. Passing one was silently ignored (an object spread hides the excess
+    // property from the typechecker), so every start generated a random key:
+    // the peerId no longer matched the user's identity, which broke the
+    // peerId -> did:key binding that presence, profiles and DM auth rely on.
+    const privateKey = this.privateKeyBytes
+      ? await this.privateKeyFromRawKey(this.privateKeyBytes)
       : undefined;
 
     this.node = await createLibp2p({
-      ...(peerId ? { peerId } : {}),
+      privateKey,
       addresses: { listen: ["/webrtc"] },
       transports: [
         webSockets(),
@@ -777,12 +782,8 @@ export class LibP2PTransport implements PeerTransport {
     else this.relayedPeers.add(peerId);
   }
 
-  private async peerIdFromRawKey(privateKeyBytes: Uint8Array) {
-    const privKey = await keys.generateKeyPairFromSeed(
-      "Ed25519",
-      privateKeyBytes
-    );
-    return peerIdFromPrivateKey(privKey);
+  private async privateKeyFromRawKey(privateKeyBytes: Uint8Array) {
+    return keys.generateKeyPairFromSeed("Ed25519", privateKeyBytes);
   }
 
   private emit<K extends keyof TransportEvents>(

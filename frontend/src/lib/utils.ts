@@ -46,8 +46,21 @@ export function decode(data: Uint8Array): unknown {
   return JSON.parse(new TextDecoder().decode(data));
 }
 
+/** Base64 raster image, no svg+xml: SVG can carry script and external refs. */
+const DATA_AVATAR_RE =
+  /^data:image\/(png|jpeg|jpg|gif|webp|avif);base64,[A-Za-z0-9+/]+=*$/;
+
+/** ~1.4 MB of base64, i.e. about a 1 MB image. */
+const MAX_DATA_AVATAR_LEN = 1_400_000;
+
 export function normalizeAvatarUrl(url: unknown): string | undefined {
   if (typeof url !== "string") return undefined;
+  // An avatar picked from the device is sent inline as a data: URL - rejecting
+  // those meant uploaded pictures never propagated to anyone, only linked ones.
+  if (url.startsWith("data:")) {
+    if (url.length > MAX_DATA_AVATAR_LEN) return undefined;
+    return DATA_AVATAR_RE.test(url) ? url : undefined;
+  }
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:")

@@ -124,6 +124,8 @@ interface TransportState {
   cameraOff: boolean;
   screenSharing: boolean;
   peerNames: Map<string, string>;
+  /** Bumped on every peer->DID mapping change; see peerIdToDid(). */
+  peerDidVersion: number;
   peerAvatars: Map<string, string>;
   error: string | null;
   callPeerIds: Set<string>;
@@ -160,6 +162,7 @@ export const transportState = $state<TransportState>({
   cameraOff: true,
   screenSharing: false,
   peerNames: new Map(),
+  peerDidVersion: 0,
   peerAvatars: new Map(),
   error: null,
   callPeerIds: new Set(),
@@ -183,6 +186,22 @@ let _connectPromise: Promise<void> | null = null;
 const BATCH_SIZE = 20;
 export const MAX_PERSISTED_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const _peerIdToDid = new Map<string, string>();
+
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  // Dev-only handle: presence and profile bugs are only reproducible with two
+  // real peers, and there is no other way to see this state from a test.
+  (window as unknown as Record<string, unknown>).__awful = {
+    state: transportState,
+    peerIdToDid: _peerIdToDid,
+  };
+}
+
+/** Mutate the peer->DID map through here so reactive readers are notified. */
+function _setPeerDid(peerId: string, did: string): void {
+  if (_peerIdToDid.get(peerId) === did) return;
+  _peerIdToDid.set(peerId, did);
+  transportState.peerDidVersion += 1;
+}
 const _seededByFingerprint = new Map<string, FileDescriptor>();
 
 export const _dtln = new DtlnProcessor();
@@ -454,7 +473,7 @@ function _handleProfile(peerId: string, msg: WireProfile): void {
   // identity and hijack their DM conversation / poison their cached profile.
   const did = didFromPeerId(peerId) ?? msg.did ?? peerId;
   const isNewMapping = _peerIdToDid.get(peerId) !== did;
-  _peerIdToDid.set(peerId, did);
+  _setPeerDid(peerId, did);
 
   // Queued DMs are keyed by DID, and the "connect" event fires before we
   // know the peer's DID - so the real flush happens here, once the profile
@@ -567,6 +586,7 @@ function _handleLeaveRoom(peerId: string): void {
   }
   // Clean up the peerId->DID mapping when user explicitly leaves
   _peerIdToDid.delete(peerId);
+  transportState.peerDidVersion += 1;
 }
 
 // A room's participant list is presence metadata, not a security boundary,
@@ -747,7 +767,7 @@ _transport.on("connect", (peerId) => {
   // The peer's DID is the SAME Ed25519 key as their authenticated libp2p
   // peerId, so bind it now (no need to wait for - or trust - a Profile).
   const authDid = didFromPeerId(peerId);
-  if (authDid) _peerIdToDid.set(peerId, authDid);
+  if (authDid) _setPeerDid(peerId, authDid);
   flushQueuedDmForPeer(peerId).catch(() => {});
   _fileTransport.onPeerConnect(peerId);
   _sendProfile(peerId);
@@ -1100,6 +1120,7 @@ function _disconnectWithoutBroadcasting(): void {
   leaveCall();
   _transport.disconnect();
   _peerIdToDid.clear();
+  transportState.peerDidVersion += 1;
   // disconnect() fully stops and nulls the libp2p node, so the relay
   // connection is gone too. Without clearing this flag, connect()/joinRoom()
   // short-circuit on the stale `relayConnected === true` and never rebuild
@@ -1371,10 +1392,15 @@ export function peerId(): string {
 }
 
 export function peerIdToDid(peerId: string): string {
-  return _peerIdToDid.get(peerId) ?? peerId;
+  // Reading the version makes callers inside $derived recompute when the map
+  // changes: the map itself is a plain Map, so a mapping learned after the
+  // "connect" event used to leave presence and profile lookups stale forever.
+  void transportState.peerDidVersion;
+  return _peerIdToDid.get(peerId) ?? didFromPeerId(peerId) ?? peerId;
 }
 
 export function didToPeerId(did: string): string | null {
+  void transportState.peerDidVersion;
   for (const [peerId, mappedDid] of _peerIdToDid) {
     if (mappedDid === did) return peerId;
   }

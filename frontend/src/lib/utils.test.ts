@@ -26,9 +26,28 @@ describe("normalizeAvatarUrl", () => {
     );
   });
 
-  it("rejects javascript: and data: urls", () => {
+  it("rejects javascript: and non-image data: urls", () => {
     expect(normalizeAvatarUrl("javascript:alert(1)")).toBeUndefined();
     expect(normalizeAvatarUrl("data:text/html,<script>")).toBeUndefined();
+  });
+
+  // An avatar picked from the device travels inline as a data: URL. Rejecting
+  // those meant uploaded pictures never reached anyone.
+  it("accepts base64 raster data: urls", () => {
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    expect(normalizeAvatarUrl(png)).toBe(png);
+    expect(normalizeAvatarUrl("data:image/jpeg;base64,AAAA")).toBe(
+      "data:image/jpeg;base64,AAAA"
+    );
+  });
+
+  it("rejects svg data: urls and oversized payloads", () => {
+    expect(
+      normalizeAvatarUrl("data:image/svg+xml;base64,PHN2Zz4=")
+    ).toBeUndefined();
+    expect(
+      normalizeAvatarUrl("data:image/png;base64," + "A".repeat(1_500_000))
+    ).toBeUndefined();
   });
 
   it("rejects non-strings and garbage", () => {
