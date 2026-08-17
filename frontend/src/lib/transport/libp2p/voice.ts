@@ -317,7 +317,18 @@ export class LibP2PVoice implements VoiceTransport {
       video: false,
     };
 
-    this.micStream = await navigator.mediaDevices.getUserMedia(constraints);
+    try {
+      this.micStream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      // The remembered mic may be unplugged by the time it is restored, and
+      // `deviceId: {exact}` makes that a hard failure - fall back to whatever
+      // the system offers rather than leaving the user with no audio at all.
+      if (!deviceId) throw err;
+      this.micStream = await navigator.mediaDevices.getUserMedia({
+        audio: useDtln ? AUDIO_CONSTRAINTS : AUDIO_CONSTRAINTS_NO_DTLN,
+        video: false,
+      });
+    }
     const track = this.micStream.getAudioTracks()[0];
     this.activeInputDevice = track.getSettings().deviceId ?? null;
 

@@ -1,4 +1,5 @@
 import { transportState } from "./transport.svelte";
+import { loadAudioPrefs, saveAudioPrefs } from "./audio-prefs";
 import type { LibP2PVoice } from "./libp2p/voice";
 import type { DtlnProcessor } from "../audio/dtln-processor";
 
@@ -56,6 +57,24 @@ export function initVoice(voice: LibP2PVoice, dtln: DtlnProcessor): void {
   _voice.on("error", (err) => {
     transportState.error = err.message;
   });
+
+  restoreVoicePrefs();
+}
+
+/**
+ * Re-apply the settings from the last session. Safe to run before any call:
+ * with no AudioContext yet these setters only record the preference, so
+ * nothing here asks for microphone access.
+ */
+function restoreVoicePrefs(): void {
+  const prefs = loadAudioPrefs();
+  const voice = getVoice();
+  voice.setInputGain(prefs.inputGain);
+  voice.setOutputVolume(prefs.outputVolume);
+  voice.setDtlnEnabled(prefs.dtlnEnabled);
+  getDtln().setNoiseGate(prefs.noiseGate);
+  if (prefs.inputDevice) voice.setInputDevice(prefs.inputDevice);
+  if (prefs.outputDevice) voice.setOutputDevice(prefs.outputDevice);
 }
 
 function getVoice(): LibP2PVoice {
@@ -70,6 +89,7 @@ function getDtln(): DtlnProcessor {
 }
 
 export async function setVoiceInputDevice(deviceId: string): Promise<void> {
+  saveAudioPrefs({ inputDevice: deviceId || null });
   await getVoice().setInputDevice(deviceId);
   transportState.localMicStream = getVoice().getMicStream();
 }
@@ -83,6 +103,7 @@ export function getVoiceActiveInputDevice(): string | null {
 }
 
 export function setVoiceInputGain(gain: number): void {
+  saveAudioPrefs({ inputGain: gain });
   getVoice().setInputGain(gain);
 }
 export function getVoiceInputGain(): number {
@@ -90,6 +111,7 @@ export function getVoiceInputGain(): number {
 }
 
 export async function setVoiceOutputDevice(deviceId: string): Promise<void> {
+  saveAudioPrefs({ outputDevice: deviceId || null });
   await getVoice().setOutputDevice(deviceId);
 }
 
@@ -103,6 +125,7 @@ export function getVoiceActiveOutputDevice(): string | null {
 
 export function setVoiceOutputVolume(volume: number): void {
   const next = Math.max(0, volume);
+  saveAudioPrefs({ outputVolume: next });
   if (!transportState.deafened) getVoice().setOutputVolume(next);
 }
 
@@ -111,10 +134,16 @@ export function getVoiceOutputVolume(): number {
 }
 
 export function setVoiceDtlnNoiseGate(threshold: number): void {
+  saveAudioPrefs({ noiseGate: threshold });
   getDtln().setNoiseGate(threshold);
 }
 
+export function getVoiceDtlnNoiseGate(): number {
+  return getDtln().getNoiseGate();
+}
+
 export function setVoiceDtlnEnabled(enabled: boolean): void {
+  saveAudioPrefs({ dtlnEnabled: enabled });
   getVoice().setDtlnEnabled(enabled);
 }
 

@@ -25,6 +25,7 @@
     getVoiceDtlnEnabled,
     setVoiceDtlnEnabled,
     setVoiceDtlnNoiseGate,
+    getVoiceDtlnNoiseGate,
   } from "$lib/transport/voice.svelte";
   import { setDeafened, toggleMute } from "$lib/transport/call.svelte";
 
@@ -46,8 +47,9 @@
   let activeOutput = $state<string | null>(null);
 
   let dtlnEnabled = $state(getVoiceDtlnEnabled());
-  let noiseGateThreshold = $state(0.002);
-  let noiseGateSlider = $state<number[]>([0.002 * 10000]);
+  // Restored from the last session, not a fresh default.
+  let noiseGateThreshold = $state(getVoiceDtlnNoiseGate());
+  let noiseGateSlider = $state<number[]>([getVoiceDtlnNoiseGate() * 10000]);
 
   let isMicTesting = $state(false);
   // Distinct from isMicTesting: set only during async startup so a second

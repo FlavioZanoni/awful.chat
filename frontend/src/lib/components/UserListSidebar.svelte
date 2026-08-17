@@ -18,6 +18,7 @@
   import { UserPlus, UserRoundMinus, Users, Workflow } from "@lucide/svelte";
   import { roomsStore, refreshPhonebook } from "$lib/rooms.svelte";
   import { Badge } from "$lib/components/ui/badge";
+  import { Tip } from "$lib/components/ui/tooltip";
   import { ScrollArea } from "$lib/components/ui/scroll-area";
   import {
     Drawer,
@@ -263,7 +264,20 @@
       >
         {user.isSelf ? `${user.name} (You)` : user.name}
         {#if user.isRelayed}
-          <Workflow class="size-3 text-blue-500 shrink-0" />
+          <Tip
+            text="Relayed: this person could not be reached directly, so the connection hops through the relay server. It stays encrypted end to end, the relay only passes the bytes along, but expect a little more latency."
+          >
+            {#snippet children(props)}
+              <button
+                {...props}
+                type="button"
+                aria-label="Relayed connection"
+                class="inline-flex shrink-0 cursor-help"
+              >
+                <Workflow class="size-3 text-blue-500" />
+              </button>
+            {/snippet}
+          </Tip>
         {/if}
       </div>
       <div class="text-xs text-muted-foreground truncate">

@@ -10,6 +10,7 @@ export class DtlnProcessor {
   private readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private initializing = false;
+  private noiseGate = 0.002;
 
   // Two independent graphs share the single DTLN worklet node:
   //
@@ -71,6 +72,7 @@ export class DtlnProcessor {
     });
 
     this.ready = true;
+    this.workletNode.port.postMessage({ noise_gate: this.noiseGate });
     this.resolveReady();
   }
 
@@ -101,7 +103,14 @@ export class DtlnProcessor {
   }
 
   setNoiseGate(threshold: number): void {
+    // Remembered so a threshold set before the worklet exists (restored on
+    // startup, while init() is still running) is not silently dropped.
+    this.noiseGate = threshold;
     this.workletNode?.port.postMessage({ noise_gate: threshold });
+  }
+
+  getNoiseGate(): number {
+    return this.noiseGate;
   }
 
   // connect a mic stream through DTLN, returns the processed MediaStream
