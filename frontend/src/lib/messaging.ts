@@ -82,6 +82,43 @@ export function signMessage(message: Message): Message {
 }
 
 /**
+ * The exact string a peer signs to prove that a did:key controls a libp2p
+ * peerId. Domain separated so a binding proof can never be replayed as a
+ * signature over anything else.
+ */
+export function peerBindingContent(did: string, peerId: string): string {
+  return `awful:peer-binding:v1:${did}:${peerId}`;
+}
+
+/**
+ * Prove that this identity owns the given libp2p peerId.
+ * @throws If the identity is locked.
+ */
+export function signPeerBinding(peerId: string): {
+  did: string;
+  bindingSig: string;
+} {
+  const { privateKey, did } = requireSession();
+  const sig = ed25519.sign(utf8(peerBindingContent(did, peerId)), privateKey);
+  return { did, bindingSig: hex(sig) };
+}
+
+/**
+ * Verify a peer's claim that `did` owns `peerId`.
+ * The caller must pass the peerId of the *authenticated* connection the claim
+ * arrived on - noise already proved the sender holds that peerId's key, so a
+ * valid signature over it is what ties the two identities together.
+ */
+export async function verifyPeerBinding(
+  did: string,
+  peerId: string,
+  bindingSig: string
+): Promise<boolean> {
+  if (!did || !peerId || !bindingSig) return false;
+  return verifySignature(did, bindingSig, peerBindingContent(did, peerId));
+}
+
+/**
  * Verify an ed25519 signature over a canonical content string.
  * Pure function - does not require an unlocked session.
  * Returns false (never throws) on any verification failure.

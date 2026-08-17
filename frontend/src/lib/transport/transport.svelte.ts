@@ -49,12 +49,15 @@ import { refreshTurnCredentials } from "./ice-server-list";
 import { LibP2PVoice } from "./libp2p/voice";
 import { DtlnProcessor } from "../audio/dtln-processor";
 import { requireSession } from "../identity/identity";
+import { deviceKeySeed } from "./device-key";
+import { looksLikeDid, looksLikePeerId } from "../identity/identity-utils";
 import {
-  didFromPeerId,
-  looksLikeDid,
-  looksLikePeerId,
-} from "../identity/identity-utils";
-import { canonicalFor, signMessage, verifySignature } from "../messaging";
+  canonicalFor,
+  signMessage,
+  signPeerBinding,
+  verifyPeerBinding,
+  verifySignature,
+} from "../messaging";
 import { encode, decode, normalizeAvatarUrl } from "../utils";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
 import {
@@ -193,6 +196,7 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__awful = {
     state: transportState,
     peerIdToDid: _peerIdToDid,
+    selfId: () => _transport.selfId(),
   };
 }
 
@@ -279,7 +283,22 @@ async function _sendProfile(peerId?: string): Promise<void> {
     avatarUrl = `data:image/jpeg;base64,${btoa(binary)}`;
   }
 
-  const payload = encode({ type: MessageType.Profile, name, did, avatarUrl });
+  // Prove this DID owns our peerId; the receiver cannot derive it any more.
+  let binding: { did: string; bindingSig: string } | null = null;
+  try {
+    binding = signPeerBinding(_transport.selfId());
+  } catch {
+    binding = null; // identity locked: the peer just will not bind us yet
+  }
+
+  const payload = encode({
+    type: MessageType.Profile,
+    name,
+    did,
+    avatarUrl,
+    peerId: _transport.selfId(),
+    bindingSig: binding?.bindingSig,
+  });
 
   if (peerId) {
     _transport.send(peerId, payload);
@@ -467,11 +486,19 @@ function _handleSyncComplete(peerId: string): void {
 
 // ── Message handlers ──────────────────────────────────────────────────────────
 
-function _handleProfile(peerId: string, msg: WireProfile): void {
-  // Trust the DID derived from the authenticated peerId, NOT the (unsigned,
-  // spoofable) `did` field - otherwise any peer could claim someone else's
-  // identity and hijack their DM conversation / poison their cached profile.
-  const did = didFromPeerId(peerId) ?? msg.did ?? peerId;
+async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
+  // Bind the DID to the peerId only on a signature over THIS connection's
+  // peerId. The `did` field on its own is spoofable, and any peer could
+  // otherwise claim someone else's identity and hijack their DM conversation
+  // or poison their cached profile.
+  const claimed = msg.did;
+  const proven =
+    claimed &&
+    msg.peerId === peerId &&
+    msg.bindingSig &&
+    (await verifyPeerBinding(claimed, peerId, msg.bindingSig));
+  if (!proven) return;
+  const did = claimed as string;
   const isNewMapping = _peerIdToDid.get(peerId) !== did;
   _setPeerDid(peerId, did);
 
@@ -764,10 +791,8 @@ _transport.on("status", (status) => {
 
 _transport.on("connect", (peerId) => {
   transportState.peers = _transport.peers();
-  // The peer's DID is the SAME Ed25519 key as their authenticated libp2p
-  // peerId, so bind it now (no need to wait for - or trust - a Profile).
-  const authDid = didFromPeerId(peerId);
-  if (authDid) _setPeerDid(peerId, authDid);
+  // The DID cannot be derived from the peerId any more (devices carry their
+  // own libp2p keys); it arrives with the signed binding in the Profile.
   flushQueuedDmForPeer(peerId).catch(() => {});
   _fileTransport.onPeerConnect(peerId);
   _sendProfile(peerId);
@@ -1017,7 +1042,9 @@ export async function connect() {
 
   _connectPromise = (async () => {
     try {
-      await _transport.connect(requireSession().privateKey);
+      // This device's own libp2p key, NOT the identity key: two devices on the
+      // same account would otherwise share a peerId and never connect.
+      await _transport.connect(deviceKeySeed());
       transportState.relayConnected = true;
       transportState.error = null;
       _connectRetryDelay = CONNECT_RETRY_BASE_MS;
@@ -1396,7 +1423,7 @@ export function peerIdToDid(peerId: string): string {
   // changes: the map itself is a plain Map, so a mapping learned after the
   // "connect" event used to leave presence and profile lookups stale forever.
   void transportState.peerDidVersion;
-  return _peerIdToDid.get(peerId) ?? didFromPeerId(peerId) ?? peerId;
+  return _peerIdToDid.get(peerId) ?? peerId;
 }
 
 export function didToPeerId(did: string): string | null {

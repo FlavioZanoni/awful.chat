@@ -19,6 +19,7 @@
   import { roomsStore, refreshPhonebook } from "$lib/rooms.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Tip } from "$lib/components/ui/tooltip";
+  import { RELAY_TIP } from "$lib/copy";
   import { ScrollArea } from "$lib/components/ui/scroll-area";
   import {
     Drawer,
@@ -264,9 +265,7 @@
       >
         {user.isSelf ? `${user.name} (You)` : user.name}
         {#if user.isRelayed}
-          <Tip
-            text="Relayed: this person could not be reached directly, so the connection hops through the relay server. It stays encrypted end to end, the relay only passes the bytes along, but expect a little more latency."
-          >
+          <Tip text={RELAY_TIP}>
             {#snippet children(props)}
               <button
                 {...props}

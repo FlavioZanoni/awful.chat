@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { Tip } from "$lib/components/ui/tooltip";
+  import { RELAY_TIP } from "$lib/copy";
   import {
     transportState,
     selfId,
@@ -671,8 +673,22 @@
               ? `${tile.label} (You)`
               : tile.label}
         </span>
-        {#if !tile.isLocal && tile.kind === "camera" && isRelayed(tile.peerId)}
-          <Workflow class="size-3 text-blue-400 ml-1" />
+        {#if !tile.isLocal && isRelayed(tile.peerId)}
+          <!-- pointer-events-auto: the badge itself ignores the pointer so it
+               does not swallow clicks on the tile, but the tooltip needs the
+               hover. -->
+          <Tip text={RELAY_TIP} side="top">
+            {#snippet children(props)}
+              <button
+                {...props}
+                type="button"
+                aria-label="Relayed connection"
+                class="pointer-events-auto ml-1 inline-flex cursor-help"
+              >
+                <Workflow class="size-3 text-blue-400" />
+              </button>
+            {/snippet}
+          </Tip>
         {/if}
       </div>
     {/if}
@@ -702,11 +718,18 @@
               {label.charAt(0).toUpperCase()}
             {/if}
             {#if relayed}
-              <div
-                class="absolute -top-1 -right-1 bg-blue-500 rounded-full p-0.5"
-              >
-                <Workflow class="size-3 text-white" />
-              </div>
+              <Tip text={RELAY_TIP} side="top">
+                {#snippet children(props)}
+                  <button
+                    {...props}
+                    type="button"
+                    aria-label="Relayed connection"
+                    class="absolute -top-1 -right-1 cursor-help rounded-full bg-blue-500 p-0.5"
+                  >
+                    <Workflow class="size-3 text-white" />
+                  </button>
+                {/snippet}
+              </Tip>
             {/if}
 
             {#if state?.muted || state?.deafened}

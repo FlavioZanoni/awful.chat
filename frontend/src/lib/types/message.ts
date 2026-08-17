@@ -132,6 +132,14 @@ export interface WireProfile {
   name: string;
   did: string | null;
   avatarUrl: string | null;
+  /**
+   * Proof that `did` owns the libp2p peerId this arrived from: the sender's
+   * peerId, signed by the identity key behind `did`. The peerId can no longer
+   * be derived from the DID (devices have their own libp2p keys), so the
+   * binding has to be proven instead of computed.
+   */
+  peerId?: string;
+  bindingSig?: string;
 }
 
 export interface WireCallPresence {
