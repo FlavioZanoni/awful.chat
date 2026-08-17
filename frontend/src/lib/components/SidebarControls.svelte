@@ -36,6 +36,21 @@
     loadProfile();
   });
 
+  // Manifest shortcut: long-press the installed icon > "Pair a device".
+  $effect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("sync") !== "1") return;
+    syncFlowMode = "generate-qr";
+    syncDialogOpen = true;
+    params.delete("sync");
+    const query = params.toString();
+    history.replaceState(
+      {},
+      "",
+      window.location.pathname + (query ? `?${query}` : "")
+    );
+  });
+
   const initial = $derived(
     (profileStore.nickname || "?").charAt(0).toUpperCase()
   );

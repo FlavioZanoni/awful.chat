@@ -1,6 +1,7 @@
 <script lang="ts">
   import { QueryClient, QueryClientProvider } from "@tanstack/svelte-query";
   import { identityStore } from "$lib/identity/identity.svelte";
+  import { setBadge } from "$lib/notify.svelte";
   import IdentitySetup from "$lib/components/IdentitySetup.svelte";
   import UnlockIdentity from "$lib/components/UnlockIdentity.svelte";
   import RoomCreateJoin from "$lib/components/RoomCreateJoin.svelte";
@@ -110,6 +111,15 @@
   const dmUnreadTotal = $derived(
     [...dmUnread.values()].reduce((sum, n) => sum + n, 0)
   );
+
+  // Mirror everything unread onto the installed app icon.
+  $effect(() => {
+    const rooms = [...roomsStore.unreadCounts.values()].reduce(
+      (sum, n) => sum + n,
+      0
+    );
+    setBadge(rooms + dmUnreadTotal);
+  });
   const dmLatestByPeer = $derived.by(() => {
     const byPeer = new Map<
       string,
@@ -332,6 +342,22 @@
   function openCreateJoin() {
     createJoinOpen = true;
   }
+
+  // Manifest shortcut: long-press the installed icon > "New room".
+  // The param is stripped so a later reload does not reopen the dialog.
+  $effect(() => {
+    if (!identityStore.isUnlocked) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("new") !== "1") return;
+    createJoinOpen = true;
+    params.delete("new");
+    const query = params.toString();
+    history.replaceState(
+      {},
+      "",
+      window.location.pathname + (query ? `?${query}` : "")
+    );
+  });
 
   async function handleJoinFromModal(
     roomCode: string,

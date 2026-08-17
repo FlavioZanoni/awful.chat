@@ -79,6 +79,7 @@ import {
 } from "./files.svelte";
 import { initVoice } from "./voice.svelte";
 import { initTransmission } from "./transmission.svelte";
+import { notifyMessage } from "../notify.svelte";
 
 export type { Message };
 
@@ -631,6 +632,20 @@ function _handleChatMessage(
     transportState.dmVersion += 1;
   }
 
+  // Reactions are noise as notifications, and a message replayed by sync is
+  // not news - only announce genuinely new chat arriving from someone else.
+  if (
+    isNewMessage &&
+    msg.type !== MessageType.Reaction &&
+    msg.senderId !== (identityStore.did ?? _transport.selfId())
+  ) {
+    notifyMessage({
+      title: transportState.roomName || msg.roomCode,
+      body: `${msg.senderName}: ${msg.content || "[file]"}`,
+      tag: `room:${msg.roomCode}`,
+    });
+  }
+
   if (
     isNewMessage &&
     transportState.chatMode === "room" &&
@@ -803,6 +818,11 @@ _transport.on("message", (peerId, data, room) => {
           await putMessage(msg);
           await refreshDmRooms();
           transportState.dmVersion += 1;
+          notifyMessage({
+            title: msg.senderName,
+            body: msg.content,
+            tag: `dm:${roomCode}`,
+          });
           const activeDid = peerIdToDid(transportState.activeDmPeerId ?? "");
           const isViewingThisDm =
             transportState.chatMode === "dm" &&

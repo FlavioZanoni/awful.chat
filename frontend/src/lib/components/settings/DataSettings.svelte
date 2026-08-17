@@ -4,6 +4,7 @@
   import {
     wipeLocalDatabase,
     getStorageMetrics,
+    requestPersistentStorage,
     type StorageMetrics,
   } from "$lib/storage";
   import {
@@ -14,6 +15,8 @@
     Database,
     Download,
     Upload,
+    ShieldCheck,
+    ShieldAlert,
   } from "@lucide/svelte";
   import {
     downloadBackup,
@@ -54,6 +57,18 @@
       sizes.length - 1
     );
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  }
+
+  let persistBusy = $state(false);
+
+  async function handleRequestPersist() {
+    persistBusy = true;
+    try {
+      const granted = await requestPersistentStorage();
+      if (metrics) metrics = { ...metrics, persisted: granted };
+    } finally {
+      persistBusy = false;
+    }
   }
 
   async function handleEraseLocalData() {
@@ -180,6 +195,35 @@
               {metrics.totalAttachments.toLocaleString()}
             </p>
           </div>
+        </div>
+
+        <!-- Eviction protection -->
+        <div class="bg-muted/50 rounded-lg p-3 flex flex-col gap-2">
+          <div class="flex items-center gap-2">
+            {#if metrics.persisted}
+              <ShieldCheck class="w-4 h-4 text-primary shrink-0" />
+            {:else}
+              <ShieldAlert class="w-4 h-4 text-amber-500 shrink-0" />
+            {/if}
+            <span class="text-xs font-mono">
+              {metrics.persisted ? "Storage is protected" : "Storage can be evicted"}
+            </span>
+          </div>
+          <p class="text-xs font-mono text-muted-foreground leading-relaxed">
+            {metrics.persisted
+              ? "The browser has agreed not to clear this data on its own. Erasing site data or uninstalling still wipes it."
+              : "The browser may clear this data when the device runs low on space, and there is no server copy to restore from."}
+          </p>
+          {#if !metrics.persisted}
+            <Button
+              variant="outline"
+              class="font-mono text-xs"
+              disabled={persistBusy}
+              onclick={handleRequestPersist}
+            >
+              Ask the browser to keep it
+            </Button>
+          {/if}
         </div>
 
         <!-- Storage Size Card -->

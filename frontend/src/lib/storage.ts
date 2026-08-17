@@ -749,7 +749,37 @@ export async function wipeLocalDatabase(): Promise<void> {
   await deleteDB("awful-chat");
 }
 
+/**
+ * Ask the browser to keep this origin's data out of automatic eviction.
+ *
+ * This app has no server copy: everything you own lives in IndexedDB here, so
+ * eviction under storage pressure means losing your identity and history. Safe
+ * to call repeatedly. Chrome grants it silently based on engagement/install,
+ * Firefox may prompt, and unsupported browsers just report false.
+ */
+export async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    if (!navigator.storage?.persist) return false;
+    if (await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch {
+    return false;
+  }
+}
+
+export async function isStoragePersisted(): Promise<boolean> {
+  try {
+    return (await navigator.storage?.persisted?.()) ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export interface StorageMetrics {
+  /** True when the browser promised not to evict this origin's data. */
+  persisted: boolean;
+  /** Bytes the browser is willing to give this origin, when it reports one. */
+  quota: number | null;
   totalMessages: number;
   totalRooms: number;
   totalProfiles: number;
@@ -787,7 +817,16 @@ export async function getStorageMetrics(): Promise<StorageMetrics> {
     })
     .sort((a, b) => b.messageCount - a.messageCount);
 
+  let quota: number | null = null;
+  try {
+    quota = (await navigator.storage?.estimate?.())?.quota ?? null;
+  } catch {
+    quota = null;
+  }
+
   return {
+    persisted: await isStoragePersisted(),
+    quota,
     totalMessages: messages.length,
     totalRooms: rooms.length,
     totalProfiles: profiles.length,

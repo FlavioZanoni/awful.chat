@@ -15,6 +15,17 @@
     <meta name="theme-color" content="#09090b" />
     <meta name="robots" content="index, follow" />
 
+    <!-- Installed-app behaviour. iOS still reads the apple-prefixed pair, and
+         black-translucent lets the app paint under the status bar (index.html
+         already sets viewport-fit=cover for the safe-area insets). -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="apple-mobile-web-app-title" content="Awful.chat" />
+
     <!-- Open Graph -->
     <meta
       property="og:title"

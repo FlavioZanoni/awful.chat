@@ -46,6 +46,33 @@ export function _sendCallPresence(peerId?: string): void {
   else _transport.broadcast(payload, transportState.roomCode!);
 }
 
+// Keep the screen awake for the duration of a call. The browser drops the lock
+// whenever the page is hidden, so re-take it when the user comes back.
+let _wakeLock: WakeLockSentinel | null = null;
+
+async function acquireWakeLock(): Promise<void> {
+  try {
+    if (!("wakeLock" in navigator) || _wakeLock) return;
+    _wakeLock = await navigator.wakeLock.request("screen");
+    _wakeLock.addEventListener("release", () => {
+      _wakeLock = null;
+    });
+  } catch {
+    // Denied or unsupported - a call without a wake lock still works.
+  }
+}
+
+function releaseWakeLock(): void {
+  _wakeLock?.release().catch(() => {});
+  _wakeLock = null;
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && transportState.inCall) acquireWakeLock();
+  });
+}
+
 export async function joinCall(): Promise<void> {
   transportState.error = null;
   try {
@@ -57,12 +84,14 @@ export async function joinCall(): Promise<void> {
     await _video.join(transportState.roomCode ?? "", _transport.selfId());
     transportState.inCall = true;
     transportState.callRoomCode = transportState.roomCode; // Track which room the call is in
+    acquireWakeLock();
     playJoinSound();
     _sendCallPresence();
     transportState.muted = _voice.isMuted();
     _sendCallState();
     transportState.localMicStream = _voice.getMicStream();
   } catch (err) {
+    releaseWakeLock();
     _voice.leave();
     _video.leave();
     transportState.inCall = false;
@@ -79,6 +108,7 @@ export async function joinCall(): Promise<void> {
 }
 
 export function leaveCall(): void {
+  releaseWakeLock();
   if (transportState.inCall) {
     playLeaveSound();
     transportState.inCall = false;

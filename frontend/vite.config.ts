@@ -23,7 +23,15 @@ export default defineConfig(({ mode }) => ({
       srcDir: "src",
       filename: "sw.ts",
       injectManifest: {
-        maximumFileSizeToCacheInBytes: 23 * 1024 * 1024,
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        // Keep the install payload small. These are cached at runtime by sw.ts
+        // the first time they are used instead of being downloaded up front on
+        // every install and every update.
+        globIgnores: [
+          "**/node_modules/**/*",
+          "assets/langs/**", // ~300 shiki language chunks, ~8 MB
+          "audio-worklet.js", // DTLN wasm, ~8 MB
+        ],
       },
       includeAssets: ["favicon.ico", "apple-touch-icon-180x180.png"],
       manifest: {
@@ -36,7 +44,9 @@ export default defineConfig(({ mode }) => ({
         start_url: "/app",
         display: "standalone",
         background_color: "#09090b",
-        theme_color: "#00ff88",
+        // Matches the <meta name="theme-color"> in index.html - a green chrome
+        // around a near-black app looked like a rendering bug.
+        theme_color: "#09090b",
         lang: "en",
         icons: [
           {
@@ -62,8 +72,47 @@ export default defineConfig(({ mode }) => ({
           },
         ],
         dir: "ltr",
-        orientation: "portrait",
+        // No orientation lock: video calls and screen share are usable in
+        // landscape, and locking to portrait fought the user on tablets.
+        display_override: ["standalone", "minimal-ui"],
         categories: ["entertainment", "social"],
+        // Android shows the richer install dialog only when both form factors
+        // are present.
+        screenshots: [
+          {
+            src: "screenshot-wide.png",
+            sizes: "1280x800",
+            type: "image/png",
+            form_factor: "wide",
+            label: "A room in Awful.chat on desktop",
+          },
+          {
+            src: "screenshot-narrow.png",
+            sizes: "412x892",
+            type: "image/png",
+            form_factor: "narrow",
+            label: "A room in Awful.chat on mobile",
+          },
+        ],
+        // Share targets and web+awfl links should surface the running app
+        // instead of opening a second copy of it.
+        launch_handler: { client_mode: ["navigate-existing", "auto"] },
+        shortcuts: [
+          {
+            name: "New room",
+            short_name: "New room",
+            description: "Create or join a room",
+            url: "/app?new=1",
+            icons: [{ src: "pwa-192x192.png", sizes: "192x192" }],
+          },
+          {
+            name: "Pair a device",
+            short_name: "Pair",
+            description: "Sync this account to another device",
+            url: "/app?sync=1",
+            icons: [{ src: "pwa-192x192.png", sizes: "192x192" }],
+          },
+        ],
         share_target: {
           action: "/share-target",
           method: "POST",
@@ -100,7 +149,15 @@ export default defineConfig(({ mode }) => ({
     rollupOptions: {
       output: {
         entryFileNames: "assets/[name]-[hash].js",
-        chunkFileNames: "assets/[name]-[hash].js",
+        // Shiki ships one chunk per language. Park them in their own directory
+        // so the service worker can leave them out of the precache and fetch
+        // them on demand (see globIgnores above).
+        chunkFileNames: (chunk) =>
+          /[\\/](@shikijs[\\/]langs|shiki[\\/]dist[\\/]langs)[\\/]/.test(
+            chunk.facadeModuleId ?? ""
+          )
+            ? "assets/langs/[name]-[hash].js"
+            : "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash].[ext]",
       },
     },

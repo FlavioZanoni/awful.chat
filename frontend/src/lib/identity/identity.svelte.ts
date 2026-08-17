@@ -27,7 +27,7 @@ import {
   unlockWithWebAuthn,
   getWebAuthnCapabilities,
 } from "./identity";
-import { deleteWebAuthnRecord } from "../storage";
+import { deleteWebAuthnRecord, requestPersistentStorage } from "../storage";
 
 interface IdentityStore {
   /** True when the private key is held in memory and signing is available. */
@@ -67,6 +67,8 @@ function setUnlocked(keypair: KeypairRecord): void {
   identityStore.publicKey = keypair.publicKey;
   identityStore.keypair = keypair;
   identityStore.error = null;
+  // There is no server copy of any of this, so ask the browser not to evict it.
+  requestPersistentStorage().catch(() => {});
 }
 
 function setLocked(): void {

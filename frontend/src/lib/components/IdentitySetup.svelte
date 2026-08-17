@@ -17,6 +17,7 @@
   import { enroll } from "$lib/identity/identity.svelte";
   import { ArrowLeft, Smartphone, Info } from "@lucide/svelte";
   import { saveRememberedPassword } from "$lib/identity/remembered-password";
+  import { requestPersistentStorage } from "$lib/storage";
   import DeviceSyncDialog from "$lib/components/DeviceSyncDialog.svelte";
   import QuirksNotice from "$lib/components/QuirksNotice.svelte";
   import {
@@ -161,6 +162,8 @@
 
   async function finalizeSession() {
     if (!pendingKeypair) return;
+    // New identity: nothing is stored anywhere else, so ask for persistence.
+    requestPersistentStorage().catch(() => {});
     identityStore.isUnlocked = true;
     identityStore.did = pendingKeypair.did;
     identityStore.publicKey = pendingKeypair.publicKey;
