@@ -263,7 +263,9 @@ interface WireChatMessage {
 }
 
 // presence - wire only
-interface WireProfile      { type: MessageType.Profile;      name: string; did: string | null; avatarUrl: string | null }
+interface WireProfile      { type: MessageType.Profile;      name: string; did: string | null; avatarUrl: string | null
+                             // proof that `did` owns the sending peerId, see Peer Identity Binding
+                             peerId?: string; bindingSig?: string }
 interface WireCallPresence { type: MessageType.CallPresence; inCall: boolean }
 interface WireRoomName     { type: MessageType.RoomName;     name: string }
 
@@ -431,6 +433,48 @@ const canonicalV2 = JSON.stringify([id, senderId, lamport, content,
 // verify with pubkey decoded from senderDid (did:key); senderDid must
 // equal senderId when senderId is a did:key
 ```
+
+### Peer Identity Binding
+
+A device's libp2p key is NOT its identity key. Devices signed into the same
+account share one did:key, and deriving the peerId from it gave them all the
+same peerId: a relay reservation is per peerId and a node refuses to dial its
+own, so only one device could ever connect.
+
+```txt
+identity key  ed25519 from the BIP39 mnemonic. Same on every device. Signs
+              messages, owns the did:key.
+device key    32 random bytes, generated once per device and kept in
+              localStorage (NOT IndexedDB - device sync copies IDB sections
+              across, which would hand the key to the other device and put
+              the peerId collision back). Seeds the libp2p peerId.
+```
+
+Because the DID can no longer be computed from a peerId, the link is proven:
+
+```typescript
+// signed by the identity key, sent on the Profile message
+content = `awful:peer-binding:v1:${did}:${peerId}`
+bindingSig = hex(ed25519.sign(utf8(content), identityPrivateKey))
+```
+
+The receiver binds `peerId -> did` only when ALL of these hold:
+
+```txt
+1. msg.peerId equals the peerId of the connection it arrived on
+2. bindingSig verifies against the pubkey decoded from msg.did
+3. both fields are present
+```
+
+Otherwise the profile is dropped, name and avatar included. Noise has already
+proven the sender holds the private key for that peerId, so a signature over
+that same peerId ties the two identities together: replaying somebody else's
+binding fails check 1, and forging one fails check 2. A peerId is never turned
+into a DID by guesswork - an unbound peer keeps showing as its peerId rather
+than being attributed to an identity that may not be theirs.
+
+Mixed versions do not interoperate: a client from before this change computes
+DIDs from peerIds and reads the wrong identity for anyone running the new one.
 
 ---
 
@@ -661,7 +705,7 @@ async function _queueSync(peerId: string): Promise<void> {
 }
 ```
 
-**Tradeoff:** Adds latency on join - you wait for the first peer's full push before starting with the second. For small rooms (2–5 peers) with modest history, parallel is faster and the duplicate data is negligible. Sequential only pays off with larger rooms or large histories where duplicate transmission is significant.
+**Tradeoff:** Adds latency on join - you wait for the first peer's full push before starting with the second. For small rooms (2 to 5 peers) with modest history, parallel is faster and the duplicate data is negligible. Sequential only pays off with larger rooms or large histories where duplicate transmission is significant.
 
 **Current behavior:** Parallel. Each peer connection runs an independent digest/push cycle. Duplicate data in flight is bounded to messages missing at join time, sent once per already-connected peer.
 

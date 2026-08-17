@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="frontend/public/pwa-192x192.png" alt="awful.chat" width="120" height="120">
+</p>
+
 # awful.chat
 
 Privacy-focused P2P chat with voice, video, and file sharing. No accounts,
@@ -21,10 +25,21 @@ coturn      TURN server for voice fallback (compose only, stock image)
   read ack), offline queue in localStorage, retried when the peer comes online.
 - **Voice** - P2P WebRTC (never touches the SFU).
 - **Video / screen** - mediasoup SFU, opt-in "click to watch" transmissions.
-- **Files** - WebTorrent over the libp2p data channel; <5 MB attachments are
-  also persisted in IndexedDB and re-seeded.
+  Unlike everything else here, this media is NOT end to end encrypted: the SFU
+  decrypts it to route it, so whoever runs that server can see it. Text, DMs,
+  files and voice never touch it.
+- **Files** - WebTorrent between browsers over their own WebRTC connections,
+  signalled through libp2p. There are no trackers: peers are introduced by the
+  people already in the room. <5 MB attachments are also persisted in
+  IndexedDB and re-seeded.
 - **Identity** - BIP39 mnemonic → ed25519 → did:key, encrypted at rest,
-  optional WebAuthn (biometric) unlock, QR device sync.
+  optional WebAuthn (biometric) unlock, QR device sync. Each device has its
+  own libp2p key, separate from the identity key, so several devices can be
+  signed into one account at once; a peer proves which did:key is behind its
+  peerId by signing it (see `docs/spec.md`).
+- **Offline** - installable PWA. The app shell, your history and your queued
+  messages are on the device, so it opens and reads with no network; sending
+  waits for peers.
 
 ## Development
 
@@ -44,9 +59,10 @@ cd sfu && npm install && npm start
 ## Tests & checks
 
 ```sh
-cd frontend && pnpm test    # vitest (crypto, dm codec, storage, wire types)
+cd frontend && pnpm test    # vitest (crypto, peer auth, dm codec, storage,
+                            # wire types, audio, volume curve)
 cd frontend && pnpm check   # svelte-check + tsc
-cd relay && go test ./...   # rendezvous registry
+cd relay && go test ./...   # rendezvous registry + TURN credentials
 ```
 
 ## Deploy
