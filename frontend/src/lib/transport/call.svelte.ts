@@ -137,8 +137,15 @@ export function leaveCall(): void {
 
 export function toggleMute(): void {
   if (_voice.isMuted()) {
-    _voice.unmute();
-    playUnmuteSound();
+    // Deafening mutes the mic too, so unmuting while deafened would leave you
+    // talking to people you cannot hear. Lift the deafen as well.
+    const wasDeafened = transportState.deafened;
+    if (wasDeafened) setDeafened(false);
+    // setDeafened restores the mute state from before the deafen, which can
+    // leave the mic muted - unmuting is what was actually asked for.
+    if (_voice.isMuted()) _voice.unmute();
+    // The undeafen sound already played; two cues back to back is noise.
+    if (!wasDeafened) playUnmuteSound();
   } else {
     _voice.mute();
     playMuteSound();
