@@ -529,6 +529,16 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
   if (isNewMapping) {
     flushQueuedDmForPeer(peerId).catch(() => {});
     _replayPendingDm(peerId, did);
+    // Answer with our own profile.
+    //
+    // A profile is otherwise only sent when the "connect" event fires. After
+    // one side reloads, the other side often still has the connection open and
+    // never sees a new connect, so it never re-sends - leaving the reloaded
+    // peer with no DID for it: shown offline, no name, no avatar, while voice
+    // and gossipsub carry on working over the connection that was never lost.
+    // Replying here makes the exchange mutual whoever starts it. It settles
+    // after one extra round, since the reply only fires on a NEW mapping.
+    _sendProfile(peerId);
   }
 
   const avatarUrl = normalizeAvatarUrl(msg.avatarUrl);

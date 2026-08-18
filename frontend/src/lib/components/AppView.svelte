@@ -432,7 +432,11 @@
           inPhonebook: !!pb,
         });
       }
-      if (!dmPreviews.has(peerId) && data.text) {
+      // Keep the newest: this used to fill a gap only when nothing was set
+      // yet, which pinned the preview to whichever message happened to land
+      // first and never moved it again.
+      const seen = dmPreviews.get(peerId);
+      if (data.text && (!seen || data.ts >= seen.ts)) {
         dmPreviews.set(peerId, { text: data.text, ts: data.ts });
       }
     }
@@ -548,13 +552,19 @@
           profile?.pfpURL ||
           null;
 
+        // A DM room is created as soon as somebody is added to the phonebook,
+        // so listing every room turned the DMs tab into a copy of the contact
+        // list. Only conversations that have been spoken in belong here; the
+        // rest are reachable through the phonebook.
+        if (!last) continue;
+
         nextInbox.set(room.roomCode, {
           roomCode: room.roomCode,
           peerId,
           nickname,
           avatarUrl,
-          ts: last?.timestamp ?? room.createdAt,
-          text: last?.content || (last?.type === "file" ? "[file]" : ""),
+          ts: last.timestamp,
+          text: last.content || (last.type === "file" ? "[file]" : "(message)"),
         });
 
         if (last) {
