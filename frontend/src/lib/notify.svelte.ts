@@ -33,6 +33,17 @@ if (typeof window !== "undefined") {
       notifyState.permission === "granted";
     notifyState.soundsEnabled = localStorage.getItem(SOUND_PREF_KEY) !== "0";
   } catch {}
+
+  // A second tab flipping a switch should be reflected here, not fought.
+  window.addEventListener("storage", (e) => {
+    if (e.key === SOUND_PREF_KEY) {
+      notifyState.soundsEnabled = e.newValue !== "0";
+    }
+    if (e.key === PREF_KEY) {
+      notifyState.enabled =
+        e.newValue === "1" && notifyState.permission === "granted";
+    }
+  });
 }
 
 export function setMessageSoundsEnabled(on: boolean): void {

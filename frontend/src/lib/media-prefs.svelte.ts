@@ -18,3 +18,10 @@ export function setGifAutoplay(on: boolean): void {
     // Storage blocked: the choice just does not survive a reload.
   }
 }
+
+// A second tab flipping the switch should be reflected here, not fought.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === KEY) mediaPrefs.gifAutoplay = e.newValue !== "0";
+  });
+}

@@ -907,6 +907,43 @@ export async function getPhonebookEntries(): Promise<PhonebookEntry[]> {
   });
 }
 
+/**
+ * Merge duplicate phonebook rows referring to one human. The store is keyed
+ * by whichever identity form was known at add time, so the same contact can
+ * exist once keyed by DID (added offline) and once by peerId (added online).
+ * Entries with no DID at all are left alone - a peerId cannot be turned into
+ * an identity DID after the fact.
+ */
+export async function dedupePhonebook(): Promise<void> {
+  const database = await getDB();
+  const entries = await database.getAll("phonebook");
+  const byDid = new Map<string, PhonebookEntry[]>();
+  for (const e of entries) {
+    const did =
+      e.did ?? (e.peerId.startsWith("did:") ? e.peerId : undefined);
+    if (!did) continue;
+    const group = byDid.get(did) ?? [];
+    group.push(e);
+    byDid.set(did, group);
+  }
+  for (const [did, group] of byDid) {
+    if (group.length < 2) continue;
+    // Prefer the row with a real transport peerId; the union keeps the
+    // earliest addedAt (sort order) and any favorite flag.
+    const keeper =
+      group.find((e) => !e.peerId.startsWith("did:")) ?? group[0];
+    const merged: PhonebookEntry = {
+      ...keeper,
+      did,
+      nickname: group.find((e) => e.nickname)?.nickname ?? keeper.nickname,
+      addedAt: Math.min(...group.map((e) => e.addedAt)),
+      favorite: group.some((e) => e.favorite) || undefined,
+    };
+    for (const e of group) await database.delete("phonebook", e.peerId);
+    await database.put("phonebook", merged);
+  }
+}
+
 export async function putPhonebookEntry(entry: PhonebookEntry): Promise<void> {
   const database = await getDB();
   await database.put("phonebook", entry);

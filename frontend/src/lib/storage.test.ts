@@ -15,6 +15,9 @@ import {
   wipeLocalDatabase,
   type Room,
   nextDmLamport,
+  dedupePhonebook,
+  putPhonebookEntry,
+  getPhonebookEntries,
 } from "./storage";
 import { MessageType, type Message } from "./types/message";
 
@@ -158,5 +161,37 @@ describe("nextDmLamport", () => {
       msg({ id: "dm-m1", roomCode: "dm-clock-c", lamport: 7_777 }),
     ]);
     expect(await nextDmLamport("dm-clock-c", 100)).toBe(7_778);
+  });
+});
+
+describe("dedupePhonebook", () => {
+  it("merges duplicate contacts sharing a did and keeps the best fields", async () => {
+    await putPhonebookEntry({
+      peerId: "did:key:zDup",
+      nickname: "Old Name",
+      addedAt: 1_000,
+      favorite: true,
+    });
+    await putPhonebookEntry({
+      peerId: "12D3KooWDupPeer",
+      did: "did:key:zDup",
+      nickname: "New Name",
+      addedAt: 2_000,
+    });
+    await putPhonebookEntry({
+      peerId: "12D3KooWLoner",
+      nickname: "No Did",
+      addedAt: 3_000,
+    });
+    await dedupePhonebook();
+    const entries = await getPhonebookEntries();
+    const dupes = entries.filter(
+      (e) => e.did === "did:key:zDup" || e.peerId === "did:key:zDup"
+    );
+    expect(dupes).toHaveLength(1);
+    expect(dupes[0].peerId).toBe("12D3KooWDupPeer");
+    expect(dupes[0].favorite).toBe(true);
+    expect(dupes[0].addedAt).toBe(1_000);
+    expect(entries.some((e) => e.peerId === "12D3KooWLoner")).toBe(true);
   });
 });

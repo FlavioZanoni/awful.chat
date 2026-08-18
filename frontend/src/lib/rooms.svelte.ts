@@ -9,6 +9,7 @@ import {
   getRoom,
   getMessages,
   getPhonebookEntries,
+  dedupePhonebook,
   type DMRoom,
   type PhonebookEntry,
   type Room,
@@ -57,9 +58,17 @@ export function noteRoomActivity(roomCode: string, timestamp: number): void {
   roomsStore.lastActivity = next;
 }
 
+let _phonebookDeduped = false;
+
 export async function loadRooms(): Promise<void> {
   roomsStore.loading = true;
   try {
+    if (!_phonebookDeduped) {
+      _phonebookDeduped = true;
+      // One pass per session: merge duplicate contacts left behind by the
+      // old form-dependent keying before anything reads the list.
+      await dedupePhonebook().catch(() => {});
+    }
     const all = await getAllRooms();
     const freshRooms = all.filter((r) => r.type !== "dm") as Room[];
     const merged = new Map<string, Room>();

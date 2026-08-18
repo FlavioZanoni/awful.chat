@@ -72,7 +72,12 @@ function loadQueuedDmMessages(): QueuedMessage[] {
 
 function saveQueuedDmMessages(queue: QueuedMessage[]): void {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(DM_QUEUE_KEY, JSON.stringify(queue));
+  try {
+    localStorage.setItem(DM_QUEUE_KEY, JSON.stringify(queue));
+  } catch {
+    // Storage full or blocked: the message still sent or sits in memory;
+    // a quota error must not blow up out of sendDirectMessage.
+  }
 }
 
 function resolveDmPeerId(candidate: string): string | null {
@@ -98,12 +103,16 @@ function resolveDmPeerId(candidate: string): string | null {
   return null;
 }
 
+/** Bound the offline queue; beyond this the oldest entries give way. */
+const DM_QUEUE_MAX = 200;
+
 function queueDmMessage(
   toDid: string,
   data: Uint8Array,
   messageId?: string
 ): void {
   const queue = loadQueuedDmMessages();
+  while (queue.length >= DM_QUEUE_MAX) queue.shift();
   queue.push({
     to: toDid,
     data: Array.from(data),
