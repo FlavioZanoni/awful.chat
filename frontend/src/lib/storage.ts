@@ -302,7 +302,10 @@ export async function bulkPutMessages(messages: Message[]): Promise<void> {
 
 export async function deleteMessagesForRoom(roomCode: string): Promise<void> {
   const database = await getDB();
-  const tx = database.transaction(["messages", "attachments"], "readwrite");
+  const tx = database.transaction(
+    ["messages", "attachments", "watermarks"],
+    "readwrite"
+  );
   const messagesIndex = tx.objectStore("messages").index("byRoom");
   const messages = await messagesIndex.getAll(roomCode);
 
@@ -313,6 +316,16 @@ export async function deleteMessagesForRoom(roomCode: string): Promise<void> {
       await tx.objectStore("attachments").delete(attachment.id);
     }
     await tx.objectStore("messages").delete(message.id);
+  }
+
+  // Sync watermarks go with the history: left behind, a later re-join of the
+  // same code would tell peers we already hold messages we just deleted, and
+  // they would never be offered again.
+  const wmIndex = tx.objectStore("watermarks").index("byRoom");
+  for (const wm of await wmIndex.getAll(roomCode)) {
+    await tx
+      .objectStore("watermarks")
+      .delete(watermarkId(wm.roomCode, wm.senderId));
   }
 
   await tx.done;

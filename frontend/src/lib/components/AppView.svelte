@@ -14,6 +14,7 @@
     leaveRoom,
     selfId,
     setRoomName,
+    removeRoomCompletely,
     connect,
     peerIdToDid,
   } from "$lib/transport/transport.svelte";
@@ -21,7 +22,6 @@
     roomsStore,
     loadRooms,
     saveRoom,
-    removeRoom,
     refreshPhonebook,
     refreshDmRooms,
   } from "$lib/rooms.svelte";
@@ -219,7 +219,7 @@
 
   async function handleRemoveRoom(code?: string) {
     if (!code) code = activeRoomCode!;
-    await removeRoom(code);
+    await removeRoomCompletely(code);
     if (activeRoomCode === code) {
       handleLeave();
     }

@@ -40,6 +40,7 @@ import {
 } from "../types/message";
 import {
   refreshUnreadCount,
+  removeRoom,
   refreshDmRooms,
   renameRoom,
   noteRoomActivity,
@@ -1483,6 +1484,37 @@ export async function joinRoom(roomCode: string): Promise<void> {
 
 export function getRoomUsers(): string[] {
   return transportState.roomUsers;
+}
+
+/**
+ * Remove a room COMPLETELY: say goodbye, stop listening, hang up if the call
+ * lives there, and delete the history. Works whether or not the room is on
+ * screen - removing a background room used to leave the transport subscribed,
+ * so incoming traffic quietly re-stored messages for a room that no longer
+ * existed, and a call held in it just kept going.
+ */
+export async function removeRoomCompletely(roomCode: string): Promise<void> {
+  if (!roomCode) return;
+  const selfDid = identityStore.did ?? _transport.selfId();
+  if (selfDid && _transport.rooms().includes(roomCode)) {
+    // Before unsubscribing, or the broadcast no-ops and nobody sees us leave.
+    await _transport
+      .broadcast(
+        encode({ type: MessageType.LeaveRoom, peerId: selfDid }),
+        roomCode
+      )
+      .catch(() => {});
+  }
+  _transport.leaveRoom(roomCode);
+  if (transportState.callRoomCode === roomCode) leaveCall();
+  if (transportState.roomCode === roomCode) {
+    transportState.roomCode = null;
+    transportState.roomName = "";
+    transportState.roomUsers = [];
+    transportState.messages = [];
+    transportState.connected = false;
+  }
+  await removeRoom(roomCode);
 }
 
 export function leaveRoom(): void {

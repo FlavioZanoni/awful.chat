@@ -1,4 +1,5 @@
 import {
+  deleteMessagesForRoom,
   getAllRooms,
   getDMRooms,
   putRoom,
@@ -152,10 +153,19 @@ export async function renameRoom(
   await putRoom(updated);
 }
 
+/**
+ * Storage/store half of room removal. On its own this leaves the transport
+ * subscribed and the history behind - use removeRoomCompletely() from
+ * transport.svelte for the real thing.
+ */
 export async function removeRoom(roomCode: string): Promise<void> {
+  await deleteMessagesForRoom(roomCode);
   await deleteRoom(roomCode);
   roomsStore.rooms = roomsStore.rooms.filter((r) => r.roomCode !== roomCode);
-  const next = new Map(roomsStore.unreadCounts);
-  next.delete(roomCode);
-  roomsStore.unreadCounts = next;
+  const unread = new Map(roomsStore.unreadCounts);
+  unread.delete(roomCode);
+  roomsStore.unreadCounts = unread;
+  const activity = new Map(roomsStore.lastActivity);
+  activity.delete(roomCode);
+  roomsStore.lastActivity = activity;
 }

@@ -15,6 +15,7 @@ import {
 } from "$lib/storage";
 import { MessageType, type Message } from "$lib/types/message";
 import { signMessage } from "$lib/messaging";
+import { leaveCall } from "./call.svelte";
 import {
   _loadHistory,
   _peerIdToDid,
@@ -399,7 +400,13 @@ export async function removeDmConversation(peerIdOrDid: string): Promise<void> {
     queue.filter((q) => q.to !== resolvedPeerId && q.to !== queuedDid)
   );
 
-  // Delete messages for all matching rooms, then delete the rooms
+  // Delete messages for all matching rooms, then delete the rooms. Also stop
+  // listening on their topics and hang up a call held in one of them -
+  // deleting the conversation used to leave both running.
+  for (const roomCode of candidates) {
+    if (transportState.callRoomCode === roomCode) leaveCall();
+    _transport.leaveRoom(roomCode);
+  }
   await Promise.all(
     [...candidates].map(async (roomCode) => {
       await deleteMessagesForRoom(roomCode);
