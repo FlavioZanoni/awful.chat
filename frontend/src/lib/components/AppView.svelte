@@ -27,6 +27,7 @@
   } from "$lib/rooms.svelte";
   import {
     getMessages,
+    getLastMessage,
     getUnreadCount,
     getPeerProfile,
     markRoomSeen,
@@ -506,10 +507,13 @@
 
   $effect(() => {
     roomsStore.dmRooms.length;
-    transportState.messages.length;
+    // dmVersion bumps once per DM change; depending on messages.length would
+    // re-run this storage sweep for every message in every room. The maps are
+    // replaced wholesale on update, so identity also catches renames that
+    // .size missed.
     transportState.dmVersion;
-    transportState.peerNames.size;
-    transportState.peerAvatars.size;
+    transportState.peerNames;
+    transportState.peerAvatars;
     (async () => {
       const run = ++dmBuildRun;
       const next = new Map<string, { text: string; ts: number }>();
@@ -531,20 +535,26 @@
         if (!peerId) continue;
 
         const did = peerIdToDid(peerId);
-        let source = await getMessages(room.roomCode);
+        // The preview only needs the newest message; loading a full page per
+        // room made every keystroke in any conversation a storage sweep.
+        let last = await getLastMessage(room.roomCode);
 
-    const activeDid = peerIdToDid(transportState.activeDmPeerId ?? "");
-    const roomDid = peerIdToDid(peerId);
-    if (transportState.chatMode === "dm" && activeDid === roomDid) {
-      source = transportState.messages.filter((m) => m.roomCode === room.roomCode);
-    }
+        const activeDid = peerIdToDid(transportState.activeDmPeerId ?? "");
+        const roomDid = peerIdToDid(peerId);
+        if (transportState.chatMode === "dm" && activeDid === roomDid) {
+          const live = transportState.messages.filter(
+            (m) => m.roomCode === room.roomCode
+          );
+          last = live[live.length - 1] ?? last;
+        }
 
-        const last = source[source.length - 1];
         const profile = await getPeerProfile(did).catch(() => undefined);
-        const firstRemote = source.find(
-          (m) => m.senderId !== selfId() && m.senderName !== "You"
-        );
-        const messageDid = firstRemote?.senderId;
+        // In a DM the only remote sender is the peer, so the newest message
+        // carries their DID whenever they spoke last.
+        const messageDid =
+          last && last.senderId !== selfId() && last.senderName !== "You"
+            ? last.senderId
+            : undefined;
         const messageProfile = messageDid
           ? await getPeerProfile(messageDid).catch(() => undefined)
           : undefined;

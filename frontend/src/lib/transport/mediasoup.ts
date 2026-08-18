@@ -1,4 +1,7 @@
-import * as mediasoupClient from "mediasoup-client";
+// Types only - the runtime library loads when a video call actually starts,
+// keeping a large SFU client out of the boot bundle for sessions that never
+// turn a camera on.
+import type * as mediasoupClient from "mediasoup-client";
 import type { VideoTransport, VideoEvents, VideoSource } from "./types";
 
 // ── Message types (mirrored on the SFU server) ────────────────────────────────
@@ -159,7 +162,8 @@ export class MediasoupVideo implements VideoTransport {
         "ms:capabilities"
       );
 
-      this.device = new mediasoupClient.Device();
+      const { Device } = await import("mediasoup-client");
+      this.device = new Device();
       await this.device.load({ routerRtpCapabilities: capMsg.rtpCapabilities });
 
       await this.createSendTransport();

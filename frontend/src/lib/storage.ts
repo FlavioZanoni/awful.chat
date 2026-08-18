@@ -270,6 +270,23 @@ export async function getMessages(
 }
 
 /**
+ * Just the newest message of a room - for inbox previews, where loading a
+ * whole page per room adds up.
+ */
+export async function getLastMessage(
+  roomCode: string
+): Promise<Message | undefined> {
+  const database = await getDB();
+  const index = database.transaction("messages").store.index("byRoomLamport");
+  const range = IDBKeyRange.bound(
+    [roomCode, 0],
+    [roomCode, Number.MAX_SAFE_INTEGER]
+  );
+  const cursor = await index.openCursor(range, "prev");
+  return cursor?.value;
+}
+
+/**
  * Fetch every message for a room with no page limit.
  * Only used for sync - do not use for display.
  */

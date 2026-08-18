@@ -9,7 +9,6 @@
     CheckCheck,
     Clock,
   } from "@lucide/svelte";
-  import { codeToHtml } from "shiki";
   import {
     MessageType,
     type Message,
@@ -165,10 +164,15 @@
   $effect(() => {
     highlightedCode = null;
     if (!asCodeBlock) return;
-    codeToHtml(asCodeBlock.code, {
-      lang: asCodeBlock.lang,
-      theme: "github-dark",
-    })
+    // Loaded on demand: the highlighter engine plus its wasm is well over
+    // half a megabyte, and most sessions never see a code block.
+    import("shiki")
+      .then(({ codeToHtml }) =>
+        codeToHtml(asCodeBlock.code, {
+          lang: asCodeBlock.lang,
+          theme: "github-dark",
+        })
+      )
       .then((html) => {
         highlightedCode = html;
       })

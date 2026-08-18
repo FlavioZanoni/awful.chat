@@ -216,9 +216,22 @@
   const SPEAKING_OFF = 4;
   const lastLoudAt = new Map<string, number>();
 
+  // Hoisted: allocating a fresh buffer per animation frame churned the GC.
+  const speakerBuf = new Uint8Array(512);
+  // Analysing at 60fps buys nothing over 10Hz for a 500ms-hold ring; the rAF
+  // loop stays (it pauses in hidden tabs) but the FFT reads are throttled.
+  const SPEAKER_POLL_MS = 100;
+  let nextSpeakerPollAt = 0;
+
   function pollSpeakers() {
+    const pollNow = performance.now();
+    if (pollNow < nextSpeakerPollAt) {
+      rafId = requestAnimationFrame(pollSpeakers);
+      return;
+    }
+    nextSpeakerPollAt = pollNow + SPEAKER_POLL_MS;
     if (sharedCtx?.state === "suspended") sharedCtx.resume().catch(() => {});
-    const buf = new Uint8Array(512);
+    const buf = speakerBuf;
     const now = performance.now();
     const next = new Set<string>();
 

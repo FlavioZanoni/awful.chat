@@ -89,6 +89,26 @@ import {
 import { initVoice } from "./voice.svelte";
 import { initTransmission } from "./transmission.svelte";
 import { notifyMessage } from "../notify.svelte";
+
+const MSG_ORDER = (a: Message, b: Message) =>
+  a.lamport !== b.lamport
+    ? a.lamport - b.lamport
+    : a.senderId.localeCompare(b.senderId);
+
+/**
+ * Messages almost always arrive in order, so appending is the common case;
+ * only fall back to a full sort when the newcomer actually lands out of order.
+ * Re-sorting the whole history per incoming message scaled with room size.
+ */
+function appendSorted(
+  list: Message[],
+  msg: Message,
+  cmp: (a: Message, b: Message) => number = MSG_ORDER
+): Message[] {
+  const next = [...list, msg];
+  if (list.length > 0 && cmp(list[list.length - 1], msg) > 0) next.sort(cmp);
+  return next;
+}
 import { playPeerJoinSound, playPeerLeaveSound } from "../sounds";
 import { peerCallChime } from "./call-chime";
 
@@ -648,20 +668,13 @@ async function _handleSyncBatch(
   const newMsgs = fullMessages.filter((m) => !existingIds.has(m.id));
   if (newMsgs.length > 0) {
     transportState.messages = [...transportState.messages, ...newMsgs].sort(
-      (a, b) =>
-        a.lamport !== b.lamport
-          ? a.lamport - b.lamport
-          : a.senderId.localeCompare(b.senderId)
+      MSG_ORDER
     );
   }
 }
 
 function _handleSyncComplete(peerId: string): void {
-  transportState.messages = [...transportState.messages].sort((a, b) =>
-    a.lamport !== b.lamport
-      ? a.lamport - b.lamport
-      : a.senderId.localeCompare(b.senderId)
-  );
+  transportState.messages = [...transportState.messages].sort(MSG_ORDER);
   for (const pid of _transport.peers()) {
     if (pid !== peerId) _sendDigest(pid).catch(() => {});
   }
@@ -1034,11 +1047,7 @@ function _handleChatMessage(
     transportState.chatMode === "room" &&
     transportState.roomCode === msg.roomCode
   ) {
-    transportState.messages = [...transportState.messages, msg].sort((a, b) =>
-      a.lamport !== b.lamport
-        ? a.lamport - b.lamport
-        : a.senderId.localeCompare(b.senderId)
-    );
+    transportState.messages = appendSorted(transportState.messages, msg);
   }
 
   if (msg.type !== MessageType.File || !msg.meta?.files?.length) return;
@@ -1219,7 +1228,9 @@ function _handleDmChat(
         viewingConversation: transportState.uiRoomCode === roomCode,
       });
       if (isViewingThisDm) {
-        transportState.messages = [...transportState.messages, msg].sort(
+        transportState.messages = appendSorted(
+          transportState.messages,
+          msg,
           (a, b) => a.timestamp - b.timestamp
         );
         await markRoomSeen(roomCode, msg.lamport);
@@ -1644,11 +1655,7 @@ export async function sendMessage(
   await putMessage(msg);
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
 
-  transportState.messages = [...transportState.messages, msg].sort((a, b) =>
-    a.lamport !== b.lamport
-      ? a.lamport - b.lamport
-      : a.senderId.localeCompare(b.senderId)
-  );
+  transportState.messages = appendSorted(transportState.messages, msg);
 
   markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
   noteRoomActivity(msg.roomCode, msg.timestamp);
@@ -1755,11 +1762,7 @@ export async function sendFiles(
   await putMessage(msg);
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
 
-  transportState.messages = [...transportState.messages, msg].sort((a, b) =>
-    a.lamport !== b.lamport
-      ? a.lamport - b.lamport
-      : a.senderId.localeCompare(b.senderId)
-  );
+  transportState.messages = appendSorted(transportState.messages, msg);
 
   markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
   noteRoomActivity(msg.roomCode, msg.timestamp);
@@ -1807,10 +1810,7 @@ export async function loadMoreMessages(
   const existingIds = new Set(transportState.messages.map((m) => m.id));
   const newOnes = older.filter((m) => !existingIds.has(m.id));
   transportState.messages = [...newOnes, ...transportState.messages].sort(
-    (a, b) =>
-      a.lamport !== b.lamport
-        ? a.lamport - b.lamport
-        : a.senderId.localeCompare(b.senderId)
+    MSG_ORDER
   );
   return newOnes.length === 50;
 }

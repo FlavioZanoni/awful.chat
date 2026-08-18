@@ -1,6 +1,8 @@
 import SimplePeer from "simple-peer";
 import type { Instance as SimplePeerInstance } from "simple-peer";
-import WebTorrent from "webtorrent";
+import type WebTorrentType from "webtorrent";
+
+type WTClient = InstanceType<typeof WebTorrentType>;
 import type {
   FileDescriptor,
   FileSignalEnvelope,
@@ -33,12 +35,26 @@ function isValidInfoHash(h: string): boolean {
 }
 
 export class WebTorrentFileTransport implements FileTransferTransport {
-  private client = new WebTorrent({
-    dht: false,
-    tracker: false,
-    lsd: false,
-    utPex: false,
-  } as never);
+  /**
+   * Created on first use: the library is large and a session that never
+   * touches a file should not pay for it at boot, in bundle or in memory.
+   */
+  private clientP: Promise<WTClient> | null = null;
+
+  private client(): Promise<WTClient> {
+    if (!this.clientP) {
+      this.clientP = import("webtorrent").then(
+        ({ default: WebTorrent }) =>
+          new WebTorrent({
+            dht: false,
+            tracker: false,
+            lsd: false,
+            utPex: false,
+          } as never)
+      );
+    }
+    return this.clientP;
+  }
 
   private handlers = new Map<keyof FileTransferEvents, Set<Function>>();
   private transfers = new Map<string, FileTransferSnapshot>();
@@ -116,17 +132,19 @@ export class WebTorrentFileTransport implements FileTransferTransport {
       return;
     }
 
-    const torrent = this.client.get(
-      file.infoHash
-    ) as unknown as TorrentLike | null;
-    if (!torrent) {
-      const added = this.client.add(file.infoHash, {
-        announce: [],
-      }) as TorrentLike;
-      this.attachTorrent(added, false, file);
-    } else {
-      this.attachTorrent(torrent, false, file);
-    }
+    void this.client().then((client) => {
+      const torrent = client.get(
+        file.infoHash
+      ) as unknown as TorrentLike | null;
+      if (!torrent) {
+        const added = client.add(file.infoHash, {
+          announce: [],
+        }) as TorrentLike;
+        this.attachTorrent(added, false, file);
+      } else {
+        this.attachTorrent(torrent, false, file);
+      }
+    });
 
     this.upsertTransfer({
       ...file,
@@ -261,12 +279,14 @@ export class WebTorrentFileTransport implements FileTransferTransport {
   destroy(): void {
     this.resetTransfers();
     this.connectedPeers.clear();
-    this.client.destroy(() => {});
+    this.clientP?.then((client) => client.destroy(() => {}));
+    this.clientP = null;
   }
 
   private async seedSingle(file: File): Promise<FileDescriptor> {
+    const client = await this.client();
     return new Promise<FileDescriptor>((resolve, reject) => {
-      const torrent = this.client.seed(
+      const torrent = client.seed(
         file,
         { announce: [] },
         (created: any) => {
@@ -299,7 +319,7 @@ export class WebTorrentFileTransport implements FileTransferTransport {
       (torrent as unknown as { on: Function }).on("error", (err: Error) => {
         const message = err?.message ?? "";
         if (message.includes("Cannot add duplicate torrent")) {
-          const existing = this.client.get(
+          const existing = client.get(
             (torrent as any).infoHash
           ) as unknown as TorrentLike | null;
           if (existing?.infoHash) {
@@ -361,12 +381,14 @@ export class WebTorrentFileTransport implements FileTransferTransport {
     });
 
     peer.on("connect", () => {
-      const torrent = this.client.get(
-        infoHash
-      ) as unknown as TorrentLike | null;
-      if (torrent?.addPeer) {
-        torrent.addPeer(peer);
-      }
+      void this.client().then((client) => {
+        const torrent = client.get(
+          infoHash
+        ) as unknown as TorrentLike | null;
+        if (torrent?.addPeer) {
+          torrent.addPeer(peer);
+        }
+      });
     });
 
     peer.on("error", () => {
