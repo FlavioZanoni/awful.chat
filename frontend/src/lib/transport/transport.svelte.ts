@@ -347,6 +347,70 @@ async function _broadcastProfile(): Promise<void> {
   await _sendProfile().catch(() => {});
 }
 
+/**
+ * Digests are cheap (one number per sender) and idempotent, so the recovery
+ * story is "exchange one whenever there is reason to think we drifted" rather
+ * than polling. Debounced per peer so a burst of reasons costs one digest.
+ */
+const SYNC_DEBOUNCE_MS = 10_000;
+const _lastDigestAt = new Map<string, number>();
+/** "room|senderId" -> highest lamport we have seen, for the gap hint above. */
+const _lastSeenLamport = new Map<string, number>();
+
+function _syncPeer(peerId: string, force = false): void {
+  const now = Date.now();
+  if (!force && now - (_lastDigestAt.get(peerId) ?? 0) < SYNC_DEBOUNCE_MS) {
+    return;
+  }
+  _lastDigestAt.set(peerId, now);
+  _sendDigest(peerId).catch(() => {});
+}
+
+/** Reconcile with everyone we are connected to. */
+function _syncAllPeers(force = false): void {
+  for (const pid of _transport.peers()) _syncPeer(pid, force);
+}
+
+/** Away longer than this and the connections are suspect, not just history. */
+const AWAY_FULL_RESYNC_MS = 60_000;
+let _hiddenSince = 0;
+
+/**
+ * Everything a peer needs to know about us, plus a request for everything we
+ * need from them. Cheap enough to fire on returning to the app.
+ */
+function _resyncEverything(): void {
+  _transport.reconcileNow();
+  _broadcastProfile().catch(() => {});
+  if (transportState.roomCode) _broadcastJoinRoom();
+  if (transportState.inCall) {
+    _sendCallPresence();
+    _sendCallState();
+  }
+  _syncAllPeers(true);
+}
+
+if (typeof document !== "undefined") {
+  // Coming back from the background is the big one: a phone that slept has
+  // missed whatever happened meanwhile, and nothing inside the app will ever
+  // tell it so.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      _hiddenSince = Date.now();
+      return;
+    }
+    const away = _hiddenSince ? Date.now() - _hiddenSince : 0;
+    _hiddenSince = 0;
+    // A glance away only needs history reconciled. A long absence means the
+    // connections themselves may be stale, so re-announce and re-dial too.
+    if (away > AWAY_FULL_RESYNC_MS) _resyncEverything();
+    else _syncAllPeers();
+  });
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => _resyncEverything());
+}
+
 async function _sendDigest(peerId: string): Promise<void> {
   const roomCode = transportState.roomCode;
   if (!roomCode) return;
@@ -529,16 +593,24 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
   if (isNewMapping) {
     flushQueuedDmForPeer(peerId).catch(() => {});
     _replayPendingDm(peerId, did);
-    // Answer with our own profile.
+    // Answer with everything about our current state.
     //
-    // A profile is otherwise only sent when the "connect" event fires. After
-    // one side reloads, the other side often still has the connection open and
-    // never sees a new connect, so it never re-sends - leaving the reloaded
-    // peer with no DID for it: shown offline, no name, no avatar, while voice
-    // and gossipsub carry on working over the connection that was never lost.
-    // Replying here makes the exchange mutual whoever starts it. It settles
-    // after one extra round, since the reply only fires on a NEW mapping.
+    // These are otherwise only sent when the "connect" event fires. After one
+    // side reloads, the other often still has the connection open and never
+    // sees a new connect, so it never re-sends - leaving the reloaded peer
+    // with no DID for it (shown offline, no name) and no idea it is in a call,
+    // while voice and gossipsub carry on over the connection that was never
+    // lost. Replying here makes the exchange mutual whoever starts it, and it
+    // settles after one extra round because the reply only fires on a NEW
+    // mapping.
     _sendProfile(peerId);
+    if (transportState.inCall) {
+      _sendCallPresence(peerId);
+      _sendCallState(peerId);
+    }
+    // They are new to us, so anything they said before we bound them is
+    // missing: reconcile history with them too.
+    _sendDigest(peerId).catch(() => {});
   }
 
   const avatarUrl = normalizeAvatarUrl(msg.avatarUrl);
@@ -812,6 +884,18 @@ function _handleChatMessage(
   lamportReceive(wire.lamport);
 
   const msg = wireToMessage(wire, roomCode);
+
+  // A sender's lamport only ever moves forward, so a jump past what we have
+  // from them means we probably missed something. It is a hint, not proof -
+  // the clock also advances on receives - but a digest is small and answering
+  // one costs nothing, so erring towards syncing is the cheap side.
+  if (receivedFromPeerId) {
+    const seen = _lastSeenLamport.get(`${roomCode}|${msg.senderId}`) ?? -1;
+    if (seen >= 0 && msg.lamport > seen + 1) _syncPeer(receivedFromPeerId);
+    if (msg.lamport > seen) {
+      _lastSeenLamport.set(`${roomCode}|${msg.senderId}`, msg.lamport);
+    }
+  }
 
   putMessage(msg).catch(() => {});
   setWatermark(msg.roomCode, msg.senderId, msg.lamport).catch(() => {});

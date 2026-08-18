@@ -418,6 +418,17 @@ export class LibP2PTransport implements PeerTransport {
    * up (or is missed), that peer would otherwise stay invisible forever even
    * though messages flow over it.
    */
+  /**
+   * Reconnect anything that drifted, right now. Clears the dial backoff, so a
+   * peer we had given up on for the next minute is retried immediately. Meant
+   * for the moment a user returns to a page that sat in the background.
+   */
+  reconcileNow(): void {
+    this.nextDialAt.clear();
+    this.dialBackoff.clear();
+    this.reconcileConnections();
+  }
+
   private rememberRoomPeer(room: string, peerId: string): void {
     if (!room || !peerId) return;
     const peers = this.roomPeers.get(room) ?? new Set<string>();
