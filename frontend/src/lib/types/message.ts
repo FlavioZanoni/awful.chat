@@ -157,6 +157,9 @@ export interface WireCallState {
 export interface WireRoomName {
   type: MessageType.RoomName;
   name: string;
+  /** Which room this name is for. Required on a direct send, where there is
+   *  no pubsub topic to infer it from. */
+  roomCode?: string;
 }
 
 export interface WireJoinRoom {
@@ -172,6 +175,8 @@ export interface WireLeaveRoom {
 export interface WireRoomUsersSync {
   type: MessageType.RoomUsersSync;
   participants: string[];
+  /** Which room this list belongs to; see WireRoomName.roomCode. */
+  roomCode?: string;
 }
 
 // ── Sync wire messages ────────────────────────────────────────────────────────

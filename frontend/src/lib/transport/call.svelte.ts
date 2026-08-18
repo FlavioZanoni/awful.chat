@@ -37,13 +37,27 @@ export function _sendCallState(peerId?: string): void {
 }
 
 export function _sendCallPresence(peerId?: string): void {
+  // The room the CALL is in, not the one on screen. Reporting the current room
+  // meant that as soon as you looked at another room, everyone filtered you
+  // out of the call you were actually sitting in and you vanished from it.
+  const callRoom = transportState.inCall
+    ? transportState.callRoomCode ?? transportState.roomCode ?? undefined
+    : undefined;
   const payload = encode({
     type: MessageType.CallPresence,
     inCall: transportState.inCall,
-    roomCode: transportState.inCall ? transportState.roomCode ?? undefined : undefined,
+    roomCode: callRoom,
   });
-  if (peerId) _transport.send(peerId, payload);
-  else _transport.broadcast(payload, transportState.roomCode!);
+  if (peerId) {
+    _transport.send(peerId, payload);
+    return;
+  }
+  // Announce into the call's room, and into the room on screen when they
+  // differ, so peers in either place hear about it.
+  const rooms = new Set(
+    [callRoom, transportState.roomCode].filter((r): r is string => !!r)
+  );
+  for (const room of rooms) _transport.broadcast(payload, room);
 }
 
 // Keep the screen awake for the duration of a call. The browser drops the lock

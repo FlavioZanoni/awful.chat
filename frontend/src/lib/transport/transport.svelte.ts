@@ -30,6 +30,8 @@ import {
   type AnyWireMessage,
   type WireChatMessage,
   type WireProfile,
+  type WireRoomName,
+  type WireRoomUsersSync,
   type WireCallState,
   type FileEntry,
   type FileMeta,
@@ -266,11 +268,14 @@ if (typeof window !== "undefined") {
 // ── Senders ───────────────────────────────────────────────────────────────────
 
 function _sendRoomName(peerId?: string): void {
+  const roomCode = transportState.roomCode;
   const name = transportState.roomName.trim().slice(0, 64);
-  if (!name) return;
-  const payload = encode({ type: MessageType.RoomName, name });
+  if (!name || !roomCode) return;
+  // roomCode travels with it: a direct send has no topic to infer it from, so
+  // the receiver used to apply the name to whatever room they had open.
+  const payload = encode({ type: MessageType.RoomName, name, roomCode });
   if (peerId) _transport.send(peerId, payload);
-  else _transport.broadcast(payload, transportState.roomCode!);
+  else _transport.broadcast(payload, roomCode);
 }
 
 async function _sendProfile(peerId?: string): Promise<void> {
@@ -598,17 +603,20 @@ function _handleCallState(peerId: string, msg: WireCallState): void {
   transportState.callPeerStates = next;
 }
 
-function _handleRoomName(name: string): void {
-  const trimmed = name.trim().slice(0, 64);
+function _handleRoomName(msg: WireRoomName, room: string | null): void {
+  // The room this name is for, NOT the one on screen: we stay subscribed to
+  // every room we have joined, so applying it to the current room renamed
+  // whichever room you happened to be looking at.
+  const target = msg.roomCode ?? room;
+  if (!target) return;
+  const trimmed = msg.name.trim().slice(0, 64);
   if (!trimmed) return;
   // A peer that joined from a bare invite link has no name yet and sends the
   // room code as a placeholder. Accepting it would overwrite the real name for
   // everyone in the room.
-  if (trimmed === transportState.roomCode) return;
-  transportState.roomName = trimmed;
-  if (transportState.roomCode) {
-    renameRoom(transportState.roomCode, trimmed).catch(() => {});
-  }
+  if (trimmed === target) return;
+  renameRoom(target, trimmed).catch(() => {});
+  if (target === transportState.roomCode) transportState.roomName = trimmed;
 }
 
 /**
@@ -624,18 +632,28 @@ function _isSelfAnnouncement(fromPeerId: string, claimedDid: string): boolean {
   return !!senderDid && senderDid === claimedDid;
 }
 
-function _handleJoinRoom(_fromPeerId: string, claimedDid: string): void {
-  if (!transportState.roomCode) return;
+function _handleJoinRoom(
+  _fromPeerId: string,
+  claimedDid: string,
+  room: string | null
+): void {
+  if (!room) return;
   if (!claimedDid) return;
   // Deliberately NOT restricted to self-announcements: this only ever adds,
   // RoomUsersSync already accepts additions from anyone, and a join often
   // arrives before the sender's profile has bound their DID - rejecting it
   // then would leave them missing from the list entirely.
+  if (room !== transportState.roomCode) {
+    // Another room we are subscribed to: record it, but do not touch the
+    // member list on screen.
+    addRoomParticipant(room, claimedDid).catch(() => {});
+    return;
+  }
   const uniqueUsers = [...new Set(transportState.roomUsers)];
   if (!uniqueUsers.includes(claimedDid)) {
     uniqueUsers.push(claimedDid);
     transportState.roomUsers = uniqueUsers;
-    addRoomParticipant(transportState.roomCode, claimedDid).catch(() => {});
+    addRoomParticipant(room, claimedDid).catch(() => {});
   }
 }
 
@@ -644,14 +662,20 @@ function _handleJoinRoom(_fromPeerId: string, claimedDid: string): void {
  * the only thing that removes somebody - going offline must not, or a peer that
  * closed their laptop would vanish instead of showing as offline.
  */
-function _handleLeaveRoom(fromPeerId: string, claimedDid: string): void {
-  if (!transportState.roomCode) return;
+function _handleLeaveRoom(
+  fromPeerId: string,
+  claimedDid: string,
+  room: string | null
+): void {
+  if (!room) return;
   if (!_isSelfAnnouncement(fromPeerId, claimedDid)) return;
-  const currentUsers = new Set(transportState.roomUsers);
-  if (currentUsers.has(claimedDid)) {
-    currentUsers.delete(claimedDid);
-    transportState.roomUsers = [...currentUsers];
-    removeRoomParticipant(transportState.roomCode, claimedDid).catch(() => {});
+  removeRoomParticipant(room, claimedDid).catch(() => {});
+  if (room === transportState.roomCode) {
+    const currentUsers = new Set(transportState.roomUsers);
+    if (currentUsers.has(claimedDid)) {
+      currentUsers.delete(claimedDid);
+      transportState.roomUsers = [...currentUsers];
+    }
   }
   // Keyed by the libp2p peerId, not the DID: deleting claimedDid here was a
   // no-op and left the mapping behind.
@@ -663,14 +687,27 @@ function _handleLeaveRoom(fromPeerId: string, claimedDid: string): void {
 // but a peer must not be able to grow it without bound or stuff it with junk.
 const MAX_ROOM_USERS = 512;
 
-function _handleRoomUsersSync(participants: string[]): void {
-  const roomCode = transportState.roomCode;
+function _handleRoomUsersSync(
+  msg: WireRoomUsersSync,
+  room: string | null
+): void {
+  const roomCode = msg.roomCode ?? room;
   if (!roomCode) return;
+  const participants = msg.participants;
   if (!Array.isArray(participants)) return;
   const selfDid = identityStore.did ?? _transport.selfId();
   const valid = participants.filter(
     (p) => typeof p === "string" && (looksLikeDid(p) || looksLikePeerId(p))
   );
+  if (roomCode !== transportState.roomCode) {
+    // A list for a room we are subscribed to but not looking at. Persist it,
+    // but leave the on-screen member list alone - merging it in was how one
+    // room's members ended up listed in another.
+    for (const did of valid.slice(0, MAX_ROOM_USERS)) {
+      addRoomParticipant(roomCode, did).catch(() => {});
+    }
+    return;
+  }
   const known = new Set(transportState.roomUsers);
   const merged = new Set([...known, ...valid]);
   if (selfDid) merged.add(selfDid);
@@ -860,7 +897,11 @@ _transport.on("connect", (peerId) => {
   const participants = [...new Set([...transportState.roomUsers, selfDid])];
   _transport.send(
     peerId,
-    encode({ type: MessageType.RoomUsersSync, participants })
+    encode({
+      type: MessageType.RoomUsersSync,
+      participants,
+      roomCode: transportState.roomCode ?? undefined,
+    })
   );
 });
 
@@ -1000,8 +1041,8 @@ _transport.on("message", (peerId, data, room) => {
 
     // Update last seen for this peer
     const did = _peerIdToDid.get(peerId);
-    if (did && transportState.roomCode) {
-      updateParticipantLastSeen(transportState.roomCode, did).catch(() => {});
+    if (did && room) {
+      updateParticipantLastSeen(room, did).catch(() => {});
     }
 
     const msg = decoded as AnyWireMessage;
@@ -1017,16 +1058,16 @@ _transport.on("message", (peerId, data, room) => {
         _handleCallState(peerId, msg);
         break;
       case MessageType.RoomName:
-        _handleRoomName(msg.name);
+        _handleRoomName(msg, room);
         break;
       case MessageType.JoinRoom:
-        _handleJoinRoom(peerId, msg.peerId);
+        _handleJoinRoom(peerId, msg.peerId, room);
         break;
       case MessageType.LeaveRoom:
-        _handleLeaveRoom(peerId, msg.peerId);
+        _handleLeaveRoom(peerId, msg.peerId, room);
         break;
       case MessageType.RoomUsersSync:
-        _handleRoomUsersSync(msg.participants);
+        _handleRoomUsersSync(msg, room);
         break;
       case MessageType.SyncDigest:
         _handleDigest(peerId, msg.roomCode, msg.watermarks).catch(() => {});
@@ -1166,6 +1207,13 @@ export async function joinRoom(roomCode: string): Promise<void> {
     );
     await _broadcastProfile();
     _broadcastJoinRoom();
+    // Ask the peers we are ALREADY connected to for this room's history. The
+    // digest only went out when a NEW peer connected, so joining a room while
+    // the connections were already up pulled nothing and the room looked empty
+    // until a reload rebuilt every connection.
+    for (const pid of _transport.peers()) {
+      _sendDigest(pid).catch(() => {});
+    }
   } catch (err) {
     // Roll back the partial join: _transport.joinRoom() already subscribed the
     // gossipsub topic and we flipped transportState to "in this room" before
@@ -1186,17 +1234,42 @@ export function getRoomUsers(): string[] {
 }
 
 export function leaveRoom(): void {
-  void _broadcastLeaveRoomAndDisconnect();
+  void _leaveCurrentRoom();
 }
 
-async function _broadcastLeaveRoomAndDisconnect(): Promise<void> {
+/**
+ * Leave the room on screen and nothing else.
+ *
+ * This used to stop the libp2p node outright and wipe every peer, name, avatar
+ * and file transfer: leaving one room of several took down the rooms you were
+ * staying in, the call you were on and any transfer in flight, and the app
+ * only looked right again after a reload.
+ */
+async function _leaveCurrentRoom(): Promise<void> {
   const roomCode = transportState.roomCode;
+  if (!roomCode) return;
   const selfDid = identityStore.did ?? _transport.selfId();
-  if (roomCode && selfDid) {
-    // Await the publish: disconnect() stops the node outright, and the leave
-    // used to be dropped on the way out, so nobody ever saw you leave.
+  if (selfDid) {
+    // Await the publish: unsubscribing right after would drop the message and
+    // nobody would ever see you leave.
     await _broadcastLeaveRoom().catch(() => {});
+    removeRoomParticipant(roomCode, selfDid).catch(() => {});
   }
+  _transport.leaveRoom(roomCode);
+  // Only hang up if the call is in the room being left.
+  if (transportState.callRoomCode === roomCode) leaveCall();
+
+  transportState.roomCode = null;
+  transportState.roomName = "";
+  transportState.roomUsers = [];
+  transportState.messages = [];
+  transportState.connected = false;
+  transportState.chatMode = "room";
+  transportState.activeDmPeerId = null;
+}
+
+/** Full teardown: everything goes, including the libp2p node. */
+export function disconnectTransport(): void {
   _disconnectWithoutBroadcasting();
 }
 
