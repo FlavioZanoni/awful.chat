@@ -533,6 +533,29 @@
     if (!isWatchingTransmission) showTransmissionVolume = false;
   });
 
+  // The volume popover closes like the peer menu: Escape or a click
+  // anywhere outside its own controls.
+  $effect(() => {
+    if (!showTransmissionVolume) return;
+    const close = (e: Event) => {
+      if (
+        e instanceof KeyboardEvent
+          ? e.key === "Escape"
+          : !(e.target as HTMLElement | null)?.closest?.(
+              "[data-transmission-volume]"
+            )
+      ) {
+        showTransmissionVolume = false;
+      }
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", close);
+    };
+  });
+
   function clearTimer() {
     if (hideTimer) {
       clearTimeout(hideTimer);
@@ -677,7 +700,7 @@
       else onFocus();
     }}
     aria-label={isPendingTx
-      ? `Watch ${tile.label}'s transmission`
+      ? `Watch ${tile.label}'s screen`
       : isFocused
         ? "Minimize tile"
         : `Focus ${tile.label}`}
@@ -695,7 +718,9 @@
       ></video>
     {:else if !isPendingTx}
       <div
-        class="relative flex items-center justify-center rounded-full bg-primary/20 font-semibold text-primary overflow-hidden font-mono transition-shadow duration-200
+        class="relative flex items-center justify-center rounded-full {tile.isLocal
+          ? 'bg-primary/20 text-primary'
+          : 'bg-secondary text-secondary-foreground'} font-semibold overflow-hidden font-mono transition-shadow duration-200
         {compact ? 'size-8 text-sm' : 'size-16 text-2xl'}"
       >
         {#if tile.avatarUrl}
@@ -717,7 +742,7 @@
         <div
           class="rounded-full border border-border bg-background/95 px-3 py-1.5 text-xs font-mono text-foreground shadow-sm transition-all group-hover:border-primary/50 group-hover:shadow-md"
         >
-          Click to watch {tile.label}
+          Watch {tile.label}'s screen
         </div>
       </div>
     {/if}
@@ -738,7 +763,7 @@
         {/if}
         <span class="text-xs mt-0.75 leading-none text-white font-mono">
           {tile.kind === "transmission"
-            ? `${tile.label}'s transmission`
+            ? `${tile.label}'s screen`
             : tile.isLocal
               ? `${tile.label} (You)`
               : tile.label}
@@ -780,7 +805,7 @@
           {@const relayed = isRelayed(peerId)}
           <div
             title={label}
-            class="relative flex size-16 sm:size-20 items-center justify-center rounded-full bg-primary/20 text-2xl font-semibold text-primary ring-2 ring-background font-mono overflow-hidden"
+            class="relative flex size-16 sm:size-20 items-center justify-center rounded-full bg-secondary text-2xl font-semibold text-secondary-foreground ring-2 ring-background font-mono overflow-hidden"
           >
             {#if avatar}
               <GifImage
@@ -827,10 +852,11 @@
       <button
         type="button"
         onclick={joinCall}
-        class="group relative flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/30 transition-all duration-200 hover:bg-primary/90 hover:scale-105 hover:shadow-primary/50"
+        disabled={transportState.connecting}
+        class="group relative flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/30 transition-all duration-200 hover:bg-primary/90 hover:scale-105 hover:shadow-primary/50 disabled:opacity-60 disabled:hover:scale-100"
       >
         <Phone class="size-4" />
-        Join Call
+        {transportState.connecting ? "Connecting..." : "Join call"}
       </button>
     </div>
   </div>
@@ -931,6 +957,7 @@
                 type="button"
                 onclick={toggleMute}
                 aria-label={muted ? "Unmute microphone" : "Mute microphone"}
+                title={muted ? "Unmute microphone" : "Mute microphone"}
                 class="group relative flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                 {muted
                   ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -946,6 +973,7 @@
                 type="button"
                 onclick={toggleCamera}
                 aria-label={cameraOff ? "Turn on camera" : "Turn off camera"}
+                title={cameraOff ? "Turn on camera" : "Turn off camera"}
                 class="group relative flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                   {!cameraOff
                   ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -961,11 +989,9 @@
                 type="button"
                 onclick={screenSharing ? stopScreenShare : startScreenShare}
                 aria-label={screenSharing
-                  ? "Stop transmission"
-                  : "Start transmission"}
-                title={screenSharing
-                  ? "Stop transmission"
-                  : "Start transmission"}
+                  ? "Stop screen share"
+                  : "Share screen"}
+                title={screenSharing ? "Stop screen share" : "Share screen"}
                 class="flex group relative h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                   {screenSharing
                   ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -985,6 +1011,7 @@
               type="button"
               onclick={leaveCall}
               aria-label="Leave call"
+              title="Leave call"
               class="group relative flex h-8 w-14 items-center justify-center rounded-lg bg-linear-to-br from-red-500 to-red-600 text-white shadow-lg shadow-red-500/30 transition-all duration-200 hover:from-red-400 hover:to-red-500"
             >
               <PhoneOff class="size-4" />
@@ -994,13 +1021,14 @@
           <div class="flex justify-end">
             {#if isWatchingTransmission}
               <div
+                data-transmission-volume
                 class="relative flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/95 px-2 py-2"
               >
                 <button
                   type="button"
                   onclick={stopWatchingTransmission}
-                  aria-label="Stop watching transmission"
-                  title="Stop watching transmission"
+                  aria-label="Stop watching"
+                  title="Stop watching"
                   class="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/20 text-red-400 transition-all duration-200 hover:bg-red-500/30 ring-1 ring-red-500/50"
                 >
                   <Radio class="size-4" />
@@ -1010,9 +1038,8 @@
                   onclick={() => {
                     showTransmissionVolume = !showTransmissionVolume;
                   }}
-                  aria-label={transmissionOutputVolume === 0
-                    ? "Unmute transmission"
-                    : "Mute transmission"}
+                  aria-label="Screen share volume"
+                  aria-expanded={showTransmissionVolume}
                   class="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-100 transition-colors"
                 >
                   {#if transmissionOutputVolume === 0}
@@ -1056,6 +1083,7 @@
               type="button"
               onclick={toggleMute}
               aria-label={muted ? "Unmute microphone" : "Mute microphone"}
+              title={muted ? "Unmute microphone" : "Mute microphone"}
               class="group relative flex h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg transition-all duration-200 shrink-0
               {muted
                 ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1071,6 +1099,7 @@
               type="button"
               onclick={toggleCamera}
               aria-label={cameraOff ? "Turn on camera" : "Turn off camera"}
+              title={cameraOff ? "Turn on camera" : "Turn off camera"}
               class="group relative flex h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                 {!cameraOff
                 ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1087,9 +1116,9 @@
               type="button"
               onclick={screenSharing ? stopScreenShare : startScreenShare}
               aria-label={screenSharing
-                ? "Stop transmission"
-                : "Start transmission"}
-              title={screenSharing ? "Stop transmission" : "Start transmission"}
+                ? "Stop screen share"
+                : "Share screen"}
+              title={screenSharing ? "Stop screen share" : "Share screen"}
               class="flex group relative h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                 {screenSharing
                 ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1107,14 +1136,13 @@
             type="button"
             onclick={leaveCall}
             aria-label="Leave call"
+            title="Leave call"
             class={cn(
               "group relative flex items-center justify-center rounded-lg bg-linear-to-br from-red-500 to-red-600 text-white shadow-lg shadow-red-500/30 transition-all duration-200 hover:from-red-400 hover:to-red-500 hover:scale-105 hover:shadow-red-500/50 shrink-0",
-              dockedControls
-                ? "h-8 w-16 md:h-10 md:w-16"
-                : "h-14 w-14 rounded-xl"
+              "h-8 w-16 md:h-10 md:w-16"
             )}
           >
-            <PhoneOff class={dockedControls ? "md:size-5 size-4" : "size-5"} />
+            <PhoneOff class="md:size-5 size-4" />
           </button>
 
           {#if isWatchingTransmission}
@@ -1124,9 +1152,9 @@
               <button
                 type="button"
                 onclick={stopWatchingTransmission}
-                aria-label="Stop watching transmission"
-                title="Stop watching transmission"
-                class="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/20 text-red-400 transition-all duration-200 hover:bg-red-500/30 ring-1 ring-red-500/50"
+                aria-label="Stop watching"
+                title="Stop watching"
+                class="flex h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg bg-red-500/20 text-red-400 transition-all duration-200 hover:bg-red-500/30 ring-1 ring-red-500/50"
               >
                 <Radio class="size-4" />
               </button>
@@ -1138,8 +1166,8 @@
                       transmissionOutputVolume === 0 ? 1 : 0
                     )}
                   aria-label={transmissionOutputVolume === 0
-                    ? "Unmute transmission"
-                    : "Mute transmission"}
+                    ? "Unmute screen share"
+                    : "Mute screen share"}
                   class="flex items-center justify-center text-zinc-400 hover:text-zinc-100 transition-colors"
                 >
                   {#if transmissionOutputVolume === 0}

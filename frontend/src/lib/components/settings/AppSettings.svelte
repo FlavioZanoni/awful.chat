@@ -9,6 +9,7 @@ import {
 import { mediaPrefs, setGifAutoplay } from "$lib/media-prefs.svelte";
 </script>
 
+<div class="flex flex-col gap-6">
 <!-- Notifications Section -->
 <div
   class="flex flex-col gap-4 p-4 bg-muted/30 rounded-lg border border-border/50"
@@ -83,4 +84,5 @@ import { mediaPrefs, setGifAutoplay } from "$lib/media-prefs.svelte";
       onCheckedChange={(checked) => setGifAutoplay(checked)}
     />
   </div>
+</div>
 </div>

@@ -151,7 +151,7 @@
         Enter your password to unlock your identity
         {#if identityStore.keypair?.did}
           <span class="block mt-1 text-muted-foreground/60 truncate">
-            {identityStore.keypair.did.slice(0, 24)}…
+            {identityStore.keypair.did.slice(0, 24)}...
           </span>
         {/if}
       </CardDescription>
@@ -165,7 +165,7 @@
           variant="outline"
           class="w-full font-mono border-dashed"
         >
-          {identityStore.loading ? "Unlocking…" : "Use biometrics / device PIN"}
+          {identityStore.loading ? "Unlocking..." : "Use biometrics / device PIN"}
         </Button>
         <div class="flex items-center gap-2 text-muted-foreground/40">
           <div class="flex-1 h-px bg-border"></div>
@@ -194,7 +194,7 @@
       <label
         class="flex items-center gap-2 text-xs text-muted-foreground font-mono cursor-pointer"
       >
-        <input type="checkbox" bind:checked={remember} class="accent-primary" />
+        <input type="checkbox" bind:checked={remember} class="mt-0.5 w-4 h-4 rounded border-input bg-background accent-primary cursor-pointer" />
         Remember my password
       </label>
     </CardContent>
@@ -205,7 +205,7 @@
         disabled={!canUnlock}
         class="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-mono disabled:opacity-40"
       >
-        {identityStore.loading ? "Unlocking…" : "Unlock"}
+        {identityStore.loading ? "Unlocking..." : "Unlock"}
       </Button>
       <Button variant="outline" class="w-full font-mono" onclick={onRecover}>
         Restore from phrase
@@ -244,7 +244,7 @@
               disabled={switching}
               onclick={handleSwitchAccount}
             >
-              {switching ? "Erasing…" : "Erase and switch"}
+              {switching ? "Erasing..." : "Erase and switch"}
             </Button>
           </div>
         </div>

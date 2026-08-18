@@ -182,9 +182,17 @@
     if (urlInput.trim()) preview = urlInput.trim();
   }
 
+  let saving = $state(false);
+
   async function handleSave() {
-    await saveAvatar(preview);
-    onClose();
+    if (saving) return;
+    saving = true;
+    try {
+      await saveAvatar(preview);
+      onClose();
+    } finally {
+      saving = false;
+    }
   }
 
   function handleCancel() {
@@ -226,7 +234,7 @@
     class="flex items-center justify-between px-4 py-3 border-b border-border shrink-0"
   >
     <span class="text-sm font-semibold text-foreground font-mono"
-      >Set Profile Picture</span
+      >Set profile picture</span
     >
     <button
       type="button"
@@ -338,11 +346,11 @@
         <div class="px-2 pt-3 pb-2">
           <div class="relative">
             <Search
-              class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none"
+              class="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none"
             />
             <Input
               placeholder="Search GIFs..."
-              class="pl-8 h-8 text-xs font-mono"
+              class="pl-8 font-mono text-sm"
               value={searchQuery}
               oninput={handleSearchInput}
             />
@@ -395,7 +403,7 @@
             {/if}
             <div class="flex justify-center pt-2">
               <a
-                href="https://klipy.co"
+                href="https://klipy.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-xs text-muted-foreground hover:text-foreground font-mono transition-colors"
@@ -411,7 +419,7 @@
         <div class="flex gap-2 items-center">
           <div class="relative flex-1">
             <Link
-              class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none"
+              class="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none"
             />
             <Input
               placeholder="https://example.com/avatar.png"
@@ -420,7 +428,7 @@
               onkeydown={(e: KeyboardEvent) => e.key === "Enter" && applyUrl()}
             />
           </div>
-          <Button variant="secondary" size="sm" onclick={applyUrl}>Apply</Button
+          <Button variant="secondary" size="sm" onclick={applyUrl}>Use URL</Button
           >
         </div>
       </div>
@@ -431,7 +439,8 @@
     class="flex items-center justify-end gap-2 px-4 py-3 border-t border-border shrink-0"
   >
     <Button variant="ghost" size="sm" onclick={handleCancel}>Cancel</Button>
-    <Button size="sm" onclick={handleSave}>Save</Button>
+    <Button size="sm" onclick={handleSave}
+            disabled={saving}>Save</Button>
   </div>
 {/snippet}
 
@@ -452,10 +461,10 @@
   >
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
-        class="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+        class="fixed inset-0 z-60 bg-black/50   data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       />
       <DialogPrimitive.Content
-        class="fixed top-[50%] left-[50%] z-60 translate-x-[-50%] translate-y-[-50%] w-full max-w-md mx-4 bg-card border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 duration-200"
+        class="fixed top-[50%] left-[50%] z-60 translate-x-[-50%] translate-y-[-50%] w-full max-w-md mx-4 bg-card border border-border rounded-lg shadow-2xl flex flex-col overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 duration-200"
       >
         {@render AvatarPickerContent()}
       </DialogPrimitive.Content>

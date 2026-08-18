@@ -301,7 +301,7 @@
       <Input
         value={query}
         oninput={(e) => (query = (e.target as HTMLInputElement).value)}
-        placeholder="Search KLIPY..."
+        placeholder="Search GIFs..."
         class="pl-8 font-mono text-sm"
       />
       {#if query}
@@ -324,7 +324,7 @@
           onclick={() => (tab = "saved")}
           class="gap-1.5 font-mono text-xs cursor-pointer"
         >
-          <Bookmark class="size-3.5" />
+          <Bookmark class="size-4" />
           Saved
         </Button>
         <Button
@@ -390,13 +390,13 @@
               <button
                 type="button"
                 onclick={(e) => toggleSave(e, gif)}
-                class="absolute top-1 right-1 size-6 rounded-full flex items-center justify-center transition-opacity cursor-pointer
+                class="absolute top-1 right-1 size-7 rounded-full flex items-center justify-center transition-opacity cursor-pointer
                   {isSaved
                   ? 'bg-primary text-primary-foreground opacity-100'
-                  : 'bg-black/50 text-white opacity-0 group-hover:opacity-100'}"
+                  : 'bg-black/70 text-white opacity-0 group-hover:opacity-100'}"
                 aria-label={isSaved ? "Unsave GIF" : "Save GIF"}
               >
-                <Bookmark class="size-3.5 {isSaved ? 'fill-current' : ''}" />
+                <Bookmark class="size-4 {isSaved ? 'fill-current' : ''}" />
               </button>
             </div>
             {#if idx === validGifs.length - 1}
@@ -444,7 +444,7 @@
       class="sm:max-w-lg h-1/2 flex flex-col p-0 overflow-hidden font-mono"
     >
       <Dialog.Header class="p-4 pb-0 shrink-0">
-        <Dialog.Title class="text-sm font-semibold">Choose a GIF</Dialog.Title>
+        <Dialog.Title class="font-mono text-base font-semibold">Choose a GIF</Dialog.Title>
       </Dialog.Header>
       {@render GifPickerContent()}
     </Dialog.Content>

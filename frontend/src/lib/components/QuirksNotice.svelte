@@ -27,11 +27,11 @@
     {
       icon: Send,
       title: "DMs are delivered device to device",
-      body: "A direct message needs both people connected. If the other person is offline it stays queued as \"sending\" and goes out by itself the next time you are both online with the app open. Delivery and read receipts exist in DMs only, not in group rooms.",
+      body: "A direct message needs both people connected. If the other person is offline it stays queued as \"sending\" and goes out by itself the next time you are both online with the app open. Delivery and read receipts exist in DMs only, not in rooms.",
     },
     {
       icon: RefreshCw,
-      title: "Group history comes from whoever is online",
+      title: "Room history comes from whoever is online",
       body: "There is no archive in the cloud. When you join a room or come back to it, you receive the messages held by the peers online at that moment. Anything they do not have arrives later, when someone who kept it shows up.",
     },
     {
@@ -57,7 +57,7 @@
     {
       icon: Video,
       warn: true,
-      title: "Voice is peer to peer, video passes through a server",
+      title: "Voice is peer-to-peer, video passes through a server",
       body: "Your messages, files and voice audio all travel straight between peers, never through a server. Camera and screen share are the one exception: they are routed by a media server so bigger calls work, which means that server sees those streams. On a self-hosted instance that server belongs to whoever runs it, and they can access what passes through it, so only turn on your camera or share your screen on an instance you trust.",
     },
   ];

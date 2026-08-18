@@ -228,7 +228,7 @@
               disabled={persistBusy}
               onclick={handleRequestPersist}
             >
-              {persistBusy ? "Asking…" : "Ask the browser to keep it"}
+              {persistBusy ? "Asking..." : "Request persistent storage"}
             </Button>
             {#if persistDenied}
               <p
@@ -472,7 +472,7 @@
           class="flex-1 font-mono text-xs"
           onclick={handleEraseLocalData}
         >
-          Confirm
+          Erase everything
         </Button>
       </div>
     {/if}

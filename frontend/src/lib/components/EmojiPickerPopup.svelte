@@ -30,13 +30,13 @@
 {#if open}
   <button
     type="button"
-    class="fixed inset-0 z-90 cursor-default"
+    class="fixed inset-0 z-40 cursor-default"
     aria-label="Close emoji picker"
     onclick={onClose}
   ></button>
 
   <div
-    class="fixed z-100 w-85 overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+    class="fixed z-50 w-85 overflow-hidden rounded-md border border-border bg-card shadow-xl"
     style={`left:${left}px; top:${top}px;`}
   >
     <emoji-picker

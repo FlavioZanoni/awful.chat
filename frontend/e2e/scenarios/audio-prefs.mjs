@@ -26,13 +26,13 @@ const openAudio = async () => {
       const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Audio');
       if (b) b.click(); return !!b;
     })()`);
-    return p.eval(`/Input Gain/.test(document.body.innerText)`);
+    return p.eval(`/Input gain/.test(document.body.innerText)`);
   });
 };
 // Collapse whitespace first: the value renders on its own line below the label.
 const readGain = () =>
   p.eval(
-    "(document.body.innerText.split(/\\s+/).join(' ').match(/Input Gain (\\S+)/) || [])[1]"
+    "(document.body.innerText.split(/\\s+/).join(' ').match(/Input gain (\\S+)/) || [])[1]"
   );
 const prefs = () => p.eval(`localStorage.getItem('awful_audio_prefs')`);
 

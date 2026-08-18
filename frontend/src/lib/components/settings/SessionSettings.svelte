@@ -145,7 +145,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
         {/if}
       {:else}
         <p class="text-xs text-muted-foreground font-mono">
-          Use biometrics to unlock without password
+          Use biometrics to unlock without your password.
         </p>
         <Input
           type="password"
@@ -160,7 +160,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
         {/if}
         {#if biometricSuccess}
           <p class="text-xs text-green-500 font-mono">
-            Biometric unlock enabled
+            Biometric unlock is enabled
           </p>
         {/if}
         <Button
@@ -182,7 +182,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
             }
           }}
         >
-          {biometricLoading ? "Please wait..." : "Enable biometric unlock"}
+          {biometricLoading ? "Waiting for device..." : "Enable biometric unlock"}
         </Button>
       {/if}
     </div>
@@ -209,7 +209,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
       }}
     >
       <QrCode class="w-5 h-5" />
-      <span class="text-xs">Generate QR</span>
+      <span class="text-xs">Generate QR code</span>
     </Button>
     <Button
       variant="outline"
@@ -220,7 +220,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
       }}
     >
       <Camera class="w-5 h-5" />
-      <span class="text-xs">Scan QR</span>
+      <span class="text-xs">Scan QR code</span>
     </Button>
   </div>
 </div>

@@ -66,7 +66,7 @@
 {#if !isStandalone}
   <Dialog.Root bind:open>
     <Dialog.Trigger />
-    <Dialog.Content>
+    <Dialog.Content class="font-mono">
       <Dialog.Header>
         <div class="flex items-center gap-2 justify-center mb-2">
           <Download class="w-6 h-6 text-primary" />
@@ -78,8 +78,8 @@
         </Dialog.Description>
       </Dialog.Header>
       <div class="flex flex-col gap-2 mt-4">
-        <Button onclick={handleInstall}>Install App</Button>
-        <Button variant="outline" onclick={handleSkip}>Maybe Later</Button>
+        <Button onclick={handleInstall}>Install app</Button>
+        <Button variant="outline" onclick={handleSkip}>Maybe later</Button>
       </div>
     </Dialog.Content>
   </Dialog.Root>

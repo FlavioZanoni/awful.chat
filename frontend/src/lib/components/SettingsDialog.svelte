@@ -111,7 +111,7 @@
 {#snippet QuirksTab()}
   <div class="flex flex-col gap-3">
     <p class="text-xs font-mono text-muted-foreground leading-relaxed">
-      Awful.chat is peer to peer: no accounts on a server, no copy of your data
+      Awful.chat is peer-to-peer: no accounts on a server, no copy of your data
       anywhere but your own devices. Here is what that changes compared to apps
       like WhatsApp or Discord.
     </p>
@@ -142,7 +142,7 @@
         onclick={handleLockLogout}
       >
         <LogOut class="w-4 h-4 mr-2" />
-        Lock / Logout
+        Lock/Logout
       </Button>
     </div>
   </div>

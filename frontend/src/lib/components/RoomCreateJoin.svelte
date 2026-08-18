@@ -33,30 +33,49 @@
     loadProfile();
   });
 
+  let creating = $state(false);
+  let joining = $state(false);
+
   async function handleCreate() {
-    await saveName(profileStore.nickname);
-    const code = Array.from(crypto.getRandomValues(new Uint8Array(3)))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    createdCode = code;
-    copied = false;
+    if (creating) return;
+    creating = true;
+    try {
+      await saveName(profileStore.nickname);
+      const code = Array.from(crypto.getRandomValues(new Uint8Array(3)))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      createdCode = code;
+      copied = false;
+    } finally {
+      creating = false;
+    }
   }
 
   async function handleJoinCreated() {
-    if (!createdCode) return;
-    await saveName(profileStore.nickname);
-    onJoin(
-      createdCode,
-      profileStore.nickname || "Anon",
-      roomName.trim() || undefined
-    );
-    createdCode = null;
+    if (!createdCode || joining) return;
+    joining = true;
+    try {
+      await saveName(profileStore.nickname);
+      onJoin(
+        createdCode,
+        profileStore.nickname || "Anonymous",
+        roomName.trim() || undefined
+      );
+      createdCode = null;
+    } finally {
+      joining = false;
+    }
   }
 
   async function handleJoin() {
-    if (!joinCode.trim()) return;
-    await saveName(profileStore.nickname);
-    onJoin(joinCode.trim(), profileStore.nickname || "Anonymous");
+    if (!joinCode.trim() || joining) return;
+    joining = true;
+    try {
+      await saveName(profileStore.nickname);
+      onJoin(joinCode.trim(), profileStore.nickname || "Anonymous");
+    } finally {
+      joining = false;
+    }
   }
 
   async function handleCopy(code: string) {
@@ -91,7 +110,7 @@
       <Button
         onclick={toggleSidebar}
         variant="outline"
-        class="absolute top-4 left-4 md:hidden"
+        class="absolute top-4 left-4 sm:hidden"
         aria-label="Open sidebar"
       >
         <Menu />
@@ -121,7 +140,7 @@
               class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-amber-300/10 text-xs"
             >
               <span class="size-2 rounded-full bg-amber-300"></span>
-              <span> Connecting...</span>
+              <span class="text-muted-foreground">Connecting...</span>
             </div>
           {/if}
         </div>
@@ -160,7 +179,7 @@
             <div
               class="absolute inset-0 rounded-full flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity"
             >
-              <span class="text-white text-xs font-mono">edit</span>
+              <span class="text-white text-xs font-mono">Change</span>
             </div>
           </button>
           <Input
@@ -181,10 +200,11 @@
           />
           <Button
             onclick={handleCreate}
+            disabled={creating}
             class="bg-primary hover:bg-primary/90 text-primary-foreground font-mono cursor-pointer"
           >
             <Plus class="size-4" />
-            Create Room
+            {creating ? "Creating..." : "Create room"}
           </Button>
         </div>
 
@@ -201,7 +221,7 @@
           <div class="relative">
             <Input
               bind:value={joinCode}
-              placeholder="Room code or Room link"
+              placeholder="Room code or room link"
               class="bg-background border-input text-foreground placeholder:text-muted-foreground font-mono pr-10 focus-visible:ring-ring"
             />
             <button
@@ -216,11 +236,11 @@
           <Button
             variant="outline"
             onclick={handleJoin}
-            disabled={!joinCode.trim()}
+            disabled={!joinCode.trim() || joining}
             class="border-border text-muted-foreground hover:text-foreground hover:bg-muted font-mono cursor-pointer disabled:opacity-30"
           >
             <LogIn class="size-4 mr-1" />
-            Join Room
+            {joining ? "Joining..." : "Join room"}
           </Button>
         </div>
       </CardContent>
@@ -260,10 +280,11 @@
 
         <Button
           onclick={handleJoinCreated}
+          disabled={joining}
           class="bg-primary hover:bg-primary/90 text-primary-foreground font-mono cursor-pointer w-full"
         >
           <LogIn class="size-4 mr-1" />
-          Join Room
+          {joining ? "Joining..." : "Join room"}
         </Button>
       </CardContent>
     </Card>

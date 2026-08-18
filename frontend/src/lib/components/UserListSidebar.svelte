@@ -130,7 +130,7 @@
   });
 
   function getInitials(name: string): string {
-    return name.charAt(0).toUpperCase();
+    return (name || "?").charAt(0).toUpperCase();
   }
 
   let userMenu = $state<{ user: User; x: number; y: number } | null>(null);
@@ -217,7 +217,8 @@
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div
     role="button"
-    tabindex="0"
+    tabindex={user.isSelf ? -1 : 0}
+    aria-disabled={user.isSelf}
     oncontextmenu={(e) => openUserMenu(e, user)}
     onclick={(e) =>
       openUserMenuAtElement(e, user, e.currentTarget as HTMLElement)}
@@ -231,13 +232,17 @@
         );
       }
     }}
-    class="flex items-center ml-2 gap-3 px-2 py-1.5 rounded-md transition-colors {user.isOnline
-      ? 'hover:bg-muted/50'
-      : 'opacity-60 hover:bg-muted/30'}"
+    class="flex items-center ml-2 gap-3 px-2 py-1.5 rounded-md transition-colors {user.isSelf
+      ? user.isOnline
+        ? ''
+        : 'opacity-60'
+      : user.isOnline
+        ? 'hover:bg-muted/50 cursor-pointer'
+        : 'opacity-60 hover:bg-muted/30 cursor-pointer'}"
   >
     <div class="relative shrink-0">
       <div
-        class="size-8 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold
+        class="size-8 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold font-mono
           {user.isSelf
           ? 'bg-primary/20 text-primary'
           : 'bg-secondary text-secondary-foreground'}"
@@ -291,7 +296,7 @@
 {#snippet SectionDivider(label: string, count: number)}
   <div class="flex items-center gap-2 px-2 py-1.5">
     <span
-      class="text-xs font-semibold text-muted-foreground uppercase tracking-wide"
+      class="text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono"
       >{label}</span
     >
     <Badge variant="secondary" class="text-muted-foreground">{count}</Badge>
@@ -344,9 +349,13 @@
   <aside
     class="w-60 border-l border-border bg-background flex flex-col h-full shrink-0"
   >
-    <div class="border-b border-border p-3 flex items-center gap-2">
+    <div
+      class="flex h-13 shrink-0 items-center gap-2 border-b border-border px-3"
+    >
       <Users class="size-4 text-muted-foreground" />
-      <span class="text-sm font-medium">Users</span>
+      <span class="text-xs font-semibold uppercase tracking-wider font-mono"
+        >Users</span
+      >
       <Badge variant="secondary" class="text-muted-foreground"
         >{users.length}</Badge
       >
@@ -365,21 +374,22 @@
     class="fixed z-50 min-w-40 rounded-md border border-border bg-popover py-1 shadow-xl"
     style="top: {userMenu.y}px; left: {userMenu.x}px"
     onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
   >
     <button
       type="button"
       disabled={!userMenu.user.peerId}
-      class="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted cursor-pointer"
+      class="flex w-full items-center gap-2 px-3 py-1.5 text-sm font-mono hover:bg-muted cursor-pointer"
       onclick={() =>
         userMenu?.user.peerId && handleOpenDm(userMenu.user.peerId)}
     >
       <Users class="size-4" />
-      {userMenu.user.peerId ? "DM user" : "DM unavailable"}
+      {userMenu.user.peerId ? "Send DM" : "DM unavailable"}
     </button>
     {#if userMenu.user.peerId && !isInPhonebook(userMenu.user.peerId)}
       <button
         type="button"
-        class="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted cursor-pointer"
+        class="flex w-full items-center gap-2 px-3 py-1.5 text-sm font-mono hover:bg-muted cursor-pointer"
         onclick={() =>
           userMenu?.user.peerId && handleAddToPhonebook(userMenu.user.peerId)}
       >
@@ -389,7 +399,7 @@
     {:else if userMenu.user.peerId}
       <button
         type="button"
-        class="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-muted cursor-pointer"
+        class="flex w-full items-center gap-2 px-3 py-1.5 text-sm font-mono text-destructive hover:bg-muted cursor-pointer"
         onclick={() =>
           userMenu?.user.peerId &&
           handleRemoveFromPhonebook(userMenu.user.peerId)}

@@ -70,8 +70,15 @@ try {
     })()`);
     return alice.eval(`[...document.querySelectorAll('button')].some((b) => /Remove conversation/.test(b.textContent))`);
   });
+  // First click arms the confirm, second click removes.
   await alice.eval(`(() => {
     [...document.querySelectorAll('button')].find((b) => /Remove conversation/.test(b.textContent)).click();
+    return true;
+  })()`);
+  await alice.waitFor("dm confirm step armed", () =>
+    alice.eval(`[...document.querySelectorAll('button')].some((b) => /Click again to confirm/.test(b.textContent))`));
+  await alice.eval(`(() => {
+    [...document.querySelectorAll('button')].find((b) => /Click again to confirm/.test(b.textContent)).click();
     return true;
   })()`);
 

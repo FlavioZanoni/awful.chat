@@ -284,7 +284,7 @@ async function handleStartScanning() {
               class="font-mono flex-col h-24 gap-2"
             >
               <Keyboard class="w-6 h-6" />
-              <span class="text-xs">Enter code</span>
+              <span class="text-xs">Enter code manually</span>
             </Button>
           </div>
         {/if}
@@ -367,7 +367,7 @@ async function handleStartScanning() {
               class="w-full aspect-square bg-black rounded-lg overflow-hidden"
             ></div>
             <p class="text-xs text-muted-foreground text-center">
-              Point your camera at the QR code on your other device
+              Point your camera at the QR code on your other device.
             </p>
           {/if}
         </div>
@@ -426,7 +426,7 @@ async function handleStartScanning() {
                   {/if}
                 </div>
                 <div class="flex-1">
-                  <p class="font-medium text-sm">Addition (Merge)</p>
+                  <p class="font-medium text-sm">Merge into this device</p>
                   <p class="text-xs text-muted-foreground mt-1">
                     Combines data from both devices. Rooms and messages from the
                     other device will be added to this one.
@@ -456,7 +456,7 @@ async function handleStartScanning() {
                   {/if}
                 </div>
                 <div class="flex-1">
-                  <p class="font-medium text-sm">Replace (Primary)</p>
+                  <p class="font-medium text-sm">Replace everything</p>
                   <p class="text-xs text-muted-foreground mt-1">
                     Replaces all data on this device with data from the other
                     device. Current data will be overwritten.
@@ -507,7 +507,7 @@ async function handleStartScanning() {
             <Check class="w-8 h-8 text-green-500" />
           </div>
           <div class="text-center space-y-1">
-            <p class="font-semibold">Sync complete!</p>
+            <p class="font-semibold">Sync complete</p>
             <p class="text-sm text-muted-foreground">
               Your data has been successfully transferred.
             </p>

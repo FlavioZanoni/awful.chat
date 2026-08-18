@@ -1133,7 +1133,7 @@ export class LibP2PTransport implements PeerTransport {
       console.warn("[Rendezvous] failed to open stream, retrying:", err);
       this.emit("status", {
         type: "rendezvous-failed",
-        message: "Failed to connect to room server - retrying...",
+        message: "Failed to connect to relay - retrying...",
       });
       setTimeout(() => this.startRendezvous(), RENDEZVOUS_RECONNECT_DELAY_MS);
       return;
@@ -1191,7 +1191,7 @@ export class LibP2PTransport implements PeerTransport {
         console.warn("[Rendezvous] stream closed, reconnecting");
         this.emit("status", {
           type: "rendezvous-reconnecting",
-          message: "Room server disconnected - reconnecting...",
+          message: "Relay disconnected - reconnecting...",
         });
         setTimeout(() => this.startRendezvous(), RENDEZVOUS_RECONNECT_DELAY_MS);
       }

@@ -58,10 +58,17 @@ try {
       row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 300 }));
       return true;
     })()`);
-    return alice.eval(`[...document.querySelectorAll('button')].some((b) => /Remove from list/.test(b.textContent))`);
+    return alice.eval(`[...document.querySelectorAll('button')].some((b) => /Remove room/.test(b.textContent))`);
   });
+  // Destructive actions arm on the first click and fire on the second.
   await alice.eval(`(() => {
-    const b = [...document.querySelectorAll('button')].find((x) => /Remove from list/.test(x.textContent));
+    const b = [...document.querySelectorAll('button')].find((x) => /Remove room/.test(x.textContent));
+    b.click(); return true;
+  })()`);
+  await alice.waitFor("confirm step armed", () =>
+    alice.eval(`[...document.querySelectorAll('button')].some((b) => /Click again to confirm/.test(b.textContent))`));
+  await alice.eval(`(() => {
+    const b = [...document.querySelectorAll('button')].find((x) => /Click again to confirm/.test(x.textContent));
     b.click(); return true;
   })()`);
 

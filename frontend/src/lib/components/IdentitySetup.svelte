@@ -270,7 +270,7 @@
           }}
           class="text-muted-foreground hover:text-foreground font-mono mb-2 text-left transition-colors"
         >
-          <ArrowLeft />
+          <ArrowLeft class="size-4" />
         </button>
         <CardTitle class="text-lg font-mono font-semibold">
           Choose a password
@@ -316,7 +316,7 @@
           <input
             type="checkbox"
             bind:checked={remember}
-            class="accent-primary"
+            class="mt-0.5 w-4 h-4 rounded border-input bg-background accent-primary cursor-pointer"
           />
           Remember my password
         </label>
@@ -327,7 +327,7 @@
           disabled={!canCreate}
           class="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-mono disabled:opacity-40"
         >
-          {loading ? "creating..." : "create identity"}
+          {loading ? "Creating..." : "Create identity"}
         </Button>
       </CardFooter>
     </Card>
@@ -396,7 +396,7 @@
           Set your profile
         </CardTitle>
         <CardDescription class="text-muted-foreground text-xs font-mono">
-          optional · you can change this any time from the sidebar
+          Optional · you can change this any time from the sidebar
         </CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col items-center gap-4">
@@ -423,11 +423,11 @@
           <div
             class="absolute inset-0 rounded-full flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity"
           >
-            <span class="text-white text-xs font-mono">change</span>
+            <span class="text-white text-xs font-mono">Change</span>
           </div>
         </button>
         <p class="text-xs text-muted-foreground font-mono text-center">
-          click to upload, pick a GIF, or enter an image URL
+          Click to upload, pick a GIF, or enter an image URL
         </p>
         <Input
           value={profileStore.nickname}
@@ -447,8 +447,8 @@
           class="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-mono"
         >
           {profileStore.nickname.trim() || profileStore.avatarUrl
-            ? "done"
-            : "skip for now"}
+            ? "Done"
+            : "Skip for now"}
         </Button>
       </CardFooter>
     </Card>
@@ -490,7 +490,7 @@
             }
           }}
         >
-          {biometricLoading ? "waiting for device…" : "Enable biometric unlock"}
+          {biometricLoading ? "Waiting for device..." : "Enable biometric unlock"}
         </Button>
         <Button
           variant="outline"
@@ -517,7 +517,7 @@
           }}
           class="text-muted-foreground hover:text-foreground font-mono mb-2 text-left transition-colors"
         >
-          <ArrowLeft />
+          <ArrowLeft class="size-4" />
         </button>
         <CardTitle class="text-lg font-mono font-semibold">
           Restore identity
@@ -573,7 +573,7 @@
           <input
             type="checkbox"
             bind:checked={remember}
-            class="accent-primary"
+            class="mt-0.5 w-4 h-4 rounded border-input bg-background accent-primary cursor-pointer"
           />
           Remember my password
         </label>
@@ -584,7 +584,7 @@
           disabled={!canRestore}
           class="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-mono disabled:opacity-40"
         >
-          {identityStore.loading ? "restoring..." : "restore identity"}
+          {identityStore.loading ? "Restoring..." : "Restore identity"}
         </Button>
       </CardFooter>
     </Card>
@@ -606,7 +606,7 @@
         <DialogDescription
           class="text-muted-foreground text-xs font-mono leading-relaxed"
         >
-          Awful.chat is peer to peer: there are no accounts on a server and no
+          Awful.chat is peer-to-peer: there are no accounts on a server and no
           copy of your data anywhere but your own devices. That buys you
           privacy, and it makes a few things behave differently from apps like
           WhatsApp or Discord.

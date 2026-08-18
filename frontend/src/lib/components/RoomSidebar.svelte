@@ -89,15 +89,32 @@
     y: number;
   } | null>(null);
 
+  // Same clamp the other context menus use, so a right-click near the edge
+  // does not render the menu offscreen.
+  function clampMenu(x: number, y: number) {
+    if (typeof window === "undefined") return { x, y };
+    return {
+      x: Math.max(8, Math.min(x, window.innerWidth - 168)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 96)),
+    };
+  }
+
   function openContextMenu(e: MouseEvent, code: string) {
     e.preventDefault();
-    contextMenu = { code, x: e.clientX, y: e.clientY };
+    contextMenu = { code, ...clampMenu(e.clientX, e.clientY) };
   }
 
   function closeContextMenu() {
     contextMenu = null;
     dmContextMenu = null;
+    confirmingRemove = false;
+    confirmingRemoveDm = false;
   }
+
+  // Deleting a room or conversation destroys its stored history, so it takes
+  // a second click, like the erase flows in settings.
+  let confirmingRemove = $state(false);
+  let confirmingRemoveDm = $state(false);
 
   function openDmContextMenu(
     e: MouseEvent,
@@ -106,7 +123,7 @@
   ) {
     e.preventDefault();
     e.stopPropagation();
-    dmContextMenu = { peerId, inPhonebook, x: e.clientX, y: e.clientY };
+    dmContextMenu = { peerId, inPhonebook, ...clampMenu(e.clientX, e.clientY) };
   }
 
   function isInPhonebook(peerId: string): boolean {
@@ -317,7 +334,7 @@
               : 'text-muted-foreground'}"
           >
             <div
-              class="mt-px flex size-6 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground text-xs font-semibold"
+              class="mt-px flex size-6 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground text-xs font-semibold font-mono"
             >
               {#if entry.avatarUrl}
                 <GifImage
@@ -327,7 +344,7 @@
                   animate="hover"
                 />
               {:else}
-                {entry.nickname.charAt(0).toUpperCase()}
+                {(entry.nickname || "?").charAt(0).toUpperCase()}
               {/if}
             </div>
             <div class="min-w-0 flex-1">
@@ -369,17 +386,24 @@
     class="fixed z-50 min-w-35 rounded-md border border-border bg-popover py-1 shadow-xl"
     style="top: {contextMenu.y}px; left: {contextMenu.x}px"
     onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
   >
     <button
       type="button"
       onclick={() => {
+        if (!confirmingRemove) {
+          confirmingRemove = true;
+          return;
+        }
         onRemoveRoom(contextMenu!.code);
         closeContextMenu();
       }}
-      class="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-muted cursor-pointer font-mono"
+      class="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-muted cursor-pointer font-mono {confirmingRemove
+        ? 'bg-destructive/10'
+        : ''}"
     >
       <Trash2 class="size-4" />
-      Remove from list
+      {confirmingRemove ? "Click again to confirm" : "Remove room"}
     </button>
   </div>
 {/if}
@@ -392,6 +416,7 @@
     class="fixed z-50 min-w-35 rounded-md border border-border bg-popover py-1 shadow-xl"
     style="top: {dmContextMenu.y}px; left: {dmContextMenu.x}px"
     onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
   >
     {#each dmContextActions?.length ? dmContextActions : isInPhonebook(dmContextMenu.peerId) ? [{ type: "removePhonebook", peerId: dmContextMenu.peerId }, { type: "removeConversation", peerId: dmContextMenu.peerId }] : [{ type: "add", peerId: dmContextMenu.peerId }, { type: "removeConversation", peerId: dmContextMenu.peerId }] as action}
       <button
@@ -400,8 +425,13 @@
           if (action.type === "add") onAddToPhonebook(action.peerId);
           if (action.type === "removePhonebook")
             onRemoveFromPhonebook(action.peerId);
-          if (action.type === "removeConversation")
+          if (action.type === "removeConversation") {
+            if (!confirmingRemoveDm) {
+              confirmingRemoveDm = true;
+              return;
+            }
             onRemoveDmConversation(action.peerId);
+          }
           closeContextMenu();
         }}
         class="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted cursor-pointer font-mono {action.type ===
@@ -417,7 +447,7 @@
           Remove from phonebook
         {:else}
           <Trash2 class="size-4" />
-          Remove conversation
+          {confirmingRemoveDm ? "Click again to confirm" : "Remove conversation"}
         {/if}
       </button>
     {/each}

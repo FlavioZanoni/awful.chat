@@ -291,7 +291,7 @@
           <span class="block truncate">
             {inputDevices.find((d) => d.deviceId === activeInput)?.label ||
               inputDevices.find((d) => d.deviceId === "")?.label ||
-              "System Default"}
+              "System default"}
           </span>
         </SelectTrigger>
         <SelectContent class="bg-popover border-border font-mono">
@@ -312,7 +312,7 @@
 
     <div class="flex flex-col gap-2">
       <div class="flex items-center justify-between">
-        <span class="text-xs font-mono text-muted-foreground">Input Gain</span>
+        <span class="text-xs font-mono text-muted-foreground">Input gain</span>
         <span class="text-xs font-mono tabular-nums text-green-400"
           >{gainToPercent(sliderToGain(inputSlider[0]))}</span
         >
@@ -331,7 +331,7 @@
 
   <!-- Noise Suppression Section -->
   <div
-    class="flex flex-col gap-3 p-4 bg-muted/30 rounded-lg border border-border/50"
+    class="flex flex-col gap-4 p-4 bg-muted/30 rounded-lg border border-border/50"
   >
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
@@ -360,7 +360,7 @@
       <div class="flex flex-col gap-2 pl-3 border-l-2 border-blue-500/30">
         <div class="flex items-center justify-between">
           <span class="text-xs font-mono text-muted-foreground"
-            >Gate Threshold</span
+            >Gate threshold</span
           >
           <span class="text-xs font-mono tabular-nums text-blue-400"
             >{noiseGateThreshold.toFixed(4)}</span
@@ -392,13 +392,13 @@
       onclick={handleMicTest}
       disabled={isMicStarting}
     >
-      {isMicTesting ? "■ Stop Test" : "▶ Test Mic (hear yourself)"}
+      {isMicTesting ? "■ Stop test" : "▶ Test mic (hear yourself)"}
     </Button>
 
     {#if isMicTesting}
       <div class="flex flex-col gap-1">
         <div class="flex items-center justify-between text-[10px] font-mono">
-          <span class="text-muted-foreground">Mic Level</span>
+          <span class="text-muted-foreground">Mic level</span>
           <span class="text-muted-foreground"
             >{Math.round(micLevel * 100)}%</span
           >
@@ -437,7 +437,7 @@
           <span class="block truncate">
             {outputDevices.find((d) => d.deviceId === activeOutput)?.label ||
               outputDevices.find((d) => d.deviceId === "")?.label ||
-              "System Default"}
+              "System default"}
           </span>
         </SelectTrigger>
         <SelectContent class="bg-popover border-border font-mono">
@@ -459,7 +459,7 @@
     <div class="flex flex-col gap-2">
       <div class="flex items-center justify-between">
         <span class="text-xs font-mono text-muted-foreground"
-          >Output Volume</span
+          >Output volume</span
         >
         <span class="text-xs font-mono tabular-nums text-orange-400"
           >{gainToPercent(sliderToGain(outputSlider[0]))}</span

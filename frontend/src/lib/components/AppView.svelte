@@ -689,17 +689,17 @@
             >
               <Dialog.Portal>
                 <Dialog.Overlay
-                  class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+                  class="fixed inset-0 z-40 bg-black/50 "
                 />
                 <Dialog.Content
                   class="fixed left-1/2 top-1/2 z-50 w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-background p-4 shadow-lg"
                 >
                   {#if incomingSharedText && incomingSharedFiles.length === 0}
-                    <Dialog.Title class="text-lg font-semibold">
-                      Sharing text
+                    <Dialog.Title class="font-mono text-base font-semibold">
+                      Sending text
                     </Dialog.Title>
                   {:else if incomingSharedFiles.length > 0}
-                    <Dialog.Title class="text-lg font-semibold">
+                    <Dialog.Title class="font-mono text-base font-semibold">
                       Sending {incomingSharedFiles.length} file{incomingSharedFiles.length ===
                       1
                         ? ""
@@ -711,13 +711,13 @@
                     <Dialog.Description
                       class="mt-1 text-sm text-muted-foreground"
                     >
-                      Choose a room to send to
+                      Choose a room to send to.
                     </Dialog.Description>
                     <div class="mt-4 flex flex-col gap-2">
                       {#each roomsStore.rooms as room (room.roomCode)}
                         <button
                           type="button"
-                          class="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground hover:bg-muted"
+                          class="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2 text-sm font-mono text-foreground hover:bg-muted cursor-pointer"
                           onclick={() => handleSelectRoom(room.roomCode)}
                         >
                           <span class="font-medium"
@@ -758,7 +758,7 @@
       <Dialog.Root bind:open={createJoinOpen}>
         <Dialog.Portal>
           <Dialog.Overlay
-            class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+            class="fixed inset-0 z-40 bg-black/50 "
           />
           <Dialog.Content
             class="fixed w-sm top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 p-0 border-0 [&>div]:bg-transparent [&>div]:min-h-0 [&>div]:p-0"
@@ -789,7 +789,7 @@
               class="flex flex-col items-center justify-center h-40 text-muted-foreground"
             >
               <Notebook class="size-12 mb-2 opacity-50" />
-              <p class="text-sm">No saved contacts found in your phonebook</p>
+              <p class="text-sm">No contacts yet</p>
             </div>
           {:else}
             <!-- Starred Contacts -->
@@ -798,16 +798,16 @@
 
             {#if starred.length > 0}
               <div
-                class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wide"
+                class="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono"
               >
                 Starred
               </div>
               {#each starred as entry (entry.peerId)}
                 <div
-                  class="flex items-center gap-2 rounded-md border border-border p-2 group"
+                  class="flex items-center gap-2 rounded-md border border-border p-2 group hover:bg-accent/50 transition-colors"
                 >
                   <div
-                    class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold flex items-center justify-center shrink-0"
+                    class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold font-mono flex items-center justify-center shrink-0"
                   >
                     {#if entry.avatarUrl}
                       <GifImage
@@ -817,7 +817,7 @@
                         animate="hover"
                       />
                     {:else}
-                      {entry.nickname.charAt(0).toUpperCase()}
+                      {(entry.nickname || "?").charAt(0).toUpperCase()}
                     {/if}
                   </div>
                   <button
@@ -836,15 +836,17 @@
                     </div>
                   </button>
                   <button
-                    class="size-8 inline-flex items-center justify-center rounded hover:bg-accent"
+                    class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                     onclick={() => toggleFavorite(entry.peerId)}
                     title="Remove from favorites"
                   >
                     <Star class="size-4 text-yellow-500 fill-yellow-500" />
                   </button>
                   <button
-                    class="size-8 inline-flex items-center justify-center rounded hover:bg-accent"
+                    class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                     onclick={() => removePhonebookContact(entry.peerId)}
+                    title="Remove contact"
+                    aria-label="Remove contact"
                   >
                     <Trash2 class="size-4 text-destructive" />
                   </button>
@@ -856,17 +858,17 @@
             {#if regular.length > 0}
               {#if starred.length > 0}
                 <div
-                  class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wide mt-4"
+                  class="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono mt-4"
                 >
                   Contacts
                 </div>
               {/if}
               {#each regular as entry (entry.peerId)}
                 <div
-                  class="flex items-center gap-2 rounded-md border border-border p-2 group"
+                  class="flex items-center gap-2 rounded-md border border-border p-2 group hover:bg-accent/50 transition-colors"
                 >
                   <div
-                    class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold flex items-center justify-center shrink-0"
+                    class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold font-mono flex items-center justify-center shrink-0"
                   >
                     {#if entry.avatarUrl}
                       <GifImage
@@ -876,7 +878,7 @@
                         animate="hover"
                       />
                     {:else}
-                      {entry.nickname.charAt(0).toUpperCase()}
+                      {(entry.nickname || "?").charAt(0).toUpperCase()}
                     {/if}
                   </div>
                   <button
@@ -902,8 +904,10 @@
                     <Star class="size-4 text-gray-400" />
                   </button>
                   <button
-                    class="size-8 inline-flex items-center justify-center rounded hover:bg-accent"
+                    class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                     onclick={() => removePhonebookContact(entry.peerId)}
+                    title="Remove contact"
+                    aria-label="Remove contact"
                   >
                     <Trash2 class="size-4 text-destructive" />
                   </button>
@@ -918,12 +922,12 @@
     <Dialog.Root open={phonebookOpen} onOpenChange={(v) => (phonebookOpen = v)}>
       <Dialog.Portal>
         <Dialog.Overlay
-          class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+          class="fixed inset-0 z-40 bg-black/50 "
         />
         <Dialog.Content
           class="fixed left-1/2 top-1/2 z-50 w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-background p-4 shadow-lg min-h-75"
         >
-          <Dialog.Title class="text-lg font-semibold flex items-center gap-2">
+          <Dialog.Title class="font-mono text-base font-semibold flex items-center gap-2">
             <Users class="size-4" />
             Phonebook
           </Dialog.Title>
@@ -933,7 +937,7 @@
                 class="flex flex-col items-center justify-center h-40 text-muted-foreground"
               >
                 <Notebook class="size-12 mb-2 opacity-50" />
-                <p class="text-sm">No saved contacts found in your phonebook</p>
+                <p class="text-sm">No contacts yet</p>
               </div>
             {:else}
               <!-- Starred Contacts -->
@@ -942,16 +946,16 @@
 
               {#if starred.length > 0}
                 <div
-                  class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wide"
+                  class="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono"
                 >
                   Starred
                 </div>
                 {#each starred as entry (entry.peerId)}
                   <div
-                    class="flex items-center gap-2 rounded-md border border-border p-2 group"
+                    class="flex items-center gap-2 rounded-md border border-border p-2 group hover:bg-accent/50 transition-colors"
                   >
                     <div
-                      class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold flex items-center justify-center shrink-0"
+                      class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold font-mono flex items-center justify-center shrink-0"
                     >
                       {#if entry.avatarUrl}
                         <GifImage
@@ -961,7 +965,7 @@
                           animate="hover"
                         />
                       {:else}
-                        {entry.nickname.charAt(0).toUpperCase()}
+                        {(entry.nickname || "?").charAt(0).toUpperCase()}
                       {/if}
                     </div>
                     <button
@@ -994,6 +998,8 @@
                     <button
                       class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                       onclick={() => removePhonebookContact(entry.peerId)}
+                      title="Remove contact"
+                      aria-label="Remove contact"
                     >
                       <Trash2 class="size-4 text-destructive" />
                     </button>
@@ -1005,17 +1011,17 @@
               {#if regular.length > 0}
                 {#if starred.length > 0}
                   <div
-                    class="px-2 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wide mt-4"
+                    class="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono mt-4"
                   >
                     Contacts
                   </div>
                 {/if}
                 {#each regular as entry (entry.peerId)}
                   <div
-                    class="flex items-center gap-2 rounded-md border border-border p-2 group"
+                    class="flex items-center gap-2 rounded-md border border-border p-2 group hover:bg-accent/50 transition-colors"
                   >
                     <div
-                      class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold flex items-center justify-center shrink-0"
+                      class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold font-mono flex items-center justify-center shrink-0"
                     >
                       {#if entry.avatarUrl}
                         <GifImage
@@ -1025,7 +1031,7 @@
                           animate="hover"
                         />
                       {:else}
-                        {entry.nickname.charAt(0).toUpperCase()}
+                        {(entry.nickname || "?").charAt(0).toUpperCase()}
                       {/if}
                     </div>
                     <button
@@ -1053,6 +1059,8 @@
                     <button
                       class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                       onclick={() => removePhonebookContact(entry.peerId)}
+                      title="Remove contact"
+                      aria-label="Remove contact"
                     >
                       <Trash2 class="size-4 text-destructive" />
                     </button>

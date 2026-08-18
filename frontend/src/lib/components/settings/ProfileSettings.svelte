@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Input } from "$lib/components/ui/input";
+import { Label } from "$lib/components/ui/label";
   import { Button } from "$lib/components/ui/button";
   import { profileStore, saveName } from "$lib/profile.svelte";
   import { lock } from "$lib/identity/identity.svelte";
@@ -36,13 +37,13 @@
 </script>
 
 <div
-  class="flex flex-col gap-5 p-4 bg-muted/30 rounded-lg border border-border/50"
+  class="flex flex-col gap-4 p-4 bg-muted/30 rounded-lg border border-border/50"
 >
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-purple-500 rounded-full"></div>
-    <span
+    <Label
       class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
-      >Profile</span
+      >Profile</Label
     >
   </div>
 
@@ -78,7 +79,7 @@
         onkeydown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
         }}
-        placeholder="Display name"
+        placeholder="Your display name"
         class="bg-background border-input text-foreground placeholder:text-muted-foreground font-mono focus-visible:ring-ring text-center w-full max-w-64 md:max-w-80"
       />
     </div>
@@ -91,7 +92,7 @@
       onclick={handleLockLogout}
     >
       <LogOut class="w-4 h-4 mr-2" />
-      Lock / Logout
+      Lock/Logout
     </Button>
   {/if}
 </div>

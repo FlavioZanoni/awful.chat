@@ -30,7 +30,7 @@
         },
         {
           name: "WebTorrent",
-          what: "peer to peer file transfer",
+          what: "peer-to-peer file transfer",
           url: "https://webtorrent.io",
         },
         {

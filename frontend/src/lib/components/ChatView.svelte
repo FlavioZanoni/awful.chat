@@ -27,6 +27,7 @@
   import VoiceVideoCallView from "./VoiceVideoCallView.svelte";
   import MsgRender from "./MsgRender.svelte";
   import GifPicker from "./GifPicker.svelte";
+  import GifImage from "./GifImage.svelte";
   import EmojiPickerPopup from "./EmojiPickerPopup.svelte";
   import UserListSidebar from "./UserListSidebar.svelte";
   import { profileStore, loadProfile } from "$lib/profile.svelte";
@@ -780,6 +781,9 @@
     closeUserMenu();
   }
 
+  // Deleting destroys stored history, so the header button arms first.
+  let confirmingDelete = $state(false);
+
   const isDmChat = $derived(
     transportState.chatMode === "dm" && !!transportState.activeDmPeerId
   );
@@ -804,7 +808,11 @@
 <svelte:window
   onclick={closeUserMenu}
   onkeydown={(e) => {
-    if (e.key === "Escape") closeUserMenu();
+    if (e.key === "Escape") {
+      closeUserMenu();
+      reactionPickerFor = null;
+      activeMessageId = null;
+    }
   }}
 />
 
@@ -886,6 +894,7 @@
                 variant="ghost"
                 size="icon"
                 onclick={joinCall}
+                disabled={transportState.connecting}
                 aria-label="Join call"
                 class="text-muted-foreground hover:text-foreground cursor-pointer"
               >
@@ -895,7 +904,7 @@
           </Tip>
         {/if}
         {#if !isDmChat}
-          <Tip text={showUserList ? "Hide members" : "Show members"}>
+          <Tip text={showUserList ? "Hide users" : "Show users"}>
             {#snippet children(props)}
               <Button
                 {...props}
@@ -940,15 +949,31 @@
             {/snippet}
           </Tip>
         {/if}
-        <Tip text="Leave room">
+        <Tip
+          text={confirmingDelete
+            ? "Click again to confirm"
+            : isDmChat
+              ? "Delete conversation"
+              : "Delete room"}
+        >
           {#snippet children(props)}
             <Button
               {...props}
               variant="ghost"
               size="icon"
-              onclick={onLeave}
-              aria-label="Leave room"
-              class="text-red-400 hover:bg-destructive/10! hover:text-destructive!"
+              onclick={() => {
+                if (!confirmingDelete) {
+                  confirmingDelete = true;
+                  setTimeout(() => (confirmingDelete = false), 3000);
+                  return;
+                }
+                confirmingDelete = false;
+                onLeave();
+              }}
+              aria-label={isDmChat ? "Delete conversation" : "Delete room"}
+              class="text-red-400 hover:bg-destructive/10! hover:text-destructive! {confirmingDelete
+                ? 'bg-destructive/20!'
+                : ''}"
             >
               <LogOut class="size-4" />
             </Button>
@@ -1081,7 +1106,7 @@
                           );
                         }
                       }}
-                      class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full overflow-hidden text-xs font-semibold
+                      class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full overflow-hidden text-xs font-semibold font-mono
                       {isOwn
                         ? 'bg-primary/20 text-primary'
                         : 'bg-secondary text-secondary-foreground'}"
@@ -1093,10 +1118,11 @@
                           class="size-full object-cover"
                         />
                       {:else if !isOwn && senderAvatar(msg.senderId)}
-                        <img
-                          src={senderAvatar(msg.senderId)}
+                        <GifImage
+                          src={senderAvatar(msg.senderId) ?? ""}
                           alt={displayName(msg)}
                           class="size-full object-cover"
+                          animate="hover"
                         />
                       {:else}
                         {initials(msg)}
@@ -1175,6 +1201,7 @@
                     type="button"
                     class="size-7 inline-flex items-center justify-center rounded bg-card border border-border/70 text-muted-foreground hover:text-foreground cursor-pointer"
                     title="React"
+                    aria-label="React"
                     onclick={(e) => {
                       e.stopPropagation();
                       if (reactionPickerFor === msg.id) {
@@ -1191,6 +1218,7 @@
                     type="button"
                     class="size-7 inline-flex items-center justify-center rounded bg-card border border-border/70 text-muted-foreground hover:text-foreground cursor-pointer"
                     title="Reply"
+                    aria-label="Reply"
                     onclick={(e) => {
                       e.stopPropagation();
                       startReply(msg);
@@ -1340,7 +1368,7 @@
           bind:value={draft}
           onkeydown={handleKeydown}
           oninput={autoResize}
-          placeholder="Type a message…"
+          placeholder="Type a message..."
           rows={1}
           class="w-full resize-none rounded-md border border-input bg-background pl-3 pr-20 py-2 text-sm text-foreground placeholder:text-muted-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring min-h-10 max-h-30 overflow-y-auto"
         ></textarea>
@@ -1423,20 +1451,21 @@
     style="top: {userMenu.y}px; left: {userMenu.x}px"
     onkeydown={() => {}}
     onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
   >
     <button
       type="button"
       disabled={!userMenu.peerId}
-      class="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted cursor-pointer"
+      class="flex w-full items-center gap-2 px-3 py-1.5 text-sm font-mono hover:bg-muted cursor-pointer"
       onclick={() => userMenu?.peerId && startDmFromMenu(userMenu.peerId)}
     >
       <Users class="size-4" />
-      {userMenu.peerId ? "DM user" : "DM unavailable"}
+      {userMenu.peerId ? "Send DM" : "DM unavailable"}
     </button>
     {#if userMenu.peerId && !isInPhonebook(userMenu.peerId)}
       <button
         type="button"
-        class="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted cursor-pointer"
+        class="flex w-full items-center gap-2 px-3 py-1.5 text-sm font-mono hover:bg-muted cursor-pointer"
         onclick={() => userMenu?.peerId && addFromMenu(userMenu.peerId)}
       >
         <UserPlus class="size-4" />
@@ -1445,7 +1474,7 @@
     {:else if userMenu.peerId}
       <button
         type="button"
-        class="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-muted cursor-pointer"
+        class="flex w-full items-center gap-2 px-3 py-1.5 text-sm font-mono text-destructive hover:bg-muted cursor-pointer"
         onclick={() => userMenu?.peerId && removeFromMenu(userMenu.peerId)}
       >
         <UserRoundMinus class="size-4" />
@@ -1453,7 +1482,7 @@
       </button>
     {:else}
       <div class="px-3 py-1.5 text-xs text-muted-foreground">
-        Peer unavailable
+        DM unavailable
       </div>
     {/if}
   </div>
