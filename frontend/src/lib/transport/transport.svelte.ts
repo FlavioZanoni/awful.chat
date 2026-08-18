@@ -15,6 +15,7 @@ import {
   putAttachment,
   getAttachmentsByMessage,
   updateMessageStatus,
+  getMessage,
   getRoomParticipants,
   addRoomParticipant,
   removeRoomParticipant,
@@ -203,6 +204,22 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
     selfId: () => _transport.selfId(),
     node: () => _transport.p2pNode,
   };
+}
+
+/**
+ * DM frames that arrived before the sender's DID was known, replayed once the
+ * binding lands. Bounded: an unbound peer must not be able to make us buffer
+ * without limit.
+ */
+type PendingDm = { payload: { id: string; text: string; ts: number } };
+const _pendingDmByPeer = new Map<string, PendingDm[]>();
+const MAX_PENDING_DM_PER_PEER = 32;
+
+function _replayPendingDm(peerId: string, senderDid: string): void {
+  const pending = _pendingDmByPeer.get(peerId);
+  if (!pending?.length) return;
+  _pendingDmByPeer.delete(peerId);
+  for (const envelope of pending) _handleDmChat(peerId, senderDid, envelope);
 }
 
 /** Mutate the peer->DID map through here so reactive readers are notified. */
@@ -443,11 +460,7 @@ async function _handleSyncBatch(
   // Bind incoming history to the room named in the (signed-message-bearing)
   // batch, and only if we actually joined it - a peer cannot inject history
   // into whatever room the receiver currently has open.
-  if (
-    !messages.length ||
-    !roomCode ||
-    !_transport.rooms().includes(roomCode)
-  )
+  if (!messages.length || !roomCode || !_transport.rooms().includes(roomCode))
     return;
   const verdicts = await Promise.all(messages.map(_verifyIncoming));
   const verified = messages.filter((_, i) => verdicts[i]);
@@ -513,7 +526,10 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
   // Queued DMs are keyed by DID, and the "connect" event fires before we
   // know the peer's DID - so the real flush happens here, once the profile
   // (and with it the DID) has arrived.
-  if (isNewMapping) flushQueuedDmForPeer(peerId).catch(() => {});
+  if (isNewMapping) {
+    flushQueuedDmForPeer(peerId).catch(() => {});
+    _replayPendingDm(peerId, did);
+  }
 
   const avatarUrl = normalizeAvatarUrl(msg.avatarUrl);
 
@@ -541,7 +557,11 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
 }
 
 /** Chime when somebody else joins or leaves the call we are sitting in. */
-function _peerCallSound(room: string | undefined, nowInCall: boolean, wasInCall: boolean): void {
+function _peerCallSound(
+  room: string | undefined,
+  nowInCall: boolean,
+  wasInCall: boolean
+): void {
   const chime = peerCallChime({
     imInCall: transportState.inCall,
     myCallRoom: transportState.callRoomCode,
@@ -553,7 +573,11 @@ function _peerCallSound(room: string | undefined, nowInCall: boolean, wasInCall:
   else if (chime === "leave") playPeerLeaveSound();
 }
 
-function _handleCallPresence(peerId: string, inCall: boolean, roomCode?: string): void {
+function _handleCallPresence(
+  peerId: string,
+  inCall: boolean,
+  roomCode?: string
+): void {
   const next = new Set(transportState.callPeerIds);
   const roomNext = new Map(transportState.callPeerRooms);
   const wasInCall = next.has(peerId);
@@ -946,6 +970,81 @@ _transport.on("disconnect", (peerId) => {
   }
 });
 
+/**
+ * An incoming DM, once we know who sent it.
+ *
+ * Split out of the message handler so a frame that arrived before the sender's
+ * DID was bound can be replayed through exactly the same path.
+ */
+function _handleDmChat(
+  peerId: string,
+  senderDid: string,
+  envelope: { payload: { id: string; text: string; ts: number } }
+): void {
+  void (async () => {
+    const roomCode = await ensureDmRoomForPeer(peerId);
+    if (!roomCode) return;
+    _transport.joinRoom(roomCode);
+
+    const msg: Message = {
+      id: envelope.payload.id,
+      roomCode,
+      senderId: senderDid,
+      senderName: resolveDmDisplayName(peerId),
+      timestamp: envelope.payload.ts,
+      lamport: envelope.payload.ts,
+      type: MessageType.Text,
+      content: envelope.payload.text,
+      attachments: [],
+      status: "delivered",
+    };
+
+    // Against storage, not the on-screen list: that list holds whichever
+    // conversation is open, so a redelivered message was only recognised
+    // as a duplicate when you happened to be looking at that DM.
+    if (!(await getMessage(msg.id))) {
+      await putMessage(msg);
+      await refreshDmRooms();
+      transportState.dmVersion += 1;
+      notifyMessage({
+        title: msg.senderName,
+        body: msg.content,
+        tag: `dm:${roomCode}`,
+      });
+      const activeDid = peerIdToDid(transportState.activeDmPeerId ?? "");
+      const isViewingThisDm =
+        transportState.chatMode === "dm" &&
+        (activeDid === senderDid || activeDid === peerId);
+      if (isViewingThisDm) {
+        transportState.messages = [...transportState.messages, msg].sort(
+          (a, b) => a.timestamp - b.timestamp
+        );
+        await markRoomSeen(roomCode, msg.lamport);
+        const roomIndex = roomsStore.dmRooms.findIndex(
+          (r) => r.roomCode === roomCode
+        );
+        if (roomIndex !== -1) {
+          roomsStore.dmRooms[roomIndex] = {
+            ...roomsStore.dmRooms[roomIndex],
+            lastSeenLamport: msg.lamport,
+          };
+        }
+        await refreshDmRooms();
+        transportState.dmVersion += 1;
+        // Conversation is on screen - this message is read, not just delivered
+        _transport
+          .send(peerId, encodeDmReadEnvelope([envelope.payload.id]))
+          .catch(() => {});
+      }
+    }
+
+    _transport
+      .send(peerId, encodeDmAckEnvelope(envelope.payload.id))
+      .catch(() => {});
+  })().catch(console.error);
+  return;
+}
+
 _transport.on("message", (peerId, data, room) => {
   if (room === null) {
     const envelope = parseDmEnvelope(data);
@@ -962,65 +1061,21 @@ _transport.on("message", (peerId, data, room) => {
         return;
       }
 
-      // Handle incoming DM chat message
-      const senderDid = _peerIdToDid.get(peerId) ?? peerId;
-      (async () => {
-        const roomCode = await ensureDmRoomForPeer(peerId);
-        _transport.joinRoom(roomCode);
-
-        const msg: Message = {
-          id: envelope.payload.id,
-          roomCode,
-          senderId: senderDid,
-          senderName: resolveDmDisplayName(peerId),
-          timestamp: envelope.payload.ts,
-          lamport: envelope.payload.ts,
-          type: MessageType.Text,
-          content: envelope.payload.text,
-          attachments: [],
-          status: "delivered",
-        };
-
-        if (!transportState.messages.some((m) => m.id === msg.id)) {
-          await putMessage(msg);
-          await refreshDmRooms();
-          transportState.dmVersion += 1;
-          notifyMessage({
-            title: msg.senderName,
-            body: msg.content,
-            tag: `dm:${roomCode}`,
-          });
-          const activeDid = peerIdToDid(transportState.activeDmPeerId ?? "");
-          const isViewingThisDm =
-            transportState.chatMode === "dm" &&
-            (activeDid === senderDid || activeDid === peerId);
-          if (isViewingThisDm) {
-            transportState.messages = [...transportState.messages, msg].sort(
-              (a, b) => a.timestamp - b.timestamp
-            );
-            await markRoomSeen(roomCode, msg.lamport);
-            const roomIndex = roomsStore.dmRooms.findIndex(
-              (r) => r.roomCode === roomCode
-            );
-            if (roomIndex !== -1) {
-              roomsStore.dmRooms[roomIndex] = {
-                ...roomsStore.dmRooms[roomIndex],
-                lastSeenLamport: msg.lamport,
-              };
-            }
-            await refreshDmRooms();
-            transportState.dmVersion += 1;
-            // Conversation is on screen - this message is read, not just delivered
-            _transport
-              .send(peerId, encodeDmReadEnvelope([envelope.payload.id]))
-              .catch(() => {});
-          }
+      // Handle incoming DM chat message.
+      // Until the sender's profile has bound their peerId to a DID we cannot
+      // tell which conversation this belongs to: the room code is a hash of
+      // the two DIDs. Hold it and replay once the binding lands, rather than
+      // filing it in a peerId-derived thread the sender never reads.
+      const senderDid = _peerIdToDid.get(peerId);
+      if (!senderDid) {
+        const pending = _pendingDmByPeer.get(peerId) ?? [];
+        if (pending.length < MAX_PENDING_DM_PER_PEER) {
+          pending.push(envelope);
+          _pendingDmByPeer.set(peerId, pending);
         }
-
-        _transport
-          .send(peerId, encodeDmAckEnvelope(envelope.payload.id))
-          .catch(() => {});
-      })().catch(console.error);
+        return;
+      }
+      _handleDmChat(peerId, senderDid, envelope);
       return;
     }
   }

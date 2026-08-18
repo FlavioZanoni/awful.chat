@@ -108,7 +108,7 @@ function queueDmMessage(
 
 export async function dmConversationCodeFor(
   peerIdOrDid: string
-): Promise<string> {
+): Promise<string | null> {
   const resolvedPeerId = resolveDmPeerId(peerIdOrDid) ?? peerIdOrDid;
   return dmConversationCodeAsync(resolvedPeerId);
 }
@@ -117,11 +117,27 @@ export async function dmConversationCodeFor(
  * Get the stable DM room code for a conversation with a peer.
  * Uses DIDs (stable identity) not peer IDs (ephemeral).
  */
-async function dmConversationCodeAsync(peerIdOrDid: string): Promise<string> {
+/**
+ * The peer's stable DID, or null if we have not verified it yet.
+ *
+ * A DM room code is a hash of the two DIDs, so a peerId standing in for one of
+ * them produces a DIFFERENT room: the conversation silently forks into a
+ * second thread that never merges back. A peerId cannot be turned into a DID
+ * any more (devices carry their own libp2p keys), so the only safe answer when
+ * the binding has not arrived is "not yet".
+ */
+export function dmPeerDid(peerIdOrDid: string): string | null {
+  if (looksLikeDid(peerIdOrDid)) return peerIdOrDid;
+  const resolved = resolveToDid(peerIdOrDid, _peerIdToDid);
+  return looksLikeDid(resolved) ? resolved : null;
+}
+
+async function dmConversationCodeAsync(
+  peerIdOrDid: string
+): Promise<string | null> {
   const selfDid = identityStore.did ?? _transport.selfId();
-  // Resolve to the stable DID (learned mapping, else derived from the peerId)
-  // so a conversation never fragments across a peerId- and a DID-keyed room.
-  const peerDid = resolveToDid(peerIdOrDid, _peerIdToDid);
+  const peerDid = dmPeerDid(peerIdOrDid);
+  if (!peerDid) return null;
   return hashDmRoomCode(selfDid, peerDid);
 }
 
@@ -132,6 +148,11 @@ export async function openDmConversation(peerIdOrDid: string): Promise<void> {
   const resolvedPeerId = resolveDmPeerId(peerIdOrDid) ?? peerIdOrDid;
   if (!resolvedPeerId) return;
   const roomCode = await ensureDmRoomForPeer(resolvedPeerId);
+  if (!roomCode) {
+    transportState.error =
+      "Cannot open this conversation yet: waiting to verify who this peer is.";
+    return;
+  }
   _transport.joinRoom(roomCode);
   await _loadHistory(roomCode);
   transportState.chatMode = "dm";
@@ -155,6 +176,12 @@ export async function sendDirectMessage(text: string): Promise<void> {
   if (!body) return;
 
   const roomCode = await ensureDmRoomForPeer(peerId);
+  if (!roomCode) {
+    // Sending into a peerId-derived room would file the message in a thread
+    // the other side never reads.
+    transportState.error = "Cannot send yet: still verifying who this peer is.";
+    return;
+  }
   _transport.joinRoom(roomCode);
 
   const id = crypto.randomUUID();
@@ -250,7 +277,8 @@ function queueEntryKey(e: QueuedMessage): string {
 }
 
 async function _flushQueuedDmForPeer(peerId: string): Promise<void> {
-  const peerDid = _peerIdToDid.get(peerId) ?? resolveToDid(peerId, _peerIdToDid);
+  const peerDid =
+    _peerIdToDid.get(peerId) ?? resolveToDid(peerId, _peerIdToDid);
   if (!peerDid) return; // Can't flush if we don't know their DID yet
 
   const sent = new Set<string>();
@@ -286,7 +314,11 @@ export async function joinPhonebookDmRooms(): Promise<void> {
   if (!selfDid) return;
   const entries = await getPhonebookEntries();
   for (const entry of entries) {
-    const peerDid = resolveToDid(entry.peerId, _peerIdToDid);
+    // entry.did first: this runs right after connecting, when no peer has been
+    // bound yet, so resolving the peerId would subscribe to a room code built
+    // from a peerId and quietly miss every DM sent to the real one.
+    const peerDid = dmPeerDid(entry.did ?? entry.peerId);
+    if (!peerDid) continue;
     const roomCode = await hashDmRoomCode(selfDid, peerDid);
     _transport.joinRoom(roomCode);
   }
@@ -294,9 +326,10 @@ export async function joinPhonebookDmRooms(): Promise<void> {
 
 export async function ensureDmRoomForPeer(
   peerIdOrDid: string
-): Promise<string> {
-  const peerDid = resolveToDid(peerIdOrDid, _peerIdToDid);
-  const roomCode = await dmConversationCodeAsync(peerIdOrDid);
+): Promise<string | null> {
+  const peerDid = dmPeerDid(peerIdOrDid);
+  const roomCode = peerDid ? await dmConversationCodeAsync(peerIdOrDid) : null;
+  if (!roomCode || !peerDid) return null;
   const existing = await getRoom(roomCode);
   if (existing) return roomCode;
   const room: DMRoom = {
@@ -316,12 +349,17 @@ export async function ensureDmRoomForPeer(
 export async function addToPhonebook(peerIdOrDid: string): Promise<void> {
   const resolvedPeerId = resolveDmPeerId(peerIdOrDid);
   if (!resolvedPeerId) return;
-  const roomCode = await ensureDmRoomForPeer(resolvedPeerId);
-  const did = _peerIdToDid.get(resolvedPeerId);
-  const profile = did ? await getPeerProfile(did) : undefined;
+  // Storing the peerId in the did field poisons the contact permanently: every
+  // room code derived from it afterwards points at a conversation nobody else
+  // is in.
+  const did = dmPeerDid(resolvedPeerId);
+  if (!did) return;
+  const roomCode = await ensureDmRoomForPeer(did);
+  if (!roomCode) return;
+  const profile = await getPeerProfile(did);
   await putPhonebookEntry({
     peerId: resolvedPeerId,
-    did: did ?? resolvedPeerId,
+    did,
     nickname: profile?.nickname || resolveDmDisplayName(resolvedPeerId),
     addedAt: Date.now(),
   });
@@ -339,7 +377,9 @@ export async function removeDmConversation(peerIdOrDid: string): Promise<void> {
 
   // Get the canonical room code for this peer
   const canonicalRoomCode = await dmConversationCodeAsync(resolvedPeerId);
-  const candidates = new Set<string>([canonicalRoomCode]);
+  const candidates = new Set<string>(
+    canonicalRoomCode ? [canonicalRoomCode] : []
+  );
 
   // Also check rooms by participantDid match
   for (const room of allDmRooms) {
@@ -351,8 +391,13 @@ export async function removeDmConversation(peerIdOrDid: string): Promise<void> {
     }
   }
 
+  // The queue is keyed by DID; filtering by peerId left the messages behind to
+  // be delivered later into a conversation that had been deleted.
+  const queuedDid = dmPeerDid(resolvedPeerId);
   const queue = loadQueuedDmMessages();
-  saveQueuedDmMessages(queue.filter((q) => q.to !== resolvedPeerId));
+  saveQueuedDmMessages(
+    queue.filter((q) => q.to !== resolvedPeerId && q.to !== queuedDid)
+  );
 
   // Delete messages for all matching rooms, then delete the rooms
   await Promise.all(
