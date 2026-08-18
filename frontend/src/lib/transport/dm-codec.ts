@@ -9,10 +9,30 @@
  *   0x03 read  - JSON string[] of messageIds (read receipt)
  */
 
+export interface DmReplyTo {
+  id: string;
+  senderName: string;
+  content: string;
+}
+
+export interface DmReaction {
+  to: string;
+  emoji: string;
+  op: "add" | "remove";
+}
+
 export interface DmPayload {
   id: string;
   text: string;
   ts: number;
+  /** Optional: this message quotes another. Older clients ignore it. */
+  replyTo?: DmReplyTo;
+  /**
+   * Optional: this is a reaction, not a chat line. The emoji is ALSO sent as
+   * `text`, so an older client renders it as a plain emoji message instead
+   * of dropping it silently.
+   */
+  reaction?: DmReaction;
 }
 
 export const DM_CHAT_TAG = 0x01;
@@ -90,6 +110,24 @@ export function parseDmEnvelope(
         typeof parsed?.ts !== "number"
       ) {
         return null;
+      }
+      // Optional fields are stripped when malformed rather than rejecting
+      // the whole message - the text still stands on its own.
+      if (
+        parsed.replyTo &&
+        (typeof parsed.replyTo.id !== "string" ||
+          typeof parsed.replyTo.senderName !== "string" ||
+          typeof parsed.replyTo.content !== "string")
+      ) {
+        delete parsed.replyTo;
+      }
+      if (
+        parsed.reaction &&
+        (typeof parsed.reaction.to !== "string" ||
+          typeof parsed.reaction.emoji !== "string" ||
+          (parsed.reaction.op !== "add" && parsed.reaction.op !== "remove"))
+      ) {
+        delete parsed.reaction;
       }
       return { type: "chat", payload: parsed };
     }

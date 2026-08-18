@@ -7,6 +7,7 @@ import type {
   MessageStatus,
   PendingMessage,
 } from "./types/message";
+import { MessageType } from "./types/message";
 import type {
   KeypairRecord,
   MnemonicRecord,
@@ -387,12 +388,15 @@ export async function getUnreadCount(
     [roomCode, Number.MAX_SAFE_INTEGER]
   );
 
-  if (!excludeSenderId) {
-    return index.count(range);
-  }
-
+  // Reactions are not "new messages": a heart on an old message must not
+  // light the unread badge with nothing visible to read. The range holds
+  // only unseen messages, so materializing it stays cheap.
   const messages = await index.getAll(range);
-  return messages.filter((m) => m.senderId !== excludeSenderId).length;
+  return messages.filter(
+    (m) =>
+      m.type !== MessageType.Reaction &&
+      (!excludeSenderId || m.senderId !== excludeSenderId)
+  ).length;
 }
 
 const MESSAGE_STATUS_RANK: Record<MessageStatus, number> = {

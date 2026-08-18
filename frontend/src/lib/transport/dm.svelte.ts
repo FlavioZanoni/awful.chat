@@ -179,11 +179,20 @@ export async function openDmConversation(peerIdOrDid: string): Promise<void> {
   sendDmReadAcks(resolvedPeerId, theirMessageIds);
 }
 
-export async function sendDirectMessage(text: string): Promise<void> {
+export interface DirectMessageOptions {
+  replyTo?: { id: string; senderName: string; content: string };
+  reaction?: { to: string; emoji: string; op: "add" | "remove" };
+}
+
+export async function sendDirectMessage(
+  text: string,
+  options: DirectMessageOptions = {}
+): Promise<void> {
   const peerId = transportState.activeDmPeerId;
   if (!peerId) return;
   const body = text.trim();
-  if (!body) return;
+  // Reactions travel as empty-bodied envelopes; everything else needs text.
+  if (!body && !options.reaction) return;
 
   const roomCode = await ensureDmRoomForPeer(peerId);
   if (!roomCode) {
@@ -196,7 +205,15 @@ export async function sendDirectMessage(text: string): Promise<void> {
 
   const id = crypto.randomUUID();
   const ts = Date.now();
-  const envelope = encodeDmChatEnvelope({ id, text: body, ts });
+  const envelope = encodeDmChatEnvelope({
+    id,
+    // A reaction's emoji doubles as the text so an older client renders it
+    // as a message instead of dropping it.
+    text: options.reaction ? options.reaction.emoji : body,
+    ts,
+    replyTo: options.replyTo,
+    reaction: options.reaction,
+  });
 
   // Key the offline queue by the STABLE DID so a queued message still matches
   // once the peer connects - even if we didn't know the DID at queue time.
@@ -231,8 +248,16 @@ export async function sendDirectMessage(text: string): Promise<void> {
     senderName: "You",
     timestamp: ts,
     lamport: ts,
-    type: MessageType.Text,
-    content: body,
+    type: options.reaction
+      ? MessageType.Reaction
+      : options.replyTo
+        ? MessageType.Reply
+        : MessageType.Text,
+    content: options.reaction ? "" : body,
+    replyTo: options.replyTo,
+    reactionTo: options.reaction?.to,
+    reactionEmoji: options.reaction?.emoji,
+    reactionOp: options.reaction?.op,
     attachments: [],
     // "sending" = queued locally, "sent" = handed to the transport;
     // "delivered"/"read" arrive later via acks

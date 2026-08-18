@@ -15,6 +15,56 @@ describe("DM envelopes", () => {
     expect(parsed).toEqual({ type: "chat", payload });
   });
 
+  it("round-trips a chat envelope with a reply quote", () => {
+    const payload = {
+      id: "msg-2",
+      text: "sure",
+      ts: 1234567891,
+      replyTo: { id: "msg-1", senderName: "Alice", content: "lunch?" },
+    };
+    const parsed = parseDmEnvelope(encodeDmChatEnvelope(payload));
+    expect(parsed).toEqual({ type: "chat", payload });
+  });
+
+  it("round-trips a reaction envelope", () => {
+    const payload = {
+      id: "msg-3",
+      text: "\u2764\ufe0f",
+      ts: 1234567892,
+      reaction: { to: "msg-1", emoji: "\u2764\ufe0f", op: "add" as const },
+    };
+    const parsed = parseDmEnvelope(encodeDmChatEnvelope(payload));
+    expect(parsed).toEqual({ type: "chat", payload });
+  });
+
+  it("strips a malformed replyTo but keeps the message", () => {
+    const raw = JSON.stringify({
+      id: "m",
+      text: "hi",
+      ts: 1,
+      replyTo: { id: 5 },
+    });
+    const bytes = new Uint8Array(1 + raw.length);
+    bytes[0] = 0x01;
+    bytes.set(new TextEncoder().encode(raw), 1);
+    const parsed = parseDmEnvelope(bytes);
+    expect(parsed).toEqual({ type: "chat", payload: { id: "m", text: "hi", ts: 1 } });
+  });
+
+  it("strips a malformed reaction but keeps the message", () => {
+    const raw = JSON.stringify({
+      id: "m",
+      text: "x",
+      ts: 1,
+      reaction: { to: "t", emoji: "x", op: "toggle" },
+    });
+    const bytes = new Uint8Array(1 + raw.length);
+    bytes[0] = 0x01;
+    bytes.set(new TextEncoder().encode(raw), 1);
+    const parsed = parseDmEnvelope(bytes);
+    expect(parsed).toEqual({ type: "chat", payload: { id: "m", text: "x", ts: 1 } });
+  });
+
   it("round-trips an ack envelope", () => {
     const parsed = parseDmEnvelope(encodeDmAckEnvelope("msg-42"));
     expect(parsed).toEqual({ type: "ack", messageId: "msg-42" });

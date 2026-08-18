@@ -67,6 +67,7 @@ import {
 import { encode, decode, normalizeAvatarUrl } from "../utils";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
 import {
+  type DmPayload,
   encodeDmAckEnvelope,
   encodeDmReadEnvelope,
   parseDmEnvelope,
@@ -246,6 +247,9 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
     transportStats: () => _transport.debugStats,
     selfId: () => _transport.selfId(),
     node: () => _transport.p2pNode,
+    sendReply,
+    toggleReaction,
+    sendFiles,
   };
 }
 
@@ -254,7 +258,7 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
  * binding lands. Bounded: an unbound peer must not be able to make us buffer
  * without limit.
  */
-type PendingDm = { payload: { id: string; text: string; ts: number } };
+type PendingDm = { payload: DmPayload };
 const _pendingDmByPeer = new Map<string, PendingDm[]>();
 const MAX_PENDING_DM_PER_PEER = 32;
 
@@ -1090,11 +1094,9 @@ async function _handleChatMessage(
     });
   }
 
-  if (
-    isNewMessage &&
-    transportState.chatMode === "room" &&
-    transportState.roomCode === msg.roomCode
-  ) {
+  // Match on the open room, not the mode: DM file messages arrive through
+  // this path too, and the mode check kept them invisible until reopen.
+  if (isNewMessage && transportState.roomCode === msg.roomCode) {
     transportState.messages = appendSorted(transportState.messages, msg);
   }
 
@@ -1238,13 +1240,14 @@ _transport.on("disconnect", (peerId) => {
 function _handleDmChat(
   peerId: string,
   senderDid: string,
-  envelope: { payload: { id: string; text: string; ts: number } }
+  envelope: { payload: DmPayload }
 ): void {
   void (async () => {
     const roomCode = await ensureDmRoomForPeer(peerId);
     if (!roomCode) return;
     _transport.joinRoom(roomCode);
 
+    const reaction = envelope.payload.reaction;
     const msg: Message = {
       id: envelope.payload.id,
       roomCode,
@@ -1252,8 +1255,17 @@ function _handleDmChat(
       senderName: resolveDmDisplayName(peerId),
       timestamp: envelope.payload.ts,
       lamport: envelope.payload.ts,
-      type: MessageType.Text,
-      content: envelope.payload.text,
+      type: reaction
+        ? MessageType.Reaction
+        : envelope.payload.replyTo
+          ? MessageType.Reply
+          : MessageType.Text,
+      // A reaction's text is only the compatibility shim for old clients.
+      content: reaction ? "" : envelope.payload.text,
+      replyTo: envelope.payload.replyTo,
+      reactionTo: reaction?.to,
+      reactionEmoji: reaction?.emoji,
+      reactionOp: reaction?.op,
       attachments: [],
       status: "delivered",
     };
@@ -1273,12 +1285,15 @@ function _handleDmChat(
       const isViewingThisDm =
         transportState.chatMode === "dm" &&
         (activeDid === senderDid || activeDid === peerId);
-      notifyMessage({
-        title: msg.senderName,
-        body: msg.content,
-        tag: `dm:${roomCode}`,
-        viewingConversation: transportState.uiRoomCode === roomCode,
-      });
+      // Reactions are noise as notifications, same rule as rooms.
+      if (!reaction) {
+        notifyMessage({
+          title: msg.senderName,
+          body: msg.content,
+          tag: `dm:${roomCode}`,
+          viewingConversation: transportState.uiRoomCode === roomCode,
+        });
+      }
       if (isViewingThisDm) {
         transportState.messages = appendSorted(
           transportState.messages,
@@ -1680,7 +1695,7 @@ export async function sendMessage(
   options: SendMessageOptions = {}
 ): Promise<void> {
   if (transportState.chatMode === "dm") {
-    await sendDirectMessage(text);
+    await sendDirectMessage(text, { replyTo: options.replyTo });
     return;
   }
   if (!transportState.roomCode) return;
@@ -1800,7 +1815,11 @@ export async function sendFiles(
   const profile = await getOwnProfile();
   const senderName = profile?.nickname?.trim() || "Anonymous";
   const myId = identityStore.did ?? _transport.selfId();
-  const lamport = lamportSend();
+  // DM rooms order by wall-clock ms; a room-counter lamport (~small int)
+  // filed the file before the entire conversation and it vanished on reload.
+  const lamport = transportState.roomCode.startsWith("dm-")
+    ? createdAt
+    : lamportSend();
 
   let msg: Message = {
     id: messageId,
@@ -1843,21 +1862,35 @@ export async function toggleReaction(
   messageId: string,
   emoji: string
 ): Promise<void> {
-  const existing = transportState.messages
+  const roomCode = transportState.roomCode;
+  if (!roomCode) return;
+  // The loaded page cannot see reactions on older messages, which made
+  // un-reacting there impossible: the prior comes from storage.
+  const all = await getAllMessages(roomCode);
+  const existing = all
     .filter(
       (m) =>
         m.type === MessageType.Reaction &&
         m.reactionTo === messageId &&
-        m.reactionEmoji === emoji
+        m.reactionEmoji === emoji &&
+        isSelfSender(m.senderId)
     )
-    .sort((a, b) => b.lamport - a.lamport)
-    .find((m) => m.senderId === (identityStore.did ?? _transport.selfId()));
+    .sort((a, b) => b.lamport - a.lamport)[0];
+  const reactionOp: "add" | "remove" =
+    existing?.reactionOp === "add" ? "remove" : "add";
+
+  if (transportState.chatMode === "dm") {
+    await sendDirectMessage("", {
+      reaction: { to: messageId, emoji, op: reactionOp },
+    });
+    return;
+  }
 
   await sendMessage("", {
     type: MessageType.Reaction,
     reactionTo: messageId,
     reactionEmoji: emoji,
-    reactionOp: existing?.reactionOp === "add" ? "remove" : "add",
+    reactionOp,
   });
 }
 
