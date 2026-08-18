@@ -356,8 +356,29 @@ func main() {
 
 	// Clean up on libp2p disconnect (belt + suspenders with stream close)
 	h.Network().Notify(&network.NotifyBundle{
-		ConnectedF: func(_ network.Network, c network.Conn) {
-			log.Printf("[peer] connect %s", short(c.RemotePeer().String()))
+		ConnectedF: func(n network.Network, c network.Conn) {
+			peerId := c.RemotePeer()
+			log.Printf("[peer] connect %s", short(peerId.String()))
+
+			// A browser that reloads comes back with the same peerId on a new
+			// connection, while the one belonging to the page that is gone
+			// stays open here: nothing closed it, so we keep relaying for a
+			// tab that no longer exists. Everyone circuiting to that peer
+			// through the old connection keeps writing into it and every frame
+			// disappears - both sides still look connected. Closing the older
+			// connections when the peer comes back pushes a real close out to
+			// them, which is the signal none of them can produce for
+			// themselves.
+			for _, old := range n.ConnsToPeer(peerId) {
+				if old == c {
+					continue
+				}
+				if old.Stat().Opened.After(c.Stat().Opened) {
+					continue // a newer one arrived; leave it alone
+				}
+				log.Printf("[peer] closing stale conn %s", short(peerId.String()))
+				_ = old.Close()
+			}
 		},
 		DisconnectedF: func(n network.Network, c network.Conn) {
 			peerId := c.RemotePeer()

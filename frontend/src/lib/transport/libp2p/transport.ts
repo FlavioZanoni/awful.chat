@@ -49,6 +49,8 @@ const CONNECTION_RECONCILE_MS = 5_000;
 /** Silence after which we check a peer is really still there. */
 const PEER_SILENCE_MS = 12_000;
 const PEER_PING_TIMEOUT_MS = 5_000;
+/** Consecutive unanswered pings before we call a peer gone. */
+const PING_MISSES_ALLOWED = 2;
 // Liveness lives at this layer rather than as a libp2p service: the ping
 // package pulls in a second copy of @libp2p/interface and the type skew breaks
 // the build. These ride the direct stream we already keep open.
@@ -119,6 +121,7 @@ export class LibP2PTransport implements PeerTransport {
   /** peerId -> last time we heard anything from them. */
   private lastInbound = new Map<string, number>();
   private pinging = new Set<string>();
+  private pingMisses = new Map<string, number>();
   /** Dev counters. Connection-layer faults are invisible without them: every
    *  side looks connected while writes vanish into a dead circuit. */
   readonly debugStats = {
@@ -202,7 +205,11 @@ export class LibP2PTransport implements PeerTransport {
     await this.node.handle(
       DIRECT_MSG_PROTOCOL,
       (stream: Stream, connection: Connection) => {
-        this.handleInboundStream(connection.remotePeer.toString(), stream);
+        this.handleInboundStream(
+          connection.remotePeer.toString(),
+          stream,
+          connection
+        );
       },
       // Never let a duplicate registration abort a (re)connect; see voice.ts.
       { force: true }
@@ -512,7 +519,52 @@ export class LibP2PTransport implements PeerTransport {
 
 
   /** Forget a peer and tear down everything we hold for it. */
+  /**
+   * Ask peers that have gone quiet whether they are still there, and drop the
+   * ones that do not answer.
+   *
+   * Nothing else in the stack notices a peer is gone. A relayed connection
+   * keeps looking alive after the far end reloads or crashes - the relay holds
+   * the circuit open - so libp2p reports it connected, no disconnect fires,
+   * and everything we send disappears into it while both sides still look
+   * fine.
+   *
+   * Silence-triggered, so an active room costs nothing: any inbound frame
+   * counts as proof of life. Skipped entirely while the tab is hidden, where
+   * there is no UI to keep honest and a phone radio to leave alone - returning
+   * to the page runs a full resync anyway.
+   */
+  private probeSilentPeers(): void {
+    if (!this.node || this.intentionalDisconnect) return;
+    if (typeof document !== "undefined" && document.hidden) return;
+    const now = Date.now();
+    for (const peerId of [...this.connectedPeers]) {
+      if (this.pinging.has(peerId)) continue;
+      if (now - (this.lastInbound.get(peerId) ?? 0) < PEER_SILENCE_MS) continue;
+      this.pinging.add(peerId);
+      const askedAt = Date.now();
+      void this.send(peerId, PING_FRAME).finally(() => {
+        setTimeout(() => {
+          this.pinging.delete(peerId);
+          if (!this.connectedPeers.has(peerId)) return;
+          if ((this.lastInbound.get(peerId) ?? 0) >= askedAt) return;
+          // One missed answer is not proof: a slow phone looks the same as a
+          // dead one, and dropping a live peer tears down a working call.
+          const misses = (this.pingMisses.get(peerId) ?? 0) + 1;
+          this.pingMisses.set(peerId, misses);
+          if (misses < PING_MISSES_ALLOWED) return;
+          console.log("[Transport] peer stopped answering:", peerId.slice(-8));
+          this.debugStats.livenessDrops++;
+          this.pingMisses.delete(peerId);
+          this.dropPeer(peerId);
+        }, PEER_PING_TIMEOUT_MS);
+      });
+    }
+  }
+
   private dropPeer(peerId: string): void {
+    this.debugStats.disconnects++;
+    this.pingMisses.delete(peerId);
     this.connectedPeers.delete(peerId);
     this.relayedPeers.delete(peerId);
     this.lastInbound.delete(peerId);
@@ -539,6 +591,7 @@ export class LibP2PTransport implements PeerTransport {
       this.registerPeer(id);
       this.emit("connect", id);
     }
+    this.probeSilentPeers();
     this.retryMissingRoomPeers();
   }
 
@@ -697,7 +750,25 @@ export class LibP2PTransport implements PeerTransport {
     }
   }
 
-  private handleInboundStream(fromId: string, stream: Stream): void {
+  private handleInboundStream(
+    fromId: string,
+    stream: Stream,
+    connection?: Connection
+  ): void {
+    // They just opened a stream to us, which means their side is fresh. Ours
+    // may not be: after they reload we keep the outbound stream from their
+    // previous page, which can still report itself open while everything
+    // written to it disappears. Their inbound stream is the one reliable
+    // signal that this happened - liveness checks cannot see it, because we
+    // keep hearing from them perfectly well on THIS stream while our replies
+    // go nowhere. Dropping ours costs one reopen on the next send.
+    this.resetOutboundStream(fromId);
+    // NOT closing the peer's other connections here, however tempting: both
+    // sides dial each other, so two connections legitimately exist, and each
+    // side then closes the one the other is relying on. Telling a dead
+    // connection from a redundant one needs liveness per connection, not per
+    // peer. See scenarios/reconnect-churn.mjs.
+    void connection;
     let buf = new Uint8Array(0);
 
     stream.addEventListener("message", (evt: StreamMessageEvent) => {
@@ -728,6 +799,7 @@ export class LibP2PTransport implements PeerTransport {
 
         // Anything at all from this peer proves it is alive.
         this.lastInbound.set(fromId, Date.now());
+        this.pingMisses.delete(fromId);
 
         // Liveness frames are ours, not the app's.
         const text =
@@ -748,6 +820,16 @@ export class LibP2PTransport implements PeerTransport {
     stream.addEventListener("close", (_evt: StreamCloseEvent) => {
       stream.abort(new Error("remote closed"));
     });
+  }
+
+  /** Drop only the outbound stream, keeping anything queued for the retry. */
+  private resetOutboundStream(peerId: string): void {
+    const stream = this.peerStreams.get(peerId);
+    if (!stream) return;
+    this.peerStreams.delete(peerId);
+    try {
+      stream.abort(new Error("peer reopened its stream"));
+    } catch {}
   }
 
   private cleanupPeerStream(peerId: string): void {
