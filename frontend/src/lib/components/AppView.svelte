@@ -2,6 +2,7 @@
   import { QueryClient, QueryClientProvider } from "@tanstack/svelte-query";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { setBadge } from "$lib/notify.svelte";
+  import GifImage from "$lib/components/GifImage.svelte";
   import IdentitySetup from "$lib/components/IdentitySetup.svelte";
   import UnlockIdentity from "$lib/components/UnlockIdentity.svelte";
   import RoomCreateJoin from "$lib/components/RoomCreateJoin.svelte";
@@ -809,10 +810,11 @@
                     class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold flex items-center justify-center shrink-0"
                   >
                     {#if entry.avatarUrl}
-                      <img
+                      <GifImage
                         src={entry.avatarUrl}
                         alt={entry.nickname}
                         class="size-full object-cover"
+                        animate="hover"
                       />
                     {:else}
                       {entry.nickname.charAt(0).toUpperCase()}
@@ -867,10 +869,11 @@
                     class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold flex items-center justify-center shrink-0"
                   >
                     {#if entry.avatarUrl}
-                      <img
+                      <GifImage
                         src={entry.avatarUrl}
                         alt={entry.nickname}
                         class="size-full object-cover"
+                        animate="hover"
                       />
                     {:else}
                       {entry.nickname.charAt(0).toUpperCase()}
@@ -951,10 +954,11 @@
                       class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold flex items-center justify-center shrink-0"
                     >
                       {#if entry.avatarUrl}
-                        <img
+                        <GifImage
                           src={entry.avatarUrl}
                           alt={entry.nickname}
                           class="size-full object-cover"
+                          animate="hover"
                         />
                       {:else}
                         {entry.nickname.charAt(0).toUpperCase()}
@@ -1014,10 +1018,11 @@
                       class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold flex items-center justify-center shrink-0"
                     >
                       {#if entry.avatarUrl}
-                        <img
+                        <GifImage
                           src={entry.avatarUrl}
                           alt={entry.nickname}
                           class="size-full object-cover"
+                          animate="hover"
                         />
                       {:else}
                         {entry.nickname.charAt(0).toUpperCase()}

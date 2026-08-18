@@ -14,6 +14,7 @@
     removeFromPhonebook,
   } from "$lib/transport/dm.svelte";
   import { profileStore, loadProfile } from "$lib/profile.svelte";
+  import GifImage from "./GifImage.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { UserPlus, UserRoundMinus, Users, Workflow } from "@lucide/svelte";
   import { roomsStore, refreshPhonebook } from "$lib/rooms.svelte";
@@ -242,10 +243,11 @@
           : 'bg-secondary text-secondary-foreground'}"
       >
         {#if user.avatarUrl}
-          <img
+          <GifImage
             src={user.avatarUrl}
             alt={user.name}
             class="size-full object-cover"
+            animate="hover"
           />
         {:else}
           {getInitials(user.name)}

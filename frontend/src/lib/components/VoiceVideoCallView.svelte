@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { Tip } from "$lib/components/ui/tooltip";
+  import GifImage from "./GifImage.svelte";
   import { RELAY_TIP } from "$lib/copy";
   import { openDmConversation } from "$lib/transport/dm.svelte";
   import {
@@ -698,10 +699,11 @@
         {compact ? 'size-8 text-sm' : 'size-16 text-2xl'}"
       >
         {#if tile.avatarUrl}
-          <img
+          <GifImage
             src={tile.avatarUrl}
             alt={tile.label}
             class="size-full object-cover"
+            animate={speakingPeers.has(tile.peerId)}
           />
         {:else}
           {tile.label.charAt(0).toUpperCase()}
@@ -781,7 +783,12 @@
             class="relative flex size-16 sm:size-20 items-center justify-center rounded-full bg-primary/20 text-2xl font-semibold text-primary ring-2 ring-background font-mono overflow-hidden"
           >
             {#if avatar}
-              <img src={avatar} alt={label} class="size-full object-cover" />
+              <GifImage
+                src={avatar}
+                alt={label}
+                class="size-full object-cover"
+                animate={speakingPeers.has(peerId)}
+              />
             {:else}
               {label.charAt(0).toUpperCase()}
             {/if}

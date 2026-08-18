@@ -16,6 +16,8 @@
   } from "$lib/types/message";
   import type { FileTransferSnapshot } from "$lib/transport/types";
   import AudioPlayer from "./AudioPlayer.svelte";
+  import GifImage from "./GifImage.svelte";
+  import { mediaPrefs } from "$lib/media-prefs.svelte";
   import { putSavedGif, deleteSavedGif, isGifSaved } from "$lib/storage";
 
   interface Props {
@@ -312,11 +314,13 @@
               class="mt-2 block"
               onclick={() => (lightboxUrl = transfer.blobURL!)}
             >
-              <img
+              <GifImage
                 src={transfer.blobURL}
                 alt={file.filename}
                 class="max-w-xs max-h-56 rounded-md object-contain"
                 loading="lazy"
+                animated={file.mimeType === "image/gif"}
+                animate={mediaPrefs.gifAutoplay ? true : "hover"}
               />
             </button>
           {:else if transfer?.blobURL && file.mimeType.startsWith("video/")}
@@ -374,11 +378,13 @@
   {:else if isGifMessage}
     <div class="group relative inline-block">
       <button type="button" onclick={() => (lightboxUrl = msg.content)}>
-        <img
+        <GifImage
           src={msg.content}
           alt="GIF"
           class="max-w-xs max-h-56 rounded-md object-contain"
           loading="lazy"
+          animated={true}
+          animate={mediaPrefs.gifAutoplay ? true : "hover"}
         />
       </button>
       <button

@@ -9,6 +9,7 @@
     Users,
   } from "@lucide/svelte";
   import SidebarControls from "./SidebarControls.svelte";
+  import GifImage from "./GifImage.svelte";
   import { Tip } from "$lib/components/ui/tooltip";
   import CallStatus from "./CallStatus.svelte";
 
@@ -319,10 +320,11 @@
               class="mt-px flex size-6 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground text-xs font-semibold"
             >
               {#if entry.avatarUrl}
-                <img
+                <GifImage
                   src={entry.avatarUrl}
                   alt={entry.nickname}
                   class="size-full rounded-full object-cover"
+                  animate="hover"
                 />
               {:else}
                 {entry.nickname.charAt(0).toUpperCase()}
