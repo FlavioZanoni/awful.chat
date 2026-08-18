@@ -18,6 +18,7 @@ import {
   dedupePhonebook,
   putPhonebookEntry,
   getPhonebookEntries,
+  markOwnMessagesReadUpTo,
 } from "./storage";
 import { MessageType, type Message } from "./types/message";
 
@@ -193,5 +194,21 @@ describe("dedupePhonebook", () => {
     expect(dupes[0].favorite).toBe(true);
     expect(dupes[0].addedAt).toBe(1_000);
     expect(entries.some((e) => e.peerId === "12D3KooWLoner")).toBe(true);
+  });
+});
+
+describe("markOwnMessagesReadUpTo", () => {
+  it("cascades read onto own older messages only, never touching the peer's", async () => {
+    await bulkPutMessages([
+      msg({ id: "own-1", senderId: "me", lamport: 10, status: "delivered" }),
+      msg({ id: "own-2", senderId: "me", lamport: 20, status: "sent" }),
+      msg({ id: "own-3", senderId: "me", lamport: 99, status: "sent" }),
+      msg({ id: "theirs", senderId: "them", lamport: 15, status: "delivered" }),
+    ]);
+    const changed = await markOwnMessagesReadUpTo("room-a", "me", 20);
+    expect([...changed].sort()).toEqual(["own-1", "own-2"]);
+    expect((await getMessage("own-3"))?.status).toBe("sent");
+    expect((await getMessage("theirs"))?.status).toBe("delivered");
+    expect((await getMessage("own-1"))?.status).toBe("read");
   });
 });

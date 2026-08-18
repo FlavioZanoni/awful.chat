@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  mergeImportedRoom,
   BACKUP_FORMAT,
   BACKUP_VERSION,
   parseBackup,
@@ -120,5 +121,48 @@ describe("avatar binary round-trip", () => {
   it("drops a lossily-serialized avatar instead of storing garbage", () => {
     const fromOldPeer = { roomCode: "r1", pfpData: {} };
     expect(pfpFromJson(fromOldPeer)).toEqual({ roomCode: "r1" });
+  });
+});
+
+describe("mergeImportedRoom", () => {
+  const local = {
+    roomCode: "abc",
+    type: "text" as const,
+    name: "Local Name",
+    lastSeenLamport: 500,
+    createdAt: 100,
+    participants: ["did:key:zA"],
+    participantLastSeen: { "did:key:zA": 50 },
+  };
+
+  it("never lowers the seen watermark or activity, unions members", () => {
+    const merged = mergeImportedRoom(local, {
+      ...local,
+      name: "Imported",
+      lastSeenLamport: 10,
+      createdAt: 200,
+      participants: ["did:key:zB"],
+      participantLastSeen: { "did:key:zA": 5, "did:key:zB": 80 },
+    });
+    expect(merged.lastSeenLamport).toBe(500);
+    expect(merged.createdAt).toBe(100);
+    expect([...merged.participants].sort()).toEqual([
+      "did:key:zA",
+      "did:key:zB",
+    ]);
+    expect(merged.participantLastSeen).toEqual({
+      "did:key:zA": 50,
+      "did:key:zB": 80,
+    });
+    expect(merged.name).toBe("Local Name");
+  });
+
+  it("takes the imported watermark and name when they are the better ones", () => {
+    const merged = mergeImportedRoom(
+      { ...local, name: "abc", lastSeenLamport: 5 },
+      { ...local, name: "Real Name", lastSeenLamport: 900 }
+    );
+    expect(merged.lastSeenLamport).toBe(900);
+    expect(merged.name).toBe("Real Name");
   });
 });

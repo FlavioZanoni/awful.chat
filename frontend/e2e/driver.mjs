@@ -243,7 +243,11 @@ export class Peer {
 
   /** Create a room and enter it. Returns its code. */
   async createRoom(name) {
-    if (await this.eval(`!!window.__awful?.state.roomCode`)) {
+    // Creating from inside a room leaves the OLD roomCode set until the new
+    // join lands - returning the first truthy value handed callers the wrong
+    // room. Demand a code different from the one we started with.
+    const before = await this.eval(`window.__awful?.state.roomCode ?? null`);
+    if (before) {
       await this.clickLabel("Create or join room");
     }
     await this.waitFor("create form", () => this.fill("Room name (optional)", name));
@@ -256,7 +260,8 @@ export class Peer {
     // app bug.
     return this.waitFor("room entered", async () => {
       await this.clickText("Join Room");
-      return this.eval(`window.__awful?.state.roomCode ?? null`);
+      const code = await this.eval(`window.__awful?.state.roomCode ?? null`);
+      return code && code !== before ? code : null;
     });
   }
 

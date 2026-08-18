@@ -243,22 +243,11 @@
   }
 
   async function handleSelectRoom(code: string) {
-    if (code === activeRoomCode) {
-      sidebarOpen = false;
-      return;
-    }
     const room = roomsStore.rooms.find((r) => r.roomCode === code);
-    if (
-      transportState.roomCode === code &&
-      transportState.chatMode === "room"
-    ) {
-      activeRoomCode = code;
-      activeRoomName = room?.name || code;
-      activeDmPeerId = null;
-      sidebarTab = "rooms";
-      sidebarOpen = false;
-      return;
-    }
+    // Always go through the token-claiming join, even for the room already
+    // on screen: the fast paths skipped the claim, so a second quick click
+    // during an in-flight switch either no-opped or wrote view state that
+    // the losing join later contradicted. Last click wins, by construction.
     await handleJoin(code, "", room?.name);
     activeDmPeerId = null;
     sidebarTab = "rooms";
@@ -405,7 +394,9 @@
 
   function handlePopState() {
     const code = parseRoomCode(window.location.pathname);
-    if (code && code !== activeRoomCode) {
+    // The URL is the truth: even if the view already names this room, the
+    // transport can be elsewhere (a DM opened underneath) - re-join then.
+    if (code && (code !== activeRoomCode || transportState.roomCode !== code)) {
       const room = roomsStore.rooms.find((r) => r.roomCode === code);
       handleJoin(code, "", room?.name);
     } else if (!code && activeRoomCode) {

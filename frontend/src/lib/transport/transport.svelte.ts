@@ -1069,7 +1069,11 @@ async function _handleChatMessage(
   roomCodeOverride?: string,
   receivedFromPeerId?: string
 ): Promise<void> {
-  const roomCode = roomCodeOverride ?? transportState.roomCode;
+  // Never guess the room from what is on screen: an echoed or replayed
+  // frame arriving without attribution would be filed - and PERSISTED -
+  // into whichever room the user happens to be viewing.
+  const roomCode = roomCodeOverride;
+  if (!roomCode) return;
   if (!roomCode) return;
 
   // DM rooms now start with "dm-" (hash-based)
@@ -1102,7 +1106,9 @@ async function _handleChatMessage(
     !transportState.messages.some((m) => m.id === msg.id) &&
     !(await getMessage(msg.id));
 
-  putMessage(msg).catch(() => {});
+  // Only a genuinely new message is written: re-putting a replayed one
+  // would overwrite the stored row with this handler's view of it.
+  if (isNewMessage) putMessage(msg).catch(() => {});
   setWatermark(msg.roomCode, msg.senderId, msg.lamport).catch(() => {});
   refreshUnreadCount(msg.roomCode).catch(() => {});
   noteRoomActivity(msg.roomCode, msg.timestamp);

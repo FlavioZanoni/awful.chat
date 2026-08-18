@@ -20,6 +20,7 @@ const dmMessages = (p, code) => p.json(`(async () => {
   });
   return JSON.stringify(msgs.filter((m) => m.roomCode === ${JSON.stringify(code)})
     .map((m) => ({ id: m.id, type: m.type, content: m.content, lamport: m.lamport,
+      status: m.status ?? null,
       replyTo: m.replyTo ?? null, reactionTo: m.reactionTo ?? null,
       reactionEmoji: m.reactionEmoji ?? null, reactionOp: m.reactionOp ?? null })));
 })()`);
@@ -48,6 +49,14 @@ try {
   await openDm(bob);
   await bob.waitFor("bob viewing dm", () =>
     bob.eval(`window.__awful.state.chatMode === 'dm' || null`));
+
+  // Opening the conversation acks it: the sender's copy must go "read".
+  await alice.waitFor("read receipt landed", async () => {
+    const msgs = await dmMessages(alice, dmCode);
+    const mine = msgs.find((m) => m.content === "lunch tomorrow?");
+    return mine?.status === "read" ? true : null;
+  });
+  check.ok(true, "sender sees the read receipt after the peer opens the dm");
 
   // ── Reply: the quote must survive the DM path ──
   await bob.eval(`(() => {

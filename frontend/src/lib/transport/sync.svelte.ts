@@ -37,6 +37,7 @@ import {
   BACKUP_FORMAT,
   BACKUP_VERSION,
   parseBackup,
+  mergeImportedRoom,
   pfpFromJson,
   pfpToJson,
   type AttachmentExport,
@@ -809,38 +810,7 @@ async function importDatabase(
         return (async () => {
           const localRoom = await getRoom(importedRoom.roomCode);
           if (localRoom) {
-            const participantLastSeen: Record<string, number> = {};
-            for (const [did, timestamp] of Object.entries(
-              localRoom.participantLastSeen ?? {}
-            )) {
-              participantLastSeen[did] = timestamp ?? 0;
-            }
-            for (const [did, timestamp] of Object.entries(
-              importedRoom.participantLastSeen ?? {}
-            )) {
-              participantLastSeen[did] = Math.max(
-                participantLastSeen[did] ?? 0,
-                timestamp ?? 0
-              );
-            }
-            const merged: typeof importedRoom = {
-              ...importedRoom,
-              lastSeenLamport: Math.max(
-                localRoom.lastSeenLamport ?? 0,
-                importedRoom.lastSeenLamport ?? 0
-              ),
-              createdAt: Math.min(
-                localRoom.createdAt ?? Infinity,
-                importedRoom.createdAt ?? Infinity
-              ),
-              participants: [...new Set([...(localRoom.participants ?? []), ...(importedRoom.participants ?? [])])],
-              participantLastSeen,
-              name:
-                !localRoom.name || localRoom.name === localRoom.roomCode
-                  ? importedRoom.name
-                  : localRoom.name,
-            };
-            await putRoom(merged);
+            await putRoom(mergeImportedRoom(localRoom, importedRoom));
           } else {
             await putRoom(importedRoom);
           }

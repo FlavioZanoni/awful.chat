@@ -90,6 +90,42 @@ export function pfpToJson<T extends { pfpData?: unknown }>(rec: T): T {
   return { ...rec, pfpData: Array.from(bytes) };
 }
 
+/**
+ * Merge an imported room over the locally stored one (device sync, "add"
+ * mode). Field rules mirror the monotonic guards used at runtime: the seen
+ * watermark and per-participant activity never move backwards, membership is
+ * a union, and a real local name is not overwritten by the import.
+ */
+export function mergeImportedRoom<T extends Room>(local: Room, imported: T): T {
+  const participantLastSeen: Record<string, number> = {};
+  for (const [did, ts] of Object.entries(local.participantLastSeen ?? {})) {
+    participantLastSeen[did] = ts ?? 0;
+  }
+  for (const [did, ts] of Object.entries(imported.participantLastSeen ?? {})) {
+    participantLastSeen[did] = Math.max(participantLastSeen[did] ?? 0, ts ?? 0);
+  }
+  return {
+    ...imported,
+    lastSeenLamport: Math.max(
+      local.lastSeenLamport ?? 0,
+      imported.lastSeenLamport ?? 0
+    ),
+    createdAt: Math.min(
+      local.createdAt ?? Infinity,
+      imported.createdAt ?? Infinity
+    ),
+    participants: [
+      ...new Set([
+        ...(local.participants ?? []),
+        ...(imported.participants ?? []),
+      ]),
+    ],
+    participantLastSeen,
+    name:
+      !local.name || local.name === local.roomCode ? imported.name : local.name,
+  };
+}
+
 export function pfpFromJson<T extends { pfpData?: unknown }>(rec: T): T {
   const data = rec?.pfpData;
   if (!data) return rec;
