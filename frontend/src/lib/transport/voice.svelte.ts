@@ -14,6 +14,11 @@ let _voice: LibP2PVoice | null = null;
 let _dtln: DtlnProcessor | null = null;
 let _initialized = false;
 
+// Parked volumes: peerId -> { volume, timestamp }
+// Stores volumes that couldn't be saved immediately because the DID wasn't resolved yet.
+let _parkedVolumes: Map<string, { volume: number; timestamp: number }> = new Map();
+let _retryInterval: ReturnType<typeof setInterval> | null = null;
+
 export function initVoice(voice: LibP2PVoice, dtln: DtlnProcessor): void {
   if (_initialized) return;
   _initialized = true;
@@ -73,6 +78,43 @@ export function initVoice(voice: LibP2PVoice, dtln: DtlnProcessor): void {
   });
 
   restoreVoicePrefs();
+}
+
+function startParkedVolumeRetry(): void {
+  if (_retryInterval !== null) return;
+
+  _retryInterval = setInterval(() => {
+    if (_parkedVolumes.size === 0) {
+      if (_retryInterval !== null) {
+        clearInterval(_retryInterval);
+      }
+      _retryInterval = null;
+      return;
+    }
+
+    const now = Date.now();
+    const deadline = 2 * 60 * 1000;
+
+    for (const [peerId, entry] of _parkedVolumes.entries()) {
+      if (now - entry.timestamp > deadline) {
+        _parkedVolumes.delete(peerId);
+        continue;
+      }
+
+      const did = peerIdToDid(peerId);
+      if (looksLikeDid(did)) {
+        savePeerVolume(did, entry.volume);
+        _parkedVolumes.delete(peerId);
+      }
+    }
+
+    if (_parkedVolumes.size === 0) {
+      if (_retryInterval !== null) {
+        clearInterval(_retryInterval);
+      }
+      _retryInterval = null;
+    }
+  }, 2000);
 }
 
 /**
@@ -152,7 +194,12 @@ export function setVoicePeerVolume(peerId: string, volume: number): void {
   getVoice().setPeerVolume(peerId, volume);
   // Durable, by identity: nobody wants to re-set a friend's volume every call.
   const did = peerIdToDid(peerId);
-  if (looksLikeDid(did)) savePeerVolume(did, volume);
+  if (looksLikeDid(did)) {
+    savePeerVolume(did, volume);
+  } else {
+    _parkedVolumes.set(peerId, { volume, timestamp: Date.now() });
+    startParkedVolumeRetry();
+  }
 }
 
 export function getVoicePeerVolume(peerId: string): number {

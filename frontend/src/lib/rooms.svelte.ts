@@ -61,7 +61,15 @@ export async function loadRooms(): Promise<void> {
   roomsStore.loading = true;
   try {
     const all = await getAllRooms();
-    roomsStore.rooms = all.filter((r) => r.type !== "dm") as Room[];
+    const freshRooms = all.filter((r) => r.type !== "dm") as Room[];
+    const merged = new Map<string, Room>();
+    for (const r of roomsStore.rooms) {
+      merged.set(r.roomCode, r);
+    }
+    for (const r of freshRooms) {
+      merged.set(r.roomCode, r);
+    }
+    roomsStore.rooms = Array.from(merged.values());
     roomsStore.dmRooms = await getDMRooms();
     roomsStore.phonebook = await getPhonebookEntries();
     await _refreshAllUnread();
@@ -105,7 +113,12 @@ async function _refreshAllActivity(): Promise<void> {
       return [r.roomCode, last?.timestamp ?? r.createdAt] as [string, number];
     })
   );
-  roomsStore.lastActivity = new Map(entries);
+  const merged = new Map(roomsStore.lastActivity);
+  for (const [roomCode, computed] of entries) {
+    const current = merged.get(roomCode) ?? 0;
+    merged.set(roomCode, Math.max(current, computed));
+  }
+  roomsStore.lastActivity = merged;
 }
 
 async function _refreshAllUnread(): Promise<void> {
@@ -119,7 +132,13 @@ async function _refreshAllUnread(): Promise<void> {
       return [r.roomCode, count] as [string, number];
     })
   );
-  roomsStore.unreadCounts = new Map(entries);
+  const merged = new Map(roomsStore.unreadCounts);
+  for (const [roomCode, count] of entries) {
+    if (!merged.has(roomCode)) {
+      merged.set(roomCode, count);
+    }
+  }
+  roomsStore.unreadCounts = merged;
 }
 
 export async function saveRoom(roomCode: string, name: string): Promise<void> {

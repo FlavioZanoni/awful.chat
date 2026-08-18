@@ -19,6 +19,10 @@ import {
   putPeerProfile,
   putOwnProfile,
   putSavedGif,
+  getRoom,
+  setWatermark,
+  getOwnProfile,
+  getPeerProfile,
 } from "../storage";
 import type { Message, Attachment, PendingMessage } from "../types/message";
 import type {
@@ -799,13 +803,78 @@ async function importDatabase(
         data: a.data ? new Uint8Array(a.data).buffer : undefined,
       } as Attachment)
     ),
-    ...data.rooms.map((r) => putRoom(pfpFromJson(r))),
-    ...data.profiles.map((raw) => {
-      const p = pfpFromJson(raw);
-      if (p.isMe) {
-        return putOwnProfile(p as OwnProfile);
+    ...data.rooms.map((r) => {
+      const importedRoom = pfpFromJson(r);
+      if (mode === "add") {
+        return (async () => {
+          const localRoom = await getRoom(importedRoom.roomCode);
+          if (localRoom) {
+            const participantLastSeen: Record<string, number> = {};
+            for (const [did, timestamp] of Object.entries(
+              localRoom.participantLastSeen ?? {}
+            )) {
+              participantLastSeen[did] = timestamp ?? 0;
+            }
+            for (const [did, timestamp] of Object.entries(
+              importedRoom.participantLastSeen ?? {}
+            )) {
+              participantLastSeen[did] = Math.max(
+                participantLastSeen[did] ?? 0,
+                timestamp ?? 0
+              );
+            }
+            const merged: typeof importedRoom = {
+              ...importedRoom,
+              lastSeenLamport: Math.max(
+                localRoom.lastSeenLamport ?? 0,
+                importedRoom.lastSeenLamport ?? 0
+              ),
+              createdAt: Math.min(
+                localRoom.createdAt ?? Infinity,
+                importedRoom.createdAt ?? Infinity
+              ),
+              participants: [...new Set([...(localRoom.participants ?? []), ...(importedRoom.participants ?? [])])],
+              participantLastSeen,
+              name:
+                !localRoom.name || localRoom.name === localRoom.roomCode
+                  ? importedRoom.name
+                  : localRoom.name,
+            };
+            await putRoom(merged);
+          } else {
+            await putRoom(importedRoom);
+          }
+        })();
       } else {
-        return putPeerProfile(p as PeerProfile);
+        return putRoom(importedRoom);
+      }
+    }),
+    ...data.profiles.map((raw) => {
+      const importedProfile = pfpFromJson(raw);
+      if (mode === "add") {
+        return (async () => {
+          if (importedProfile.isMe) {
+            const localProfile = await getOwnProfile();
+            const importedUpdatedAt = (importedProfile as OwnProfile).updatedAt ?? 0;
+            const localUpdatedAt = (localProfile as OwnProfile | undefined)?.updatedAt ?? 0;
+            if (importedUpdatedAt >= localUpdatedAt) {
+              await putOwnProfile(importedProfile as OwnProfile);
+            }
+          } else {
+            const localProfile = await getPeerProfile(importedProfile.did);
+            const importedUpdatedAt = (importedProfile as PeerProfile).updatedAt ?? 0;
+            const localUpdatedAt = (localProfile as PeerProfile | undefined)?.updatedAt ?? 0;
+            if (importedUpdatedAt >= localUpdatedAt) {
+              await putPeerProfile(importedProfile as PeerProfile);
+            }
+          }
+        })();
+      } else {
+        if (importedProfile.isMe) {
+          return putOwnProfile(importedProfile as OwnProfile);
+        } else {
+          return putPeerProfile(importedProfile as PeerProfile);
+        }
       }
     }),
     ...data.savedGifs.map((g) => putSavedGif(g)),
@@ -816,10 +885,14 @@ async function importDatabase(
       })();
     }),
     ...data.watermarks.map((w) => {
-      return (async () => {
-        const db = await getDB();
-        await db.put("watermarks", w);
-      })();
+      if (mode === "add") {
+        return setWatermark(w.roomCode, w.senderId, w.maxLamport);
+      } else {
+        return (async () => {
+          const db = await getDB();
+          await db.put("watermarks", w);
+        })();
+      }
     }),
     ...data.yjsDocs.map((doc) => {
       return (async () => {
