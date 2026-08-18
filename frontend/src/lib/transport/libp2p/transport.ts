@@ -345,10 +345,14 @@ export class LibP2PTransport implements PeerTransport {
     }
   }
 
-  broadcast(data: Uint8Array, roomCode: string): void {
+  /**
+   * Returns the publish promise. Callers usually ignore it, but a leave has to
+   * be flushed before the node is stopped or it never leaves the machine.
+   */
+  async broadcast(data: Uint8Array, roomCode: string): Promise<void> {
     if (!this.node || !this.joinedRooms.has(roomCode)) return;
     try {
-      this.node.services.pubsub.publish(roomTopic(roomCode), data);
+      await this.node.services.pubsub.publish(roomTopic(roomCode), data);
     } catch (err) {
       console.warn("[LibP2PTransport] broadcast failed:", err);
     }

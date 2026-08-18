@@ -611,28 +611,51 @@ function _handleRoomName(name: string): void {
   }
 }
 
-function _handleJoinRoom(peerId: string): void {
+/**
+ * A peer may only announce ITSELF. `claimedDid` arrives in the message body,
+ * which anybody in the room can write, so it is checked against the DID bound
+ * to the authenticated connection it came in on. Without that check a peer
+ * could evict anyone from everyone else's member list (see _handleLeaveRoom)
+ * or stuff the list with identities that were never here.
+ */
+function _isSelfAnnouncement(fromPeerId: string, claimedDid: string): boolean {
+  if (!claimedDid) return false;
+  const senderDid = _peerIdToDid.get(fromPeerId);
+  return !!senderDid && senderDid === claimedDid;
+}
+
+function _handleJoinRoom(_fromPeerId: string, claimedDid: string): void {
   if (!transportState.roomCode) return;
-  if (!peerId) return;
+  if (!claimedDid) return;
+  // Deliberately NOT restricted to self-announcements: this only ever adds,
+  // RoomUsersSync already accepts additions from anyone, and a join often
+  // arrives before the sender's profile has bound their DID - rejecting it
+  // then would leave them missing from the list entirely.
   const uniqueUsers = [...new Set(transportState.roomUsers)];
-  if (!uniqueUsers.includes(peerId)) {
-    uniqueUsers.push(peerId);
+  if (!uniqueUsers.includes(claimedDid)) {
+    uniqueUsers.push(claimedDid);
     transportState.roomUsers = uniqueUsers;
-    addRoomParticipant(transportState.roomCode, peerId).catch(() => {});
+    addRoomParticipant(transportState.roomCode, claimedDid).catch(() => {});
   }
 }
 
-function _handleLeaveRoom(peerId: string): void {
-  // Explicit leave - remove user from room list AND from peerId->DID mapping
+/**
+ * Explicit leave: drop the user from the member list and from storage. This is
+ * the only thing that removes somebody - going offline must not, or a peer that
+ * closed their laptop would vanish instead of showing as offline.
+ */
+function _handleLeaveRoom(fromPeerId: string, claimedDid: string): void {
   if (!transportState.roomCode) return;
+  if (!_isSelfAnnouncement(fromPeerId, claimedDid)) return;
   const currentUsers = new Set(transportState.roomUsers);
-  if (currentUsers.has(peerId)) {
-    currentUsers.delete(peerId);
+  if (currentUsers.has(claimedDid)) {
+    currentUsers.delete(claimedDid);
     transportState.roomUsers = [...currentUsers];
-    removeRoomParticipant(transportState.roomCode, peerId).catch(() => {});
+    removeRoomParticipant(transportState.roomCode, claimedDid).catch(() => {});
   }
-  // Clean up the peerId->DID mapping when user explicitly leaves
-  _peerIdToDid.delete(peerId);
+  // Keyed by the libp2p peerId, not the DID: deleting claimedDid here was a
+  // no-op and left the mapping behind.
+  _peerIdToDid.delete(fromPeerId);
   transportState.peerDidVersion += 1;
 }
 
@@ -641,15 +664,28 @@ function _handleLeaveRoom(peerId: string): void {
 const MAX_ROOM_USERS = 512;
 
 function _handleRoomUsersSync(participants: string[]): void {
-  if (!transportState.roomCode) return;
+  const roomCode = transportState.roomCode;
+  if (!roomCode) return;
   if (!Array.isArray(participants)) return;
   const selfDid = identityStore.did ?? _transport.selfId();
   const valid = participants.filter(
     (p) => typeof p === "string" && (looksLikeDid(p) || looksLikePeerId(p))
   );
-  const merged = new Set([...transportState.roomUsers, ...valid]);
+  const known = new Set(transportState.roomUsers);
+  const merged = new Set([...known, ...valid]);
   if (selfDid) merged.add(selfDid);
-  transportState.roomUsers = [...merged].slice(0, MAX_ROOM_USERS);
+  const next = [...merged].slice(0, MAX_ROOM_USERS);
+  transportState.roomUsers = next;
+
+  // Persist whoever is new to us. Only a JoinRoom announcement used to be
+  // written down, and you only receive that if you were already in the room
+  // when they joined - so everybody who was there before you lived in memory
+  // alone and disappeared from the member list on your next reload. Existing
+  // entries are left untouched so this does not keep resetting their
+  // inactivity window.
+  for (const did of next) {
+    if (!known.has(did)) addRoomParticipant(roomCode, did).catch(() => {});
+  }
 }
 
 function _broadcastJoinRoom(): void {
@@ -661,10 +697,10 @@ function _broadcastJoinRoom(): void {
   );
 }
 
-function _broadcastLeaveRoom(): void {
+function _broadcastLeaveRoom(): Promise<void> {
   const selfDid = identityStore.did ?? _transport.selfId();
-  if (!selfDid || !transportState.roomCode) return;
-  _transport.broadcast(
+  if (!selfDid || !transportState.roomCode) return Promise.resolve();
+  return _transport.broadcast(
     encode({ type: MessageType.LeaveRoom, peerId: selfDid }),
     transportState.roomCode
   );
@@ -984,10 +1020,10 @@ _transport.on("message", (peerId, data, room) => {
         _handleRoomName(msg.name);
         break;
       case MessageType.JoinRoom:
-        _handleJoinRoom(msg.peerId);
+        _handleJoinRoom(peerId, msg.peerId);
         break;
       case MessageType.LeaveRoom:
-        _handleLeaveRoom(msg.peerId);
+        _handleLeaveRoom(peerId, msg.peerId);
         break;
       case MessageType.RoomUsersSync:
         _handleRoomUsersSync(msg.participants);
@@ -1150,14 +1186,16 @@ export function getRoomUsers(): string[] {
 }
 
 export function leaveRoom(): void {
-  _broadcastLeaveRoomAndDisconnect();
+  void _broadcastLeaveRoomAndDisconnect();
 }
 
-function _broadcastLeaveRoomAndDisconnect(): void {
+async function _broadcastLeaveRoomAndDisconnect(): Promise<void> {
   const roomCode = transportState.roomCode;
   const selfDid = identityStore.did ?? _transport.selfId();
   if (roomCode && selfDid) {
-    _broadcastLeaveRoom();
+    // Await the publish: disconnect() stops the node outright, and the leave
+    // used to be dropped on the way out, so nobody ever saw you leave.
+    await _broadcastLeaveRoom().catch(() => {});
   }
   _disconnectWithoutBroadcasting();
 }

@@ -47,7 +47,7 @@ export interface PeerTransport {
   rooms(): string[];
   /** Resolves true if the frame was handed to an open stream, false on failure. */
   send(peerId: string, data: Uint8Array): Promise<boolean>;
-  broadcast(data: Uint8Array, roomCode: string): void;
+  broadcast(data: Uint8Array, roomCode: string): Promise<void>;
   on<K extends keyof TransportEvents>(
     event: K,
     handler: TransportEvents[K]
