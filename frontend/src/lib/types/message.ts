@@ -140,6 +140,8 @@ export interface WireProfile {
    */
   peerId?: string;
   bindingSig?: string;
+  /** Set on a profile sent in answer to one, so replies do not ping-pong. */
+  reply?: boolean;
 }
 
 export interface WireCallPresence {

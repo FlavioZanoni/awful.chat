@@ -25,6 +25,12 @@ interface WithTransportManager {
   };
 }
 import type { PeerTransport, TransportEvents } from "../types";
+import {
+  installFaultHook,
+  shouldBlockDial,
+  shouldDropFrame,
+  shouldSuppressEvent,
+} from "../faults";
 
 const RELAY_RESERVATION_TIMEOUT_MS = 10_000;
 const DIRECT_MSG_PROTOCOL = "/app/direct/1.0.0";
@@ -40,6 +46,16 @@ const PEER_REDIAL_DELAY_MS = 3_000;
 const PEER_REDIAL_MAX_MS = 60_000;
 const RELAY_RECONNECT_DELAY_MS = 3_000;
 const CONNECTION_RECONCILE_MS = 5_000;
+/** Silence after which we check a peer is really still there. */
+const PEER_SILENCE_MS = 12_000;
+const PEER_PING_TIMEOUT_MS = 5_000;
+// Liveness lives at this layer rather than as a libp2p service: the ping
+// package pulls in a second copy of @libp2p/interface and the type skew breaks
+// the build. These ride the direct stream we already keep open.
+const PING_FRAME = new TextEncoder().encode('{"type":"__ping"}');
+const PONG_FRAME = new TextEncoder().encode('{"type":"__pong"}');
+const PING_TEXT = '{"type":"__ping"}';
+const PONG_TEXT = '{"type":"__pong"}';
 const RENDEZVOUS_RECONNECT_DELAY_MS = 2_000;
 
 type RendezvousClientMsg =
@@ -53,6 +69,12 @@ type RendezvousServerMsg =
 
 function roomTopic(roomCode: string) {
   return `app:room:${roomCode}`;
+}
+
+/** libp2p streams expose a status; anything but "open" cannot be written to. */
+function streamIsOpen(stream: Stream): boolean {
+  const status = (stream as unknown as { status?: string }).status;
+  return status === undefined || status === "open";
 }
 
 function encodeFrame(data: Uint8Array): Uint8Array {
@@ -94,6 +116,18 @@ export class LibP2PTransport implements PeerTransport {
   /** peerId -> earliest time we may dial it again. */
   private nextDialAt = new Map<string, number>();
   private dialBackoff = new Map<string, number>();
+  /** peerId -> last time we heard anything from them. */
+  private lastInbound = new Map<string, number>();
+  private pinging = new Set<string>();
+  /** Dev counters. Connection-layer faults are invisible without them: every
+   *  side looks connected while writes vanish into a dead circuit. */
+  readonly debugStats = {
+    identifies: 0,
+    connects: 0,
+    disconnects: 0,
+    staleConnectionsClosed: 0,
+    livenessDrops: 0,
+  };
 
   // set to true only by disconnect() - prevents any reconnect logic from firing
   private intentionalDisconnect = false;
@@ -101,6 +135,10 @@ export class LibP2PTransport implements PeerTransport {
   private relayReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private privateKeyBytes: Uint8Array | null = null;
+
+  constructor() {
+    installFaultHook();
+  }
 
   get p2pNode(): Libp2p<AppServices> | null {
     return this.node;
@@ -189,6 +227,7 @@ export class LibP2PTransport implements PeerTransport {
       if (from === myId || this.isRelayPeer(from)) return;
       const topic: string = evt.detail.topic;
       const room = topic.startsWith("app:room:") ? topic.slice(9) : null;
+      this.lastInbound.set(from, Date.now());
       if (room && this.joinedRooms.has(room)) {
         this.emit("message", from, evt.detail.data, room);
       }
@@ -196,12 +235,19 @@ export class LibP2PTransport implements PeerTransport {
 
     this.node.addEventListener("peer:identify", (evt: any) => {
       const id = evt.detail.peerId.toString();
-      if (this.isRelayPeer(id) || this.connectedPeers.has(id)) return;
-      this.connectedPeers.add(id);
-      // Reached them: forget any retry backoff so a later drop redials fast.
-      this.nextDialAt.delete(id);
-      this.dialBackoff.delete(id);
-      this.updateRelayedStatus(id);
+      if (this.isRelayPeer(id)) return;
+      // Handle EVERY identify, not just the first.
+      //
+      // A peer that reloads keeps its peerId, and the relay keeps the old
+      // connection object alive, so it never looks disconnected here. Skipping
+      // the repeat identify meant its return went unnoticed: we kept the
+      // stream from the dead page, every write vanished into it, and the peer
+      // sat there connected but receiving nothing. Identify fires once per
+      // connection, so re-running this is cheap, and the app's connect handler
+      // is idempotent - it just re-sends who we are and reconciles history,
+      // which is exactly what a returning peer needs.
+      this.lastInbound.set(id, Date.now());
+      this.registerPeer(id);
       this.emit("connect", id);
     });
 
@@ -332,10 +378,21 @@ export class LibP2PTransport implements PeerTransport {
   async send(peerId: string, data: Uint8Array): Promise<boolean> {
     if (!this.node || this.isRelayPeer(peerId)) return false;
     if (peerId === this.node.peerId.toString()) return false;
+    // Report success: a dropped frame looks exactly like one that was sent and
+    // never arrived, which is the failure we are trying to reproduce.
+    if (shouldDropFrame(data)) return true;
 
     const stream = this.peerStreams.get(peerId);
     if (stream) {
-      return this.writeFrame(peerId, stream, data);
+      // Only reuse a stream that is still open. A peer that reconnects leaves
+      // the old stream closed, and the close event routinely lands after the
+      // next write has already been attempted - which throws StreamStateError
+      // and, worse, silently loses whatever was being sent. Dropping it here
+      // makes the send fall through and open a fresh one.
+      if (streamIsOpen(stream)) {
+        return this.writeFrame(peerId, stream, data);
+      }
+      this.cleanupPeerStream(peerId);
     }
 
     if (!this.pendingQueues.has(peerId)) this.pendingQueues.set(peerId, []);
@@ -370,6 +427,7 @@ export class LibP2PTransport implements PeerTransport {
    */
   async broadcast(data: Uint8Array, roomCode: string): Promise<void> {
     if (!this.node || !this.joinedRooms.has(roomCode)) return;
+    if (shouldDropFrame(data)) return;
     try {
       await this.node.services.pubsub.publish(roomTopic(roomCode), data);
     } catch (err) {
@@ -429,6 +487,42 @@ export class LibP2PTransport implements PeerTransport {
     this.reconcileConnections();
   }
 
+  /**
+   * Mark a peer as connected, discarding anything held over from a previous
+   * incarnation.
+   *
+   * A peer that reloads comes back with the same peerId, and the stream we
+   * held for it can still report itself open long after the far end is gone -
+   * so every write lands in a black hole. Nothing errors, nothing retries, and
+   * the peer sits there connected but deaf: no profile, no presence, no
+   * history. Dropping the cached stream forces the next send to open a fresh
+   * one.
+   */
+  private registerPeer(peerId: string): void {
+    // A peer we are seeing again must not reuse the stream from its previous
+    // incarnation: that stream can still report itself open while the far end
+    // is gone, so every write disappears into it.
+    this.cleanupPeerStream(peerId);
+    this.connectedPeers.add(peerId);
+    this.updateRelayedStatus(peerId);
+    this.nextDialAt.delete(peerId);
+    this.dialBackoff.delete(peerId);
+  }
+
+
+
+  /** Forget a peer and tear down everything we hold for it. */
+  private dropPeer(peerId: string): void {
+    this.connectedPeers.delete(peerId);
+    this.relayedPeers.delete(peerId);
+    this.lastInbound.delete(peerId);
+    this.cleanupPeerStream(peerId);
+    for (const c of this.node?.getConnections() ?? []) {
+      if (c.remotePeer.toString() === peerId) c.close().catch(() => {});
+    }
+    this.emit("disconnect", peerId);
+  }
+
   private rememberRoomPeer(room: string, peerId: string): void {
     if (!room || !peerId) return;
     const peers = this.roomPeers.get(room) ?? new Set<string>();
@@ -442,12 +536,12 @@ export class LibP2PTransport implements PeerTransport {
       const id = connection.remotePeer.toString();
       if (this.isRelayPeer(id) || this.connectedPeers.has(id)) continue;
       console.log("[Transport] reconciled missed peer:", id.slice(-8));
-      this.connectedPeers.add(id);
-      this.updateRelayedStatus(id);
+      this.registerPeer(id);
       this.emit("connect", id);
     }
     this.retryMissingRoomPeers();
   }
+
 
   /**
    * Dial anybody the relay told us shares a room with us and who we still are
@@ -586,6 +680,10 @@ export class LibP2PTransport implements PeerTransport {
   }
 
   private writeFrame(peerId: string, stream: Stream, data: Uint8Array): boolean {
+    if (!streamIsOpen(stream)) {
+      this.cleanupPeerStream(peerId);
+      return false;
+    }
     try {
       const ok = stream.send(encodeFrame(data));
       if (!ok) {
@@ -627,6 +725,21 @@ export class LibP2PTransport implements PeerTransport {
         if (buf.byteLength < 4 + len) break;
         const payload = buf.slice(4, 4 + len);
         buf = buf.slice(4 + len);
+
+        // Anything at all from this peer proves it is alive.
+        this.lastInbound.set(fromId, Date.now());
+
+        // Liveness frames are ours, not the app's.
+        const text =
+          payload.byteLength <= PING_TEXT.length + 2
+            ? new TextDecoder().decode(payload)
+            : "";
+        if (text === PING_TEXT) {
+          void this.send(fromId, PONG_FRAME);
+          continue;
+        }
+        if (text === PONG_TEXT) continue;
+
         // null room = direct message (not pubsub)
         this.emit("message", fromId, payload, null);
       }
@@ -743,6 +856,7 @@ export class LibP2PTransport implements PeerTransport {
 
   private async dialPeer(peerId: string, attempt = 0): Promise<void> {
     if (!this.node || this.connectedPeers.has(peerId)) return;
+    if (shouldBlockDial(peerId)) return;
     if (this.dialingPeers.has(peerId)) return;
     this.dialingPeers.add(peerId);
 
@@ -877,6 +991,9 @@ export class LibP2PTransport implements PeerTransport {
     event: K,
     ...args: Parameters<TransportEvents[K]>
   ): void {
+    // Suppressing "connect" reproduces the case where one side reloads and the
+    // other never notices, so it never re-sends anything about itself.
+    if (shouldSuppressEvent(event as string)) return;
     this.handlers.get(event)?.forEach((h) => (h as Function)(...args));
   }
 }

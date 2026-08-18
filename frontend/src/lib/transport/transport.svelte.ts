@@ -195,12 +195,23 @@ const BATCH_SIZE = 20;
 export const MAX_PERSISTED_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const _peerIdToDid = new Map<string, string>();
 
+/** Dev-only counters. Presence bugs are invisible without them: everything
+ *  looks connected while a profile is quietly rejected. */
+const _stats = {
+  profilesOut: 0,
+  profilesIn: 0,
+  profilesRejected: 0,
+  digestsOut: 0,
+  digestsIn: 0,
+};
+
 if (import.meta.env.DEV && typeof window !== "undefined") {
   // Dev-only handle: presence and profile bugs are only reproducible with two
   // real peers, and there is no other way to see this state from a test.
   (window as unknown as Record<string, unknown>).__awful = {
     state: transportState,
     peerIdToDid: _peerIdToDid,
+    stats: _stats,
     selfId: () => _transport.selfId(),
     node: () => _transport.p2pNode,
   };
@@ -275,11 +286,19 @@ function lamportReceive(remote: number): void {
 }
 
 if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", () => {
+  const onUnload = () => {
     for (const transfer of transportState.fileTransfers.values()) {
       if (transfer.blobURL) URL.revokeObjectURL(transfer.blobURL);
     }
-  });
+    // Say goodbye. Without it the other side keeps a connection that looks
+    // alive, holds the stream it belongs to, and quietly writes into nothing
+    // when we come back. Best effort: an unloading page gets no async time,
+    // but the peers that do hear it recover instantly instead of waiting for
+    // the reconcile to notice.
+    _transport.disconnect();
+  };
+  window.addEventListener("pagehide", onUnload);
+  window.addEventListener("beforeunload", onUnload);
 }
 
 // ── Senders ───────────────────────────────────────────────────────────────────
@@ -295,7 +314,7 @@ function _sendRoomName(peerId?: string): void {
   else _transport.broadcast(payload, roomCode);
 }
 
-async function _sendProfile(peerId?: string): Promise<void> {
+async function _sendProfile(peerId?: string, isReply = false): Promise<void> {
   const profile = await getOwnProfile();
   const name = profile?.nickname?.trim() || "Anonymous";
   const did = identityStore.did ?? null;
@@ -316,6 +335,7 @@ async function _sendProfile(peerId?: string): Promise<void> {
     binding = null; // identity locked: the peer just will not bind us yet
   }
 
+  _stats.profilesOut++;
   const payload = encode({
     type: MessageType.Profile,
     name,
@@ -323,6 +343,7 @@ async function _sendProfile(peerId?: string): Promise<void> {
     avatarUrl,
     peerId: _transport.selfId(),
     bindingSig: binding?.bindingSig,
+    reply: isReply || undefined,
   });
 
   if (peerId) {
@@ -415,6 +436,7 @@ async function _sendDigest(peerId: string): Promise<void> {
   const roomCode = transportState.roomCode;
   if (!roomCode) return;
   const watermarks = await getWatermarksForRoom(roomCode);
+  _stats.digestsOut++;
   await _transport.send(
     peerId,
     encode({ type: MessageType.SyncDigest, roomCode, watermarks })
@@ -471,6 +493,7 @@ async function _handleDigest(
 ): Promise<void> {
   // Only reconcile a room we have actually joined - never a room the sender
   // merely named, and never fall back to whatever room the UI has open.
+  _stats.digestsIn++;
   if (!roomCode || !_transport.rooms().includes(roomCode)) return;
   const mine = await getWatermarksForRoom(roomCode);
 
@@ -481,6 +504,16 @@ async function _handleDigest(
   if (theyAreMissing.length > 0) {
     await _pushMissingTo(peerId, roomCode, theirWatermarks);
   }
+
+  // A digest only tells the SENDER what they lack, so one exchange heals one
+  // direction. If their watermarks show they hold something we do not, send
+  // ours back so they push it to us. Without this, whichever side happened to
+  // have a reason to sync was the only side that ever caught up. It cannot
+  // loop: the reply only goes out when we are genuinely behind.
+  const weAreBehind = Object.keys(theirWatermarks).some(
+    (sid) => (theirWatermarks[sid] ?? -1) > (mine[sid] ?? -1)
+  );
+  if (weAreBehind) _syncPeer(peerId, true);
 }
 
 async function _pushMissingTo(
@@ -576,13 +609,17 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
   // peerId. The `did` field on its own is spoofable, and any peer could
   // otherwise claim someone else's identity and hijack their DM conversation
   // or poison their cached profile.
+  _stats.profilesIn++;
   const claimed = msg.did;
   const proven =
     claimed &&
     msg.peerId === peerId &&
     msg.bindingSig &&
     (await verifyPeerBinding(claimed, peerId, msg.bindingSig));
-  if (!proven) return;
+  if (!proven) {
+    _stats.profilesRejected++;
+    return;
+  }
   const did = claimed as string;
   const isNewMapping = _peerIdToDid.get(peerId) !== did;
   _setPeerDid(peerId, did);
@@ -593,25 +630,24 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
   if (isNewMapping) {
     flushQueuedDmForPeer(peerId).catch(() => {});
     _replayPendingDm(peerId, did);
-    // Answer with everything about our current state.
-    //
-    // These are otherwise only sent when the "connect" event fires. After one
-    // side reloads, the other often still has the connection open and never
-    // sees a new connect, so it never re-sends - leaving the reloaded peer
-    // with no DID for it (shown offline, no name) and no idea it is in a call,
-    // while voice and gossipsub carry on over the connection that was never
-    // lost. Replying here makes the exchange mutual whoever starts it, and it
-    // settles after one extra round because the reply only fires on a NEW
-    // mapping.
-    _sendProfile(peerId);
+  }
+
+  // Answer with everything about our current state, on EVERY profile we did
+  // not ourselves provoke - not only when the mapping is new.
+  //
+  // Device keys are stable, so a peer that reloads comes back with the same
+  // peerId and the mapping looks unchanged to us. Keying the reply on novelty
+  // meant the reloaded side never heard back: connected, but with no idea who
+  // anyone is, no names, no presence and no history.
+  if (!msg.reply) {
+    _sendProfile(peerId, true);
     if (transportState.inCall) {
       _sendCallPresence(peerId);
       _sendCallState(peerId);
     }
-    // They are new to us, so anything they said before we bound them is
-    // missing: reconcile history with them too.
-    _sendDigest(peerId).catch(() => {});
   }
+  // Reconcile history with them either way; debounced, so a burst is one.
+  _syncPeer(peerId);
 
   const avatarUrl = normalizeAvatarUrl(msg.avatarUrl);
 
@@ -891,7 +927,10 @@ function _handleChatMessage(
   // one costs nothing, so erring towards syncing is the cheap side.
   if (receivedFromPeerId) {
     const seen = _lastSeenLamport.get(`${roomCode}|${msg.senderId}`) ?? -1;
-    if (seen >= 0 && msg.lamport > seen + 1) _syncPeer(receivedFromPeerId);
+    // Force past the debounce: a detected gap is the strongest signal we get,
+    // and a routine profile exchange must not be allowed to consume the window
+    // and swallow it.
+    if (seen >= 0 && msg.lamport > seen + 1) _syncPeer(receivedFromPeerId, true);
     if (msg.lamport > seen) {
       _lastSeenLamport.set(`${roomCode}|${msg.senderId}`, msg.lamport);
     }
