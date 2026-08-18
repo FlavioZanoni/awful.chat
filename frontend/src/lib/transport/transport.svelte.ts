@@ -414,7 +414,9 @@ if (typeof window !== "undefined") {
     for (const pid of _transport.peers()) {
       if (!_peerIdToDid.has(pid)) {
         // Connected but unbound: our profile (or their reply) was lost.
-        _sendProfile(pid);
+        // Catch: getOwnProfile can reject (blocked IDB upgrade, private-mode
+        // quota), and this recurs every tick while the state persists.
+        _sendProfile(pid).catch(() => {});
         continue;
       }
       const quietFor = Date.now() - (_lastAppInbound.get(pid) ?? 0);
