@@ -144,7 +144,8 @@ export async function playTransmissionEndedSound() {
 	setTimeout(() => playOsc(300, 0.12, "sine", 0.06), 120);
 }
 
-import callRingUrl from "/sounds/call-ring.wav?url";
+// AAC instead of raw PCM: same 9 seconds, ~16x smaller, decodable everywhere.
+import callRingUrl from "/sounds/call-ring.m4a?url";
 
 async function loadRingBuffer(): Promise<AudioBuffer> {
   if (ringBuffer) return ringBuffer;

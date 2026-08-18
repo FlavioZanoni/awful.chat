@@ -1,6 +1,4 @@
 <script lang="ts">
-  import "emoji-picker-element";
-
   interface Props {
     open: boolean;
     x: number;
@@ -10,6 +8,12 @@
   }
 
   let { open, x, y, onSelect, onClose }: Props = $props();
+
+  // The picker is a custom element, so it upgrades in place once the
+  // definition loads - no need to carry the library before the first open.
+  $effect(() => {
+    if (open) void import("emoji-picker-element");
+  });
 
   const left = $derived(
     typeof window === "undefined"
