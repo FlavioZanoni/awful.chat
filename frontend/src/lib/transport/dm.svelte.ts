@@ -9,6 +9,7 @@ import {
   getPhonebookEntries,
   getRoom,
   putMessage,
+  markRoomSeen,
   putPhonebookEntry,
   putRoom,
   type DMRoom,
@@ -234,6 +235,9 @@ export async function sendDirectMessage(text: string): Promise<void> {
   msg = signMessage(msg);
 
   await putMessage(msg);
+  // Sending is reading: your own message must not count as unread, and the
+  // watermark - not a sender-id comparison - is what the badge trusts.
+  await markRoomSeen(roomCode, msg.lamport);
   await refreshDmRooms();
   transportState.dmVersion += 1;
   if (

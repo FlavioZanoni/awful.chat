@@ -376,6 +376,38 @@ const MESSAGE_STATUS_RANK: Record<MessageStatus, number> = {
   read: 3,
 };
 
+/**
+ * A read receipt for one message implies everything the same sender wrote
+ * earlier in that room was read too. Acks only name the page the reader had
+ * loaded, so cascade the status down the backlog. Returns the ids that
+ * actually changed so callers can update in-memory copies.
+ */
+export async function markOwnMessagesReadUpTo(
+  roomCode: string,
+  senderId: string,
+  lamport: number
+): Promise<string[]> {
+  const database = await getDB();
+  const tx = database.transaction("messages", "readwrite");
+  const index = tx.store.index("byRoomLamport");
+  const range = IDBKeyRange.bound([roomCode, 0], [roomCode, lamport]);
+  const updated: string[] = [];
+  let cursor = await index.openCursor(range);
+  while (cursor) {
+    const m = cursor.value;
+    if (
+      m.senderId === senderId &&
+      (!m.status || MESSAGE_STATUS_RANK[m.status] < MESSAGE_STATUS_RANK.read)
+    ) {
+      await cursor.update({ ...m, status: "read" });
+      updated.push(m.id);
+    }
+    cursor = await cursor.continue();
+  }
+  await tx.done;
+  return updated;
+}
+
 /** Advance a message's delivery status. Never regresses (read stays read). */
 export async function updateMessageStatus(
   id: string,

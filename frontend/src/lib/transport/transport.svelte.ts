@@ -9,6 +9,7 @@ import {
   getWatermarksForRoom,
   setWatermark,
   markRoomSeen,
+  markOwnMessagesReadUpTo,
   getPeerProfile,
   putPeerProfile,
   getAllPeerProfiles,
@@ -305,6 +306,27 @@ export function applyMessageStatus(
   const next = [...transportState.messages];
   next[idx] = { ...next[idx], status };
   transportState.messages = next;
+}
+
+async function _cascadeReadAcks(messageIds: string[]): Promise<void> {
+  const self = selfId();
+  const maxByRoom = new Map<string, number>();
+  for (const id of messageIds) {
+    const m = await getMessage(id);
+    if (!m || m.senderId !== self) continue;
+    maxByRoom.set(
+      m.roomCode,
+      Math.max(maxByRoom.get(m.roomCode) ?? 0, m.lamport)
+    );
+  }
+  for (const [roomCode, lamport] of maxByRoom) {
+    const changed = await markOwnMessagesReadUpTo(roomCode, self, lamport);
+    if (!changed.length) continue;
+    const changedSet = new Set(changed);
+    transportState.messages = transportState.messages.map((m) =>
+      changedSet.has(m.id) ? { ...m, status: "read" } : m
+    );
+  }
 }
 
 function lamportSend(): number {
@@ -1280,6 +1302,9 @@ _transport.on("message", (peerId, data, room) => {
         for (const id of envelope.messageIds) {
           applyMessageStatus(id, "read");
         }
+        // The reader only acks the page they had loaded; a read at lamport L
+        // implies everything we sent before L in that room was read too.
+        _cascadeReadAcks(envelope.messageIds).catch(() => {});
         return;
       }
 
