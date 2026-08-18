@@ -414,6 +414,10 @@ const _profileRepair = new Map<string, { next: number; delay: number }>();
 
 if (typeof window !== "undefined") {
   setInterval(() => {
+    // Same rule as the liveness probe: a hidden tab has no UI to keep honest
+    // and a phone radio to leave alone - returning to the page runs a full
+    // resync anyway.
+    if (typeof document !== "undefined" && document.hidden) return;
     for (const pid of _transport.peers()) {
       if (!_peerIdToDid.has(pid)) {
         // Connected but unbound: our profile (or their reply) was lost.
