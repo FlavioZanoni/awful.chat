@@ -11,6 +11,7 @@ export class DtlnProcessor {
   private resolveReady!: () => void;
   private initializing = false;
   private noiseGate = 0.002;
+  private inputGain = 1.0;
 
   // Two independent graphs share the single DTLN worklet node:
   //
@@ -98,8 +99,22 @@ export class DtlnProcessor {
     return this.workletNode;
   }
 
-  setGain(gain: number): void {
-    this.workletNode?.port.postMessage({ output_gain: gain });
+  /**
+   * Mic gain, applied before the model.
+   *
+   * Remembered, and applied to the live node: the slider used to drive the
+   * worklet's own output gain while dragging but this node when the mic was
+   * rebuilt, so the same slider position meant two different loudnesses
+   * depending on when you last restarted the mic - and a gain restored on
+   * startup, before the worklet exists, was dropped entirely.
+   */
+  setInputGain(gain: number): void {
+    this.inputGain = gain;
+    if (this.txInputGain) this.txInputGain.gain.value = gain;
+  }
+
+  getInputGain(): number {
+    return this.inputGain;
   }
 
   setNoiseGate(threshold: number): void {
@@ -116,7 +131,7 @@ export class DtlnProcessor {
   // connect a mic stream through DTLN, returns the processed MediaStream
   async processStream(
     micStream: MediaStream,
-    inputGain = 1.0
+    inputGain = this.inputGain
   ): Promise<MediaStream> {
     await this.waitUntilReady();
     const ctx = this.ctx;
@@ -134,6 +149,7 @@ export class DtlnProcessor {
     const dest = ctx.createMediaStreamDestination();
 
     // Set initial gain values
+    this.inputGain = inputGain;
     inputGainNode.gain.value = inputGain;
     // Boost output to compensate for DTLN attenuation
     outputGainNode.gain.value = 3.0;

@@ -28,6 +28,11 @@
     getVoiceDtlnNoiseGate,
   } from "$lib/transport/voice.svelte";
   import { setDeafened, toggleMute } from "$lib/transport/call.svelte";
+  import {
+    formatGain,
+    gainToSlider,
+    sliderToGain,
+  } from "$lib/audio/volume-curve";
 
   const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
     echoCancellation: false,
@@ -61,25 +66,10 @@
   let micLevelAnalyser: AnalyserNode | null = null;
   let micTestAudio: HTMLAudioElement | null = null;
 
-  const LOG_MIN = Math.log10(0.01);
-  const LOG_MAX = Math.log10(2.5);
-
-  function gainToSlider(gain: number): number {
-    if (gain <= 0) return 0;
-    const logVal = Math.log10(Math.max(0.01, gain));
-    return Math.round(((logVal - LOG_MIN) / (LOG_MAX - LOG_MIN)) * 99 + 1);
-  }
-
-  function sliderToGain(slider: number): number {
-    if (slider <= 0) return 0;
-    const t = (slider - 1) / 99;
-    return Math.pow(10, LOG_MIN + t * (LOG_MAX - LOG_MIN));
-  }
-
-  function gainToPercent(gain: number): string {
-    if (gain <= 0) return "muted";
-    return `${Math.round(gain * 100)}%`;
-  }
+  // Shared with the per-person volume menu. The old curve here had no exact
+  // position for 100%, so a restored setting came back reading 102% and the
+  // number crept every time the page was reloaded.
+  const gainToPercent = formatGain;
 
   let inputSlider = $state<number[]>([gainToSlider(1.0)]);
   let outputSlider = $state<number[]>([gainToSlider(1.0)]);

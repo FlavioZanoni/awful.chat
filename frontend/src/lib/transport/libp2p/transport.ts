@@ -37,6 +37,7 @@ const RENDEZVOUS_PROTOCOL = "/awful/rendezvous/1.0.0";
 const MAX_DIRECT_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_RENDEZVOUS_FRAME_BYTES = 16 * 1024;
 const PEER_REDIAL_DELAY_MS = 3_000;
+const PEER_REDIAL_MAX_MS = 60_000;
 const RELAY_RECONNECT_DELAY_MS = 3_000;
 const CONNECTION_RECONCILE_MS = 5_000;
 const RENDEZVOUS_RECONNECT_DELAY_MS = 2_000;
@@ -81,6 +82,18 @@ export class LibP2PTransport implements PeerTransport {
   private openingStreams = new Map<string, Promise<void>>();
   private dialingPeers = new Set<string>();
   private joinedRooms = new Set<string>();
+  /**
+   * Who the relay says is in each room. Kept so a peer we failed to reach can
+   * be tried again later: dialPeer gives up after a few quick attempts, and a
+   * peer whose relay reservation had not completed yet (that can take up to
+   * 20s) would otherwise never be dialed again. The pair stays invisible to
+   * each other - no profile, no voice, and only the text that gossipsub
+   * happens to route through somebody else.
+   */
+  private roomPeers = new Map<string, Set<string>>();
+  /** peerId -> earliest time we may dial it again. */
+  private nextDialAt = new Map<string, number>();
+  private dialBackoff = new Map<string, number>();
 
   // set to true only by disconnect() - prevents any reconnect logic from firing
   private intentionalDisconnect = false;
@@ -113,6 +126,9 @@ export class LibP2PTransport implements PeerTransport {
     this.pendingQueues.clear();
     this.openingStreams.clear();
     this.dialingPeers.clear();
+    this.roomPeers.clear();
+    this.nextDialAt.clear();
+    this.dialBackoff.clear();
     this.rendezvousStream = null;
 
     if (privateKeyBytes) this.privateKeyBytes = privateKeyBytes;
@@ -182,6 +198,9 @@ export class LibP2PTransport implements PeerTransport {
       const id = evt.detail.peerId.toString();
       if (this.isRelayPeer(id) || this.connectedPeers.has(id)) return;
       this.connectedPeers.add(id);
+      // Reached them: forget any retry backoff so a later drop redials fast.
+      this.nextDialAt.delete(id);
+      this.dialBackoff.delete(id);
       this.updateRelayedStatus(id);
       this.emit("connect", id);
     });
@@ -399,6 +418,13 @@ export class LibP2PTransport implements PeerTransport {
    * up (or is missed), that peer would otherwise stay invisible forever even
    * though messages flow over it.
    */
+  private rememberRoomPeer(room: string, peerId: string): void {
+    if (!room || !peerId) return;
+    const peers = this.roomPeers.get(room) ?? new Set<string>();
+    peers.add(peerId);
+    this.roomPeers.set(room, peers);
+  }
+
   private reconcileConnections(): void {
     if (!this.node) return;
     for (const connection of this.node.getConnections()) {
@@ -408,6 +434,42 @@ export class LibP2PTransport implements PeerTransport {
       this.connectedPeers.add(id);
       this.updateRelayedStatus(id);
       this.emit("connect", id);
+    }
+    this.retryMissingRoomPeers();
+  }
+
+  /**
+   * Dial anybody the relay told us shares a room with us and who we still are
+   * not connected to. The initial dials can legitimately fail - the other side
+   * may not have finished its relay reservation - and without this they were
+   * never retried.
+   */
+  private retryMissingRoomPeers(): void {
+    if (this.intentionalDisconnect || !this.node) return;
+    const now = Date.now();
+    for (const [room, peers] of this.roomPeers) {
+      if (!this.joinedRooms.has(room)) continue;
+      for (const peerId of peers) {
+        if (this.connectedPeers.has(peerId)) {
+          this.nextDialAt.delete(peerId);
+          this.dialBackoff.delete(peerId);
+          continue;
+        }
+        if (this.dialingPeers.has(peerId)) continue;
+        const due = this.nextDialAt.get(peerId) ?? 0;
+        if (now < due) continue;
+        // Back off from the reconcile interval up to a minute, so an offline
+        // peer is not hammered while a peer that is merely slow is picked up
+        // quickly.
+        const previous = due === 0 ? 0 : this.dialBackoff.get(peerId) ?? 0;
+        const next = Math.min(
+          Math.max(CONNECTION_RECONCILE_MS, previous * 2),
+          PEER_REDIAL_MAX_MS
+        );
+        this.dialBackoff.set(peerId, next);
+        this.nextDialAt.set(peerId, now + next);
+        this.dialPeer(peerId).catch(() => {});
+      }
     }
   }
 
@@ -720,19 +782,27 @@ export class LibP2PTransport implements PeerTransport {
     switch (msg.type) {
       case "PEERS": {
         for (const peerId of msg.peers ?? []) {
-          if (peerId === selfId || this.connectedPeers.has(peerId)) continue;
+          if (peerId === selfId) continue;
+          this.rememberRoomPeer(msg.room, peerId);
+          if (this.connectedPeers.has(peerId)) continue;
           this.dialPeer(peerId).catch(() => {});
         }
         break;
       }
       case "PEER_JOINED": {
         const peerId = msg.peer;
-        if (peerId === selfId || this.connectedPeers.has(peerId)) break;
+        if (peerId === selfId) break;
+        this.rememberRoomPeer(msg.room, peerId);
+        if (this.connectedPeers.has(peerId)) break;
         this.dialPeer(peerId).catch(() => {});
         break;
       }
-      case "PEER_LEFT":
+      case "PEER_LEFT": {
+        // Stop retrying somebody who has gone.
+        this.roomPeers.get(msg.room)?.delete(msg.peer);
+        this.nextDialAt.delete(msg.peer);
         break;
+      }
     }
   }
 

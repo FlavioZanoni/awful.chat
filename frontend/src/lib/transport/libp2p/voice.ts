@@ -247,7 +247,7 @@ export class LibP2PVoice implements VoiceTransport {
       );
     }
     if (this.dtlnEnabled && this.dtln) {
-      this.dtln.setGain(clamped);
+      this.dtln.setInputGain(clamped);
     }
   }
 
