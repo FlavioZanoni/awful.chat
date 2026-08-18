@@ -71,14 +71,32 @@
   // number crept every time the page was reloaded.
   const gainToPercent = formatGain;
 
-  let inputSlider = $state<number[]>([gainToSlider(1.0)]);
-  let outputSlider = $state<number[]>([gainToSlider(1.0)]);
+  // Initialise from the LIVE values, not a hardcoded 100%: mounting at the
+  // default and snapping to the saved value a beat later is the "slider
+  // flickers when I come back" report - and if the slider component emits a
+  // change during that window, the default gets SAVED over the user's value.
+  function liveInputSlider(): number {
+    try {
+      return gainToSlider(getVoiceInputGain());
+    } catch {
+      return gainToSlider(1.0);
+    }
+  }
+  function liveOutputSlider(): number {
+    try {
+      return gainToSlider(getVoiceOutputVolume());
+    } catch {
+      return gainToSlider(1.0);
+    }
+  }
+  let inputSlider = $state<number[]>([liveInputSlider()]);
+  let outputSlider = $state<number[]>([liveOutputSlider()]);
 
   $effect(() => {
     activeInput = getVoiceActiveInputDevice();
     activeOutput = getVoiceActiveOutputDevice();
-    inputSlider = [gainToSlider(getVoiceInputGain())];
-    outputSlider = [gainToSlider(getVoiceOutputVolume())];
+    inputSlider = [liveInputSlider()];
+    outputSlider = [liveOutputSlider()];
     getVoiceInputDevices().then((d) => {
       inputDevices = d;
     });
@@ -90,6 +108,12 @@
   function handleInputGainChange(vals: number[]) {
     inputSlider = vals;
     const gain = sliderToGain(vals[0]);
+    // No-op guard: a change event that does not change the value is the
+    // component syncing, not the user - acting on it can save a stale value
+    // and flip the mute state on mount.
+    try {
+      if (Math.abs(gain - getVoiceInputGain()) < 1e-6) return;
+    } catch {}
     setVoiceInputGain(gain);
     if (gain <= 0 && !transportState.muted) toggleMute();
     else if (gain > 0 && transportState.muted) toggleMute();
@@ -97,7 +121,11 @@
 
   function handleOutputVolumeChange(vals: number[]) {
     outputSlider = vals;
-    setVoiceOutputVolume(sliderToGain(vals[0]));
+    const volume = sliderToGain(vals[0]);
+    try {
+      if (Math.abs(volume - getVoiceOutputVolume()) < 1e-6) return;
+    } catch {}
+    setVoiceOutputVolume(volume);
   }
 
   async function handleInputDeviceChange(deviceId: string) {

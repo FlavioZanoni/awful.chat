@@ -149,7 +149,7 @@ export class Peer {
         path: location.pathname,
         buttons: [...document.querySelectorAll('button')].map(b => b.textContent.trim().slice(0, 24)).filter(Boolean).slice(0, 20),
         inputs: [...document.querySelectorAll('input')].map(i => i.placeholder).filter(Boolean),
-        text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 200),
+        text: document.body.innerText.split(/[\\n\\t ]+/).join(' ').slice(0, 200),
       })`);
     } catch {}
     throw new Error(
