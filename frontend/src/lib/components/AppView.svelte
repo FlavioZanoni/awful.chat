@@ -192,7 +192,7 @@
   ) {
     joinError = null;
     try {
-      await joinRoom(roomCode);
+      if (!(await joinRoom(roomCode))) return;
       const known =
         roomName || roomsStore.rooms.find((r) => r.roomCode === roomCode)?.name;
       const label = known || roomCode;
@@ -279,7 +279,9 @@
   }
 
   async function handleSelectDm(peerId: string) {
-    await openDmConversation(peerId);
+    // A superseded open (user clicked something else meanwhile) must not
+    // write view state for the conversation it lost.
+    if (!(await openDmConversation(peerId))) return;
     const resolvedPeerId = transportState.activeDmPeerId;
     if (!resolvedPeerId) return;
     // Normalize to DID since dmInbox uses participantDid which is always a DID

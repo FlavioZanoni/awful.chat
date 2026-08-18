@@ -11,6 +11,7 @@ import {
   markRoomSeen,
   markOwnMessagesReadUpTo,
   PAGE_SIZE,
+  nextDmLamport,
   getPeerProfile,
   putPeerProfile,
   getAllPeerProfiles,
@@ -103,7 +104,7 @@ const MSG_ORDER = (a: Message, b: Message) =>
  * only fall back to a full sort when the newcomer actually lands out of order.
  * Re-sorting the whole history per incoming message scaled with room size.
  */
-function appendSorted(
+export function appendSorted(
   list: Message[],
   msg: Message,
   cmp: (a: Message, b: Message) => number = MSG_ORDER
@@ -501,8 +502,27 @@ if (typeof window !== "undefined") {
         _syncPeer(pid, true);
       }
     }
+
+    // Digests only ever covered the open room, so a room in the background
+    // stayed incomplete until the user happened to click into it. Rotate
+    // through the other subscribed rooms, one per tick - bounded traffic,
+    // and every room heals within a few minutes.
+    const backgroundRooms = _transport
+      .rooms()
+      .filter((r) => r !== transportState.roomCode);
+    if (backgroundRooms.length > 0) {
+      const room =
+        backgroundRooms[_backgroundSyncIndex % backgroundRooms.length];
+      _backgroundSyncIndex++;
+      for (const pid of _transport.peers()) {
+        if (!_peerIdToDid.has(pid)) continue;
+        _sendDigestForRoom(pid, room).catch(() => {});
+      }
+    }
   }, REPAIR_TICK_MS);
 }
+
+let _backgroundSyncIndex = 0;
 
 /** Away longer than this and the connections are suspect, not just history. */
 const AWAY_FULL_RESYNC_MS = 60_000;
@@ -547,6 +567,13 @@ if (typeof window !== "undefined") {
 async function _sendDigest(peerId: string): Promise<void> {
   const roomCode = transportState.roomCode;
   if (!roomCode) return;
+  await _sendDigestForRoom(peerId, roomCode);
+}
+
+async function _sendDigestForRoom(
+  peerId: string,
+  roomCode: string
+): Promise<void> {
   const watermarks = await getWatermarksForRoom(roomCode);
   _stats.digestsOut++;
   await _transport.send(
@@ -557,11 +584,15 @@ async function _sendDigest(peerId: string): Promise<void> {
 
 // ── History ───────────────────────────────────────────────────────────────────
 
-export async function _loadHistory(roomCode: string): Promise<void> {
+export async function _loadHistory(
+  roomCode: string,
+  stillCurrent: () => boolean = () => true
+): Promise<void> {
   const [msgs, profiles] = await Promise.all([
     getMessages(roomCode),
     getAllPeerProfiles(),
   ]);
+  if (!stillCurrent()) return;
   transportState.messages = msgs;
   // DM rooms use wall-clock ms as their lamport - absorbing those here would
   // catapult the shared room clock to ~1.7e12 and skew every room after.
@@ -635,7 +666,9 @@ async function _handleDigest(
   const weAreBehind = Object.keys(theirWatermarks).some(
     (sid) => (theirWatermarks[sid] ?? -1) > (mine[sid] ?? -1)
   );
-  if (weAreBehind) _syncPeer(peerId, true);
+  // Reply for the SAME room: routing through _syncPeer digested whatever
+  // room the UI had open, so a background room only ever healed one way.
+  if (weAreBehind) _sendDigestForRoom(peerId, roomCode).catch(() => {});
 }
 
 async function _pushMissingTo(
@@ -1254,7 +1287,9 @@ function _handleDmChat(
       senderId: senderDid,
       senderName: resolveDmDisplayName(peerId),
       timestamp: envelope.payload.ts,
-      lamport: envelope.payload.ts,
+      // The sender's assigned lamport keeps both sides' copies (and their
+      // sync watermarks) identical; older clients omit it.
+      lamport: envelope.payload.lamport ?? envelope.payload.ts,
       type: reaction
         ? MessageType.Reaction
         : envelope.payload.replyTo
@@ -1295,11 +1330,7 @@ function _handleDmChat(
         });
       }
       if (isViewingThisDm) {
-        transportState.messages = appendSorted(
-          transportState.messages,
-          msg,
-          (a, b) => a.timestamp - b.timestamp
-        );
+        transportState.messages = appendSorted(transportState.messages, msg);
         await markRoomSeen(roomCode, msg.lamport);
         const roomIndex = roomsStore.dmRooms.findIndex(
           (r) => r.roomCode === roomCode
@@ -1511,7 +1542,19 @@ export async function connect() {
   await _connectPromise;
 }
 
-export async function joinRoom(roomCode: string): Promise<void> {
+/**
+ * Two rapid conversation switches race their awaits; only the LAST requested
+ * open may touch view state. Each open claims a token and checks it after
+ * every await - the loser bails without writing (and without acking).
+ */
+let _openRun = 0;
+export function beginConversationOpen(): () => boolean {
+  const run = ++_openRun;
+  return () => run === _openRun;
+}
+
+export async function joinRoom(roomCode: string): Promise<boolean> {
+  const stillCurrent = beginConversationOpen();
   if (!transportState.relayConnected) {
     await connect();
   }
@@ -1519,14 +1562,15 @@ export async function joinRoom(roomCode: string): Promise<void> {
   if (!transportState.relayConnected) {
     transportState.error = "Transport not connected to relay";
     transportState.connecting = false;
-    return;
+    return false;
   }
 
   transportState.error = null;
   transportState.connecting = true;
   try {
-    await _loadHistory(roomCode);
+    await _loadHistory(roomCode, stillCurrent);
     await _hydrateFileTransfersFromStorage(roomCode);
+    if (!stillCurrent()) return false;
     _transport.joinRoom(roomCode);
     transportState.connected = true;
     transportState.chatMode = "room";
@@ -1546,6 +1590,7 @@ export async function joinRoom(roomCode: string): Promise<void> {
       savedParticipants.filter((p) => !removedInactive.includes(p))
     );
     participants.add(selfDid);
+    if (!stillCurrent()) return false;
     transportState.roomUsers = [
       ...new Set([...transportState.roomUsers, ...participants]),
     ];
@@ -1563,6 +1608,7 @@ export async function joinRoom(roomCode: string): Promise<void> {
     for (const pid of _transport.peers()) {
       _sendDigest(pid).catch(() => {});
     }
+    return true;
   } catch (err) {
     // Roll back the partial join: _transport.joinRoom() already subscribed the
     // gossipsub topic and we flipped transportState to "in this room" before
@@ -1818,7 +1864,7 @@ export async function sendFiles(
   // DM rooms order by wall-clock ms; a room-counter lamport (~small int)
   // filed the file before the entire conversation and it vanished on reload.
   const lamport = transportState.roomCode.startsWith("dm-")
-    ? createdAt
+    ? await nextDmLamport(transportState.roomCode, createdAt)
     : lamportSend();
 
   let msg: Message = {
