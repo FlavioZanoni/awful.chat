@@ -754,9 +754,17 @@
     userMenu = null;
   }
 
+  // A person can be referenced by raw peerId or by DID depending on where
+  // the reference came from, and a phonebook entry carries both. Compare
+  // every form, or the header button shows "Add" for someone already saved
+  // (and its toggle then silently removes them).
   function isInPhonebook(peerId: string): boolean {
+    const did = peerIdToDid(peerId);
     return roomsStore.phonebook.some(
-      (entry) => entry.peerId === peerId || entry.did === peerId
+      (entry) =>
+        entry.peerId === peerId ||
+        entry.did === peerId ||
+        (!!did && (entry.peerId === did || entry.did === did))
     );
   }
 
@@ -791,7 +799,7 @@
   const dmPeerInPhonebook = $derived.by(() => {
     const peerId = transportState.activeDmPeerId;
     if (!peerId) return false;
-    return roomsStore.phonebook.some((entry) => entry.peerId === peerId);
+    return isInPhonebook(peerId);
   });
 
   async function toggleActiveDmPhonebook(): Promise<void> {
@@ -937,8 +945,8 @@
               ? "Remove from phonebook"
               : "Add to phonebook"}
             class={dmPeerInPhonebook
-              ? "text-red-400 hover:text-red-600"
-              : "text-green-400 hover:text-green-600"}
+              ? "text-red-400 hover:text-destructive! hover:bg-destructive/10!"
+              : "text-green-400 hover:text-green-500! hover:bg-green-500/10!"}
           >
             {#if dmPeerInPhonebook}
               <UserRoundMinus class="size-4" />
