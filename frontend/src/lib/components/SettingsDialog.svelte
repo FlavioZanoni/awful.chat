@@ -16,6 +16,7 @@
   import { lock } from "$lib/identity/identity.svelte";
   import {
     LogOut,
+    SlidersHorizontal,
     User,
     Volume2,
     RefreshCw,
@@ -27,6 +28,7 @@
   import ProfileSettings from "./settings/ProfileSettings.svelte";
   import AudioSettings from "./settings/AudioSettings.svelte";
   import SessionSettings from "./settings/SessionSettings.svelte";
+  import AppSettings from "./settings/AppSettings.svelte";
   import DataSettings from "./settings/DataSettings.svelte";
   import AvatarPickerDialog from "./AvatarPickerDialog.svelte";
   import QuirksNotice from "./QuirksNotice.svelte";
@@ -35,6 +37,7 @@
   type SettingsTab =
     | "profile"
     | "audio"
+    | "app"
     | "session"
     | "data"
     | "quirks"
@@ -55,6 +58,7 @@
   const tabs = $state([
     { id: "profile" as SettingsTab, label: "Profile", icon: User },
     { id: "audio" as SettingsTab, label: "Audio", icon: Volume2 },
+    { id: "app" as SettingsTab, label: "App", icon: SlidersHorizontal },
     { id: "session" as SettingsTab, label: "Session/Sync", icon: RefreshCw },
     { id: "data" as SettingsTab, label: "Data", icon: ChartPie },
     { id: "quirks" as SettingsTab, label: "Quirks", icon: Info },
@@ -158,6 +162,8 @@
         />
       {:else if activeTab === "audio"}
         <AudioSettings />
+      {:else if activeTab === "app"}
+        <AppSettings />
       {:else if activeTab === "session"}
         <SessionSettings {isMobile} {onClose} {onOpenSync} />
       {:else if activeTab === "data"}
@@ -190,6 +196,8 @@
             />
           {:else if activeTab === "audio"}
             <AudioSettings />
+          {:else if activeTab === "app"}
+            <AppSettings />
           {:else if activeTab === "session"}
             <SessionSettings {isMobile} {onClose} {onOpenSync} />
           {:else if activeTab === "data"}

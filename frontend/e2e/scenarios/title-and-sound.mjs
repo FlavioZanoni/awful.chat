@@ -62,17 +62,17 @@ try {
 
   // Case 3: toggle off THROUGH THE UI - a dynamic import() of the module
   // reaches a second instance after HMR (vite versions invalidated URLs), so
-  // the toggle must be the real switch. Settings -> Session/Sync.
+  // the toggle must be the real switch. Settings -> App.
   await alice.waitFor("settings open", async () => {
     await alice.eval(`(() => {
       const b = [...document.querySelectorAll('button')].find((x) => x.querySelector('svg.lucide-settings'));
       b?.click(); return true;
     })()`);
-    return alice.eval(`[...document.querySelectorAll('button')].some((x) => x.textContent.trim() === 'Session/Sync')`);
+    return alice.eval(`[...document.querySelectorAll('button')].some((x) => x.textContent.trim() === 'App')`);
   });
   await alice.waitFor("sounds toggled off", async () => {
     await alice.eval(`(() => {
-      const tab = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Session/Sync');
+      const tab = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'App');
       tab?.click(); return true;
     })()`);
     await alice.eval(`(() => {
