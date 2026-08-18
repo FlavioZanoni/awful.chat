@@ -1,10 +1,14 @@
 <script lang="ts">
   /**
    * An image that can hold an animated GIF still. Browsers cannot pause a
-   * GIF, so the trick is a canvas holding the first frame; the real img only
-   * exists in the DOM while it is allowed to play, which also stops the
-   * browser from spending decode work on it. A still image renders as a
-   * plain img with zero overhead.
+   * GIF, so a canvas keeps the first frame and the animated img only exists
+   * in the DOM while it is allowed to play - the browser then spends no
+   * decode work on it. A still image renders as a plain img with zero
+   * overhead.
+   *
+   * The canvas and img are stacked in the same grid cell and the canvas is
+   * only hidden once the img has painted: swapping the elements instead
+   * leaves a blank frame under the cursor, which reads as a flicker.
    *
    * animate: true = always play, false = always frozen, "hover" = play
    * while the pointer is over it.
@@ -29,6 +33,7 @@
   }: Props = $props();
 
   let hovered = $state(false);
+  let imgReady = $state(false);
   let canvasEl = $state<HTMLCanvasElement>();
 
   function urlLooksAnimated(s: string): boolean {
@@ -41,11 +46,16 @@
 
   const isAnimated = $derived(animated ?? urlLooksAnimated(src));
   const playing = $derived(
-    !isAnimated || animate === true || (animate === "hover" && hovered)
+    isAnimated && (animate === true || (animate === "hover" && hovered))
   );
 
   $effect(() => {
-    if (playing || !canvasEl) return;
+    src;
+    if (!playing) imgReady = false;
+  });
+
+  $effect(() => {
+    if (!isAnimated || !canvasEl) return;
     const canvas = canvasEl;
     const img = new Image();
     img.src = src;
@@ -65,19 +75,32 @@
   });
 </script>
 
-{#if playing}
-  <img
-    {src}
-    {alt}
-    class={cls}
-    {loading}
-    onmouseleave={animate === "hover" ? () => (hovered = false) : undefined}
-  />
+{#if !isAnimated}
+  <img {src} {alt} class={cls} {loading} />
 {:else}
-  <canvas
-    bind:this={canvasEl}
+  <span
     class={cls}
+    style="display:inline-grid"
+    role="img"
+    aria-label={alt}
     onmouseenter={animate === "hover" ? () => (hovered = true) : undefined}
-    >{alt}</canvas
+    onmouseleave={animate === "hover" ? () => (hovered = false) : undefined}
   >
+    <canvas
+      bind:this={canvasEl}
+      class={cls}
+      style="grid-area:1/1;{playing && imgReady ? 'visibility:hidden' : ''}"
+      >{alt}</canvas
+    >
+    {#if playing}
+      <img
+        {src}
+        {alt}
+        class={cls}
+        style="grid-area:1/1"
+        {loading}
+        onload={() => (imgReady = true)}
+      />
+    {/if}
+  </span>
 {/if}
