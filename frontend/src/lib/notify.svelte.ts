@@ -1,3 +1,6 @@
+import { playMessageSound } from "./sounds";
+import { shouldPlayMessageSound } from "./notify-rules";
+
 /**
  * notify.svelte.ts - app badge and local notifications.
  *
@@ -9,6 +12,7 @@
  */
 
 const PREF_KEY = "awful:notifications:v1";
+const SOUND_PREF_KEY = "awful:message-sounds:v1";
 
 export const notifyState = $state({
   /** User has switched notifications on in settings. */
@@ -16,6 +20,8 @@ export const notifyState = $state({
   /** Browser-level permission, mirrored for the UI. */
   permission: "default" as NotificationPermission,
   supported: false,
+  /** Play a sound for incoming messages. On by default; needs no permission. */
+  soundsEnabled: true,
 });
 
 if (typeof window !== "undefined") {
@@ -25,6 +31,14 @@ if (typeof window !== "undefined") {
     notifyState.enabled =
       localStorage.getItem(PREF_KEY) === "1" &&
       notifyState.permission === "granted";
+    notifyState.soundsEnabled = localStorage.getItem(SOUND_PREF_KEY) !== "0";
+  } catch {}
+}
+
+export function setMessageSoundsEnabled(on: boolean): void {
+  notifyState.soundsEnabled = on;
+  try {
+    localStorage.setItem(SOUND_PREF_KEY, on ? "1" : "0");
   } catch {}
 }
 
@@ -69,7 +83,22 @@ export function notifyMessage(opts: {
   body: string;
   /** Collapses repeat notifications for the same conversation. */
   tag: string;
+  /** The conversation this message belongs to is the one on screen. */
+  viewingConversation?: boolean;
 }): void {
+  // The sound has its own rule, separate from the notification's hidden-only
+  // one: it also plays while the app is visible but the message landed in
+  // another room, or the window is unfocused.
+  if (
+    shouldPlayMessageSound({
+      enabled: notifyState.soundsEnabled,
+      viewingConversation: opts.viewingConversation ?? false,
+      focused: typeof document !== "undefined" && document.hasFocus(),
+    })
+  ) {
+    playMessageSound().catch(() => {});
+  }
+
   if (!notifyState.enabled || !notifyState.supported) return;
   if (Notification.permission !== "granted") return;
   if (typeof document !== "undefined" && !document.hidden) return;

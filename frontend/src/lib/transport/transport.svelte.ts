@@ -119,6 +119,13 @@ interface TransportState {
   connected: boolean;
   connecting: boolean;
   roomCode: string | null;
+  /**
+   * The conversation the USER is looking at, set by the view layer. Not the
+   * same as roomCode, which is what the transport has open: on the landing
+   * screen roomCode keeps its value while nothing is on screen - suppressing
+   * message sounds by roomCode muted messages the user could not see.
+   */
+  uiRoomCode: string | null;
   roomName: string;
   peers: string[];
   roomUsers: string[];
@@ -157,6 +164,7 @@ export const transportState = $state<TransportState>({
   connected: false,
   connecting: false,
   roomCode: null,
+  uiRoomCode: null,
   roomName: "",
   peers: [],
   roomUsers: [],
@@ -1017,6 +1025,7 @@ function _handleChatMessage(
       title: transportState.roomName || msg.roomCode,
       body: `${msg.senderName}: ${msg.content || "[file]"}`,
       tag: `room:${msg.roomCode}`,
+      viewingConversation: transportState.uiRoomCode === msg.roomCode,
     });
   }
 
@@ -1199,15 +1208,16 @@ function _handleDmChat(
       await putMessage(msg);
       await refreshDmRooms();
       transportState.dmVersion += 1;
-      notifyMessage({
-        title: msg.senderName,
-        body: msg.content,
-        tag: `dm:${roomCode}`,
-      });
       const activeDid = peerIdToDid(transportState.activeDmPeerId ?? "");
       const isViewingThisDm =
         transportState.chatMode === "dm" &&
         (activeDid === senderDid || activeDid === peerId);
+      notifyMessage({
+        title: msg.senderName,
+        body: msg.content,
+        tag: `dm:${roomCode}`,
+        viewingConversation: transportState.uiRoomCode === roomCode,
+      });
       if (isViewingThisDm) {
         transportState.messages = [...transportState.messages, msg].sort(
           (a, b) => a.timestamp - b.timestamp

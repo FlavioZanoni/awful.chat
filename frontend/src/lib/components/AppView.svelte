@@ -112,13 +112,23 @@
     [...dmUnread.values()].reduce((sum, n) => sum + n, 0)
   );
 
-  // Mirror everything unread onto the installed app icon.
+  // Tell the transport what is actually on screen; see uiRoomCode.
+  $effect(() => {
+    transportState.uiRoomCode = activeRoomCode;
+  });
+
+  // Mirror everything unread onto the installed app icon and the tab title,
+  // so a background tab shows "(3) Awful.chat" at a glance.
   $effect(() => {
     const rooms = [...roomsStore.unreadCounts.values()].reduce(
       (sum, n) => sum + n,
       0
     );
-    setBadge(rooms + dmUnreadTotal);
+    const total = rooms + dmUnreadTotal;
+    setBadge(total);
+    if (typeof document !== "undefined") {
+      document.title = total > 0 ? `(${total}) Awful.chat` : "Awful.chat";
+    }
   });
   const dmLatestByPeer = $derived.by(() => {
     const byPeer = new Map<

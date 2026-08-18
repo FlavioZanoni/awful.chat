@@ -9,7 +9,11 @@ import {
   SelectTrigger,
 } from "$lib/components/ui/select";
 import { Switch } from "$lib/components/ui/switch";
-import { notifyState, setNotificationsEnabled } from "$lib/notify.svelte";
+import {
+  notifyState,
+  setMessageSoundsEnabled,
+  setNotificationsEnabled,
+} from "$lib/notify.svelte";
 import { QrCode, Camera } from "@lucide/svelte";
 import {
   enroll,
@@ -220,6 +224,19 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
         site permissions to turn this on.
       </p>
     {/if}
+    <div class="flex items-center justify-between gap-3">
+      <div class="flex flex-col gap-1 min-w-0">
+        <span class="text-xs font-mono">Message sounds</span>
+        <span class="text-xs font-mono text-muted-foreground leading-relaxed">
+          A soft tone for incoming messages. Stays quiet while you are reading
+          that conversation with the window focused.
+        </span>
+      </div>
+      <Switch
+        checked={notifyState.soundsEnabled}
+        onCheckedChange={(checked) => setMessageSoundsEnabled(checked)}
+      />
+    </div>
   </div>
 {/if}
 

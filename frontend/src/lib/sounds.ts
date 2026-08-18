@@ -91,6 +91,15 @@ export async function playUndeafenSound() {
   setTimeout(() => playOsc(150, 0.1, "sine", 0.2), 50);
 }
 
+/**
+ * An incoming chat message. Softer and shorter than the notification triple:
+ * this can fire often, so it has to be ignorable.
+ */
+export async function playMessageSound() {
+  playOsc(880, 0.05, "sine", 0.06);
+  setTimeout(() => playOsc(1175, 0.07, "sine", 0.05), 45);
+}
+
 export async function playNotifySound() {
   playOsc(800, 0.08, "sine", 0.1);
   setTimeout(() => playOsc(1000, 0.08, "sine", 0.1), 80);
