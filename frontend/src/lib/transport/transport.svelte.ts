@@ -1240,7 +1240,10 @@ function _handleDmChat(
         if (roomIndex !== -1) {
           roomsStore.dmRooms[roomIndex] = {
             ...roomsStore.dmRooms[roomIndex],
-            lastSeenLamport: msg.lamport,
+            lastSeenLamport: Math.max(
+              roomsStore.dmRooms[roomIndex].lastSeenLamport ?? 0,
+              msg.lamport
+            ),
           };
         }
         await refreshDmRooms();
@@ -1824,7 +1827,10 @@ export async function markSeen(): Promise<void> {
   if (idx !== -1) {
     roomsStore.rooms[idx] = {
       ...roomsStore.rooms[idx],
-      lastSeenLamport: maxLamport,
+      lastSeenLamport: Math.max(
+        roomsStore.rooms[idx].lastSeenLamport ?? 0,
+        maxLamport
+      ),
     };
   }
   const next = new Map(roomsStore.unreadCounts);

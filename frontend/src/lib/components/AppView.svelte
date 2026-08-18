@@ -312,7 +312,10 @@
     if (dmRoomIndex !== -1) {
       roomsStore.dmRooms[dmRoomIndex] = {
         ...roomsStore.dmRooms[dmRoomIndex],
-        lastSeenLamport: lamport,
+        lastSeenLamport: Math.max(
+          roomsStore.dmRooms[dmRoomIndex].lastSeenLamport ?? 0,
+          lamport
+        ),
       };
     }
     transportState.dmVersion += 1;

@@ -115,6 +115,13 @@ describe("unread counts and seen tracking", () => {
     await markRoomSeen("room-a", 42);
     expect((await getRoom("room-a"))?.lastSeenLamport).toBe(42);
   });
+
+  it("markRoomSeen never moves the watermark backwards", async () => {
+    await putRoom(room);
+    await markRoomSeen("room-a", 42);
+    await markRoomSeen("room-a", 7);
+    expect((await getRoom("room-a"))?.lastSeenLamport).toBe(42);
+  });
 });
 
 describe("message pagination", () => {

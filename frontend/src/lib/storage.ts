@@ -591,6 +591,11 @@ export async function cleanupInactiveParticipants(
 /**
  * Mark all messages up to the given lamport as seen.
  * Used to derive unread count in the sidebar.
+ *
+ * Monotonic: concurrent callers race while a conversation is open (the
+ * incoming-message handler vs the open-conversation path working from an
+ * older snapshot), and a late write with a lower lamport would resurrect
+ * already-read messages as unread.
  */
 export async function markRoomSeen(
   roomCode: string,
@@ -600,7 +605,10 @@ export async function markRoomSeen(
   const tx = database.transaction("rooms", "readwrite");
   const room = await tx.store.get(roomCode);
   if (!room) return;
-  await tx.store.put({ ...room, lastSeenLamport: lamport });
+  await tx.store.put({
+    ...room,
+    lastSeenLamport: Math.max(room.lastSeenLamport ?? 0, lamport),
+  });
   await tx.done;
 }
 
