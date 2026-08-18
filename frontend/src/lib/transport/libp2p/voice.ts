@@ -285,6 +285,10 @@ export class LibP2PVoice implements VoiceTransport {
     this.applyPeerGain(peerId);
   }
 
+  hasPeerVolume(peerId: string): boolean {
+    return this.peerVolumes.has(peerId);
+  }
+
   getPeerVolume(peerId: string): number {
     return this.peerVolumes.get(peerId) ?? 1;
   }

@@ -13,6 +13,12 @@ export interface AudioPrefs {
   outputVolume: number;
   dtlnEnabled: boolean;
   noiseGate: number;
+  /**
+   * How loud each person is for us, keyed by their did:key - the durable
+   * identity, so the setting survives them reinstalling or changing devices,
+   * where a peerId would not.
+   */
+  peerVolumes: Record<string, number>;
 }
 
 export const AUDIO_PREF_DEFAULTS: AudioPrefs = {
@@ -22,7 +28,25 @@ export const AUDIO_PREF_DEFAULTS: AudioPrefs = {
   outputVolume: 1.0,
   dtlnEnabled: true,
   noiseGate: 0.002,
+  peerVolumes: {},
 };
+
+/** Same ceiling as the per-person slider. */
+const MAX_PEER_VOLUME = 2.5;
+/** Bound the map: an old public-room habit must not grow it forever. */
+const MAX_PEER_VOLUME_ENTRIES = 200;
+
+function sanitizePeerVolumes(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, number> = {};
+  for (const [did, vol] of Object.entries(value as Record<string, unknown>)) {
+    if (!did.startsWith("did:")) continue;
+    if (typeof vol !== "number" || !Number.isFinite(vol)) continue;
+    out[did] = Math.max(0, Math.min(MAX_PEER_VOLUME, vol));
+    if (Object.keys(out).length >= MAX_PEER_VOLUME_ENTRIES) break;
+  }
+  return out;
+}
 
 function num(value: unknown, fallback: number, min: number, max: number) {
   return typeof value === "number" && Number.isFinite(value)
@@ -46,6 +70,7 @@ export function loadAudioPrefs(): AudioPrefs {
           ? p.dtlnEnabled
           : AUDIO_PREF_DEFAULTS.dtlnEnabled,
       noiseGate: num(p.noiseGate, AUDIO_PREF_DEFAULTS.noiseGate, 0, 0.01),
+      peerVolumes: sanitizePeerVolumes(p.peerVolumes),
     };
   } catch {
     return { ...AUDIO_PREF_DEFAULTS };
@@ -59,4 +84,20 @@ export function saveAudioPrefs(patch: Partial<AudioPrefs>): void {
   } catch {
     // Storage full or blocked: settings just do not persist this time.
   }
+}
+
+/** Remember how loud one person should be, by their durable identity. */
+export function savePeerVolume(did: string, volume: number): void {
+  if (!did.startsWith("did:")) return;
+  const prefs = loadAudioPrefs();
+  const peerVolumes = { ...prefs.peerVolumes };
+  // 1 is the default: storing it would only grow the map with no-ops.
+  if (Math.abs(volume - 1) < 1e-6) delete peerVolumes[did];
+  else peerVolumes[did] = volume;
+  saveAudioPrefs({ peerVolumes });
+}
+
+export function loadPeerVolume(did: string): number | null {
+  const stored = loadAudioPrefs().peerVolumes[did];
+  return typeof stored === "number" ? stored : null;
 }

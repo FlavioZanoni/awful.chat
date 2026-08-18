@@ -1,5 +1,12 @@
 import { transportState } from "./transport.svelte";
-import { loadAudioPrefs, saveAudioPrefs } from "./audio-prefs";
+import {
+  loadAudioPrefs,
+  loadPeerVolume,
+  saveAudioPrefs,
+  savePeerVolume,
+} from "./audio-prefs";
+import { peerIdToDid } from "./transport.svelte";
+import { looksLikeDid } from "$lib/identity/identity-utils";
 import type { LibP2PVoice } from "./libp2p/voice";
 import type { DtlnProcessor } from "../audio/dtln-processor";
 
@@ -14,6 +21,13 @@ export function initVoice(voice: LibP2PVoice, dtln: DtlnProcessor): void {
   _dtln = dtln;
 
   _voice.on("trackAdded", (peerId, track) => {
+    // Apply the remembered volume for this identity the moment audio exists;
+    // a manual change during the call still wins (it also updates storage).
+    if (!_voice!.hasPeerVolume(peerId)) {
+      const did = peerIdToDid(peerId);
+      const stored = looksLikeDid(did) ? loadPeerVolume(did) : null;
+      if (stored !== null) _voice!.setPeerVolume(peerId, stored);
+    }
     const existing = transportState.participants.get(peerId) ?? {
       peerId,
       audioTrack: null,
@@ -136,9 +150,20 @@ export function getVoiceOutputVolume(): number {
 /** Per-peer listening volume. Local to this device and this call. */
 export function setVoicePeerVolume(peerId: string, volume: number): void {
   getVoice().setPeerVolume(peerId, volume);
+  // Durable, by identity: nobody wants to re-set a friend's volume every call.
+  const did = peerIdToDid(peerId);
+  if (looksLikeDid(did)) savePeerVolume(did, volume);
 }
 
 export function getVoicePeerVolume(peerId: string): number {
+  // The live value once one exists; before the first track (menu opened early,
+  // or a fresh session) fall back to what we remembered for this identity.
+  if (getVoice().hasPeerVolume(peerId)) return getVoice().getPeerVolume(peerId);
+  const did = peerIdToDid(peerId);
+  if (looksLikeDid(did)) {
+    const stored = loadPeerVolume(did);
+    if (stored !== null) return stored;
+  }
   return getVoice().getPeerVolume(peerId);
 }
 
