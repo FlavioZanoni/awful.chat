@@ -13,10 +13,20 @@ export class DtlnProcessor {
   private noiseGate = 0.002;
   private inputGain = 1.0;
 
+  /**
+   * The one, visible compensation for the model's attenuation. The worklet
+   * ALSO ships an internal output_gain that defaults to 3 - left alone, the
+   * two multiply and everyone with noise suppression on transmits at NINE
+   * times the slider value, clipping hard. That is what "audio is spotty,
+   * turning DTLN off fixes it" was: 9x distortion, not the model. init()
+   * pins the worklet's copy to 1 so this constant is the only boost.
+   */
+  static readonly OUTPUT_COMPENSATION = 3.0;
+
   // Two independent graphs share the single DTLN worklet node:
   //
   //   transport: mic -> txInputGain -> worklet -> txOutputGain -> dest (peers)
-  //   monitor:   mic -> monGain     -> worklet -> dest (your speakers)
+  //   monitor:   mic -> monGain -> worklet -> monOutGain -> dest (speakers)
   //
   // They are tracked separately so a mic test can never tear down the audio
   // path of a live call (and vice versa).
@@ -27,6 +37,7 @@ export class DtlnProcessor {
 
   private monSource: MediaStreamAudioSourceNode | null = null;
   private monGain: GainNode | null = null;
+  private monOutGain: GainNode | null = null;
   private monDest: MediaStreamAudioDestinationNode | null = null;
 
   constructor() {
@@ -73,7 +84,12 @@ export class DtlnProcessor {
     });
 
     this.ready = true;
-    this.workletNode.port.postMessage({ noise_gate: this.noiseGate });
+    this.workletNode.port.postMessage({
+      noise_gate: this.noiseGate,
+      // Pin the worklet's internal gain to 1: its default of 3 doubles up
+      // with OUTPUT_COMPENSATION into a 9x blast. See that constant.
+      output_gain: 1.0,
+    });
     this.resolveReady();
   }
 
@@ -151,8 +167,7 @@ export class DtlnProcessor {
     // Set initial gain values
     this.inputGain = inputGain;
     inputGainNode.gain.value = inputGain;
-    // Boost output to compensate for DTLN attenuation
-    outputGainNode.gain.value = 3.0;
+    outputGainNode.gain.value = DtlnProcessor.OUTPUT_COMPENSATION;
 
     source.connect(inputGainNode);
     inputGainNode.connect(this.node);
@@ -221,13 +236,21 @@ export class DtlnProcessor {
 
     const source = ctx.createMediaStreamSource(micStream);
     const gain = ctx.createGain();
+    // Mirror the transport chain (input gain, model, compensation) so the
+    // test plays what peers actually hear - it previewed a flat 1x while the
+    // call path boosted, which made every gain complaint harder to place.
+    gain.gain.value = this.inputGain;
+    const outGain = ctx.createGain();
+    outGain.gain.value = DtlnProcessor.OUTPUT_COMPENSATION;
     const dest = ctx.createMediaStreamDestination();
     source.connect(gain);
     gain.connect(this.node);
-    this.node.connect(dest);
+    this.node.connect(outGain);
+    outGain.connect(dest);
 
     this.monSource = source;
     this.monGain = gain;
+    this.monOutGain = outGain;
     this.monDest = dest;
 
     return {
@@ -239,13 +262,17 @@ export class DtlnProcessor {
   private releaseMonitor(): void {
     this.monSource?.disconnect();
     this.monGain?.disconnect();
-    if (this.monDest && this.workletNode) {
+    // The worklet now feeds monOutGain (not dest directly); detach that edge
+    // or every mic test leaves another dangling branch on the shared worklet.
+    if (this.monOutGain && this.workletNode) {
       try {
-        this.workletNode.disconnect(this.monDest);
+        this.workletNode.disconnect(this.monOutGain);
       } catch {}
     }
+    this.monOutGain?.disconnect();
     this.monSource = null;
     this.monGain = null;
+    this.monOutGain = null;
     this.monDest = null;
   }
 }
