@@ -14,6 +14,7 @@ import {
   updateMessageStatus,
   wipeLocalDatabase,
   type Room,
+  nextDmLamport,
 } from "./storage";
 import { MessageType, type Message } from "./types/message";
 
@@ -137,5 +138,25 @@ describe("message pagination", () => {
     const older = await getMessages("room-a", 11);
     expect(older).toHaveLength(10);
     expect(older[older.length - 1].lamport).toBe(10);
+  });
+});
+
+describe("nextDmLamport", () => {
+  it("uses the wall clock when it is ahead of the room", async () => {
+    expect(await nextDmLamport("dm-clock-a", 5_000)).toBe(5_000);
+  });
+
+  it("floors to last-issued + 1 when the clock runs behind", async () => {
+    const first = await nextDmLamport("dm-clock-b", 9_000);
+    const second = await nextDmLamport("dm-clock-b", 1_000);
+    expect(first).toBe(9_000);
+    expect(second).toBe(9_001);
+  });
+
+  it("floors to the stored room maximum", async () => {
+    await bulkPutMessages([
+      msg({ id: "dm-m1", roomCode: "dm-clock-c", lamport: 7_777 }),
+    ]);
+    expect(await nextDmLamport("dm-clock-c", 100)).toBe(7_778);
   });
 });

@@ -288,6 +288,29 @@ export async function getLastMessage(
 }
 
 /**
+ * Next lamport for a DM room: wall-clock ms with a monotonic floor. A peer
+ * whose clock runs behind must still land AFTER everything already in the
+ * room, or their messages fall below the seen watermark and never show as
+ * unread. Allocations are serialized per room so two quick sends cannot
+ * take the same value.
+ */
+const _dmLamportChain = new Map<string, Promise<number>>();
+
+export function nextDmLamport(roomCode: string, ts: number): Promise<number> {
+  const prev = _dmLamportChain.get(roomCode) ?? Promise.resolve(0);
+  const next = prev.then(async (lastIssued) => {
+    const stored = (await getLastMessage(roomCode))?.lamport ?? 0;
+    const floor = Math.max(stored, lastIssued);
+    return ts > floor ? ts : floor + 1;
+  });
+  _dmLamportChain.set(
+    roomCode,
+    next.catch(() => 0)
+  );
+  return next;
+}
+
+/**
  * Newest message in a room from anyone but the given sender - lets read
  * acks name the peer's latest message even when the loaded page holds
  * only our own.
@@ -950,7 +973,6 @@ export interface StorageMetrics {
 export async function getStorageMetrics(): Promise<StorageMetrics> {
   const database = await getDB();
 
-  const messages = await database.getAll("messages");
   const rooms = await database.getAll("rooms");
   const profiles = await database.getAll("profiles");
   const attachments = await database.getAll("attachments");
@@ -962,18 +984,30 @@ export async function getStorageMetrics(): Promise<StorageMetrics> {
     if (a.data) storedSize += a.data.byteLength;
   });
 
-  const roomMetrics = rooms
-    .slice(0, 5)
-    .map((room) => {
-      const roomMessages = messages.filter(
-        (m) => m.roomCode === (room as Room | DMRoom).roomCode
-      ).length;
+  const totalMessages = await database.count("messages");
+  const roomCounts = new Map<string, number>();
+  for (const room of rooms) {
+    const count = await database.countFromIndex(
+      "messages",
+      "byRoomLamport",
+      IDBKeyRange.bound(
+        [room.roomCode, 0],
+        [room.roomCode, Number.MAX_SAFE_INTEGER]
+      )
+    );
+    roomCounts.set(room.roomCode, count);
+  }
+
+  const roomMetrics = Array.from(roomCounts.entries())
+    .map(([roomCode, messageCount]) => {
+      const room = rooms.find((r) => r.roomCode === roomCode);
       return {
-        name: (room as Room | DMRoom).name || (room as Room | DMRoom).roomCode,
-        messageCount: roomMessages,
+        name: room?.name || roomCode,
+        messageCount,
       };
     })
-    .sort((a, b) => b.messageCount - a.messageCount);
+    .sort((a, b) => b.messageCount - a.messageCount)
+    .slice(0, 5);
 
   let quota: number | null = null;
   try {
@@ -985,7 +1019,7 @@ export async function getStorageMetrics(): Promise<StorageMetrics> {
   return {
     persisted: await isStoragePersisted(),
     quota,
-    totalMessages: messages.length,
+    totalMessages,
     totalRooms: rooms.length,
     totalProfiles: profiles.length,
     seedingAttachments: seedingCount,

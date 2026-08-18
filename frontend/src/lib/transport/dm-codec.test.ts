@@ -15,6 +15,23 @@ describe("DM envelopes", () => {
     expect(parsed).toEqual({ type: "chat", payload });
   });
 
+  it("round-trips a chat envelope with a lamport", () => {
+    const payload = { id: "msg-l", text: "hi", ts: 1000, lamport: 2000 };
+    const parsed = parseDmEnvelope(encodeDmChatEnvelope(payload));
+    expect(parsed).toEqual({ type: "chat", payload });
+  });
+
+  it("strips a malformed lamport but keeps the message", () => {
+    const raw = JSON.stringify({ id: "m", text: "hi", ts: 1, lamport: "x" });
+    const bytes = new Uint8Array(1 + raw.length);
+    bytes[0] = 0x01;
+    bytes.set(new TextEncoder().encode(raw), 1);
+    expect(parseDmEnvelope(bytes)).toEqual({
+      type: "chat",
+      payload: { id: "m", text: "hi", ts: 1 },
+    });
+  });
+
   it("round-trips a chat envelope with a reply quote", () => {
     const payload = {
       id: "msg-2",

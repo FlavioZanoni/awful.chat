@@ -25,6 +25,12 @@ export interface DmPayload {
   id: string;
   text: string;
   ts: number;
+  /**
+   * Optional: the sender's assigned lamport for this message. Both sides
+   * store the SAME value so their sync watermarks stay comparable. Absent
+   * from older clients - receivers fall back to ts.
+   */
+  lamport?: number;
   /** Optional: this message quotes another. Older clients ignore it. */
   replyTo?: DmReplyTo;
   /**
@@ -110,6 +116,12 @@ export function parseDmEnvelope(
         typeof parsed?.ts !== "number"
       ) {
         return null;
+      }
+      if (
+        parsed.lamport !== undefined &&
+        (typeof parsed.lamport !== "number" || !Number.isFinite(parsed.lamport))
+      ) {
+        delete parsed.lamport;
       }
       // Optional fields are stripped when malformed rather than rejecting
       // the whole message - the text still stands on its own.

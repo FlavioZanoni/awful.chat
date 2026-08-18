@@ -12,6 +12,7 @@ import {
   markRoomSeen,
   setWatermark,
   getLastMessageFrom,
+  nextDmLamport,
   putPhonebookEntry,
   putRoom,
   type DMRoom,
@@ -20,6 +21,8 @@ import { MessageType, type Message } from "$lib/types/message";
 import { signMessage } from "$lib/messaging";
 import { leaveCall } from "./call.svelte";
 import {
+  appendSorted,
+  beginConversationOpen,
   _loadHistory,
   _peerIdToDid,
   _transport,
@@ -145,20 +148,27 @@ async function dmConversationCodeAsync(
   return hashDmRoomCode(selfDid, peerDid);
 }
 
-export async function openDmConversation(peerIdOrDid: string): Promise<void> {
-  if (!_transport.selfId()) return;
+export async function openDmConversation(
+  peerIdOrDid: string
+): Promise<boolean> {
+  if (!_transport.selfId()) return false;
+  // A faster second switch supersedes this one: view state and read acks
+  // belong to the conversation the user asked for LAST.
+  const stillCurrent = beginConversationOpen();
   // Use the input as-is if we can't resolve to a peer ID
   // This supports opening DMs with DIDs directly
   const resolvedPeerId = resolveDmPeerId(peerIdOrDid) ?? peerIdOrDid;
-  if (!resolvedPeerId) return;
+  if (!resolvedPeerId) return false;
   const roomCode = await ensureDmRoomForPeer(resolvedPeerId);
   if (!roomCode) {
     transportState.error =
       "Cannot open this conversation yet: waiting to verify who this peer is.";
-    return;
+    return false;
   }
+  if (!stillCurrent()) return false;
   _transport.joinRoom(roomCode);
-  await _loadHistory(roomCode);
+  await _loadHistory(roomCode, stillCurrent);
+  if (!stillCurrent()) return false;
   transportState.chatMode = "dm";
   transportState.activeDmPeerId = resolvedPeerId;
   transportState.roomCode = roomCode;
@@ -177,6 +187,7 @@ export async function openDmConversation(peerIdOrDid: string): Promise<void> {
     if (lastTheirs) theirMessageIds.push(lastTheirs.id);
   }
   sendDmReadAcks(resolvedPeerId, theirMessageIds);
+  return true;
 }
 
 export interface DirectMessageOptions {
@@ -205,12 +216,17 @@ export async function sendDirectMessage(
 
   const id = crypto.randomUUID();
   const ts = Date.now();
+  // Monotonic per room: a behind-running clock must not file this message
+  // below the peer's seen watermark. Shipped in the envelope so both sides
+  // store the same value and watermarks stay comparable.
+  const lamport = await nextDmLamport(roomCode, ts);
   const envelope = encodeDmChatEnvelope({
     id,
     // A reaction's emoji doubles as the text so an older client renders it
     // as a message instead of dropping it.
     text: options.reaction ? options.reaction.emoji : body,
     ts,
+    lamport,
     replyTo: options.replyTo,
     reaction: options.reaction,
   });
@@ -247,7 +263,7 @@ export async function sendDirectMessage(
     senderId: mySenderId,
     senderName: "You",
     timestamp: ts,
-    lamport: ts,
+    lamport,
     type: options.reaction
       ? MessageType.Reaction
       : options.replyTo
@@ -278,9 +294,7 @@ export async function sendDirectMessage(
     transportState.chatMode === "dm" &&
     transportState.activeDmPeerId === peerId
   ) {
-    transportState.messages = [...transportState.messages, msg].sort(
-      (a, b) => a.timestamp - b.timestamp
-    );
+    transportState.messages = appendSorted(transportState.messages, msg);
   }
 }
 
