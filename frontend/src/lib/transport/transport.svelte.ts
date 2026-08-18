@@ -10,6 +10,7 @@ import {
   setWatermark,
   markRoomSeen,
   markOwnMessagesReadUpTo,
+  PAGE_SIZE,
   getPeerProfile,
   putPeerProfile,
   getAllPeerProfiles,
@@ -313,7 +314,7 @@ async function _cascadeReadAcks(messageIds: string[]): Promise<void> {
   const maxByRoom = new Map<string, number>();
   for (const id of messageIds) {
     const m = await getMessage(id);
-    if (!m || m.senderId !== self) continue;
+    if (!m || !isSelfSender(m.senderId)) continue;
     maxByRoom.set(
       m.roomCode,
       Math.max(maxByRoom.get(m.roomCode) ?? 0, m.lamport)
@@ -602,7 +603,17 @@ async function _handleDigest(
   // merely named, and never fall back to whatever room the UI has open.
   _stats.digestsIn++;
   if (!roomCode || !_transport.rooms().includes(roomCode)) return;
-  const mine = await getWatermarksForRoom(roomCode);
+  let mine = await getWatermarksForRoom(roomCode);
+  // History written before watermarks existed for this room (all DMs until
+  // now) leaves `mine` empty, which reads as "nothing to compare" and makes
+  // reconciliation a no-op. Rebuild once from what is actually stored.
+  if (Object.keys(mine).length === 0) {
+    const stored = await getAllMessages(roomCode);
+    for (const m of stored) {
+      await setWatermark(m.roomCode, m.senderId, m.lamport);
+    }
+    if (stored.length) mine = await getWatermarksForRoom(roomCode);
+  }
 
   const theyAreMissing = Object.keys(mine).filter(
     (sid) => (theirWatermarks[sid] ?? -1) < mine[sid]
@@ -679,15 +690,25 @@ async function _handleSyncBatch(
   await bulkPutMessages(fullMessages);
 
   for (const m of fullMessages) {
-    lamportReceive(m.lamport);
+    // DM lamports are wall-clock ms; absorbing one would catapult the shared
+    // room counter to ~1.7e12 and poison every room message sent after.
+    if (!roomCode.startsWith("dm-")) lamportReceive(m.lamport);
     await setWatermark(m.roomCode, m.senderId, m.lamport);
   }
 
   refreshUnreadCount(roomCode).catch(() => {});
   for (const m of fullMessages) noteRoomActivity(m.roomCode, m.timestamp);
 
+  // Storage got everything; the view only takes messages for the room that is
+  // actually open (the user may have switched while the batch was in flight),
+  // and only inside the loaded window - a backfilled message below it would
+  // become messages[0] and break the load-older cursor.
+  if (transportState.roomCode !== roomCode) return;
+  const windowFloor = transportState.messages[0]?.lamport ?? 0;
   const existingIds = new Set(transportState.messages.map((m) => m.id));
-  const newMsgs = fullMessages.filter((m) => !existingIds.has(m.id));
+  const newMsgs = fullMessages.filter(
+    (m) => !existingIds.has(m.id) && m.lamport >= windowFloor
+  );
   if (newMsgs.length > 0) {
     transportState.messages = [...transportState.messages, ...newMsgs].sort(
       MSG_ORDER
@@ -1006,11 +1027,11 @@ async function _verifyIncoming(wire: WireChatMessage): Promise<boolean> {
   return verifySignature(wire.senderDid, wire.sig, canonicalFor(wire));
 }
 
-function _handleChatMessage(
+async function _handleChatMessage(
   wire: WireChatMessage,
   roomCodeOverride?: string,
   receivedFromPeerId?: string
-): void {
+): Promise<void> {
   const roomCode = roomCodeOverride ?? transportState.roomCode;
   if (!roomCode) return;
 
@@ -1037,12 +1058,17 @@ function _handleChatMessage(
     }
   }
 
+  // The in-memory list holds only the open room's newest page; a replayed
+  // message from a background room would always look "new" and re-notify.
+  // Decided BEFORE the put below, which would otherwise satisfy the lookup.
+  const isNewMessage =
+    !transportState.messages.some((m) => m.id === msg.id) &&
+    !(await getMessage(msg.id));
+
   putMessage(msg).catch(() => {});
   setWatermark(msg.roomCode, msg.senderId, msg.lamport).catch(() => {});
   refreshUnreadCount(msg.roomCode).catch(() => {});
   noteRoomActivity(msg.roomCode, msg.timestamp);
-
-  const isNewMessage = !transportState.messages.some((m) => m.id === msg.id);
 
   // DM rooms now start with "dm-" (hash-based format)
   if (isNewMessage && msg.roomCode.startsWith("dm-")) {
@@ -1054,7 +1080,7 @@ function _handleChatMessage(
   if (
     isNewMessage &&
     msg.type !== MessageType.Reaction &&
-    msg.senderId !== (identityStore.did ?? _transport.selfId())
+    !isSelfSender(msg.senderId)
   ) {
     notifyMessage({
       title: transportState.roomName || msg.roomCode,
@@ -1237,6 +1263,10 @@ function _handleDmChat(
     // as a duplicate when you happened to be looking at that DM.
     if (!(await getMessage(msg.id))) {
       await putMessage(msg);
+      // Without a watermark row a DM digest carries an empty map on both
+      // sides and _handleDigest concludes nothing is missing - DM history
+      // had no sync-repair at all.
+      await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
       await refreshDmRooms();
       transportState.dmVersion += 1;
       const activeDid = peerIdToDid(transportState.activeDmPeerId ?? "");
@@ -1398,7 +1428,7 @@ _transport.on("message", (peerId, data, room) => {
         }
         _verifyIncoming(msg)
           .then((ok) => {
-            if (ok) _handleChatMessage(msg, room, peerId);
+            if (ok) _handleChatMessage(msg, room, peerId).catch(() => {});
             else
               console.warn(
                 "[app] dropped message with invalid signature from",
@@ -1501,7 +1531,9 @@ export async function joinRoom(roomCode: string): Promise<void> {
       savedParticipants.filter((p) => !removedInactive.includes(p))
     );
     participants.add(selfDid);
-    transportState.roomUsers = [...participants];
+    transportState.roomUsers = [
+      ...new Set([...transportState.roomUsers, ...participants]),
+    ];
     await addRoomParticipant(roomCode, selfDid);
     // Best-effort: one corrupt stored attachment must not block joining
     await _resumeAttachmentSeeding(roomCode).catch((err) =>
@@ -1832,22 +1864,51 @@ export async function toggleReaction(
 export async function loadMoreMessages(
   beforeLamport: number
 ): Promise<boolean> {
-  if (!transportState.roomCode) return false;
-  const older = await getMessages(transportState.roomCode, beforeLamport);
+  const roomCode = transportState.roomCode;
+  if (!roomCode) return false;
+  const older = await getMessages(roomCode, beforeLamport);
+  // The user can switch rooms while the page loads; prepending the old
+  // room's backlog into the new room's view crosses histories.
+  if (transportState.roomCode !== roomCode) return false;
   if (!older.length) return false;
   const existingIds = new Set(transportState.messages.map((m) => m.id));
   const newOnes = older.filter((m) => !existingIds.has(m.id));
   transportState.messages = [...newOnes, ...transportState.messages].sort(
     MSG_ORDER
   );
-  return newOnes.length === 50;
+  // "more exists" comes from the raw page size: dedup can shrink newOnes on
+  // a full page, which used to hide the load-older button early.
+  return older.length === PAGE_SIZE;
 }
 
 export async function markSeen(): Promise<void> {
-  if (!transportState.roomCode || !transportState.messages.length) return;
   const roomCode = transportState.roomCode;
-  const maxLamport = Math.max(...transportState.messages.map((m) => m.lamport));
+  if (!roomCode) return;
+  // Only this room's messages: a sync batch for another room can share the
+  // array briefly, and its lamports must not become this room's watermark.
+  let maxLamport = 0;
+  for (const m of transportState.messages) {
+    if (m.roomCode === roomCode && m.lamport > maxLamport)
+      maxLamport = m.lamport;
+  }
+  if (maxLamport === 0) return;
   await markRoomSeen(roomCode, maxLamport);
+  if (roomCode.startsWith("dm-")) {
+    // DM rooms live in their own mirror, and the DM badge recomputes on
+    // dmVersion - the rooms maps below never carried them.
+    const idx = roomsStore.dmRooms.findIndex((r) => r.roomCode === roomCode);
+    if (idx !== -1) {
+      roomsStore.dmRooms[idx] = {
+        ...roomsStore.dmRooms[idx],
+        lastSeenLamport: Math.max(
+          roomsStore.dmRooms[idx].lastSeenLamport ?? 0,
+          maxLamport
+        ),
+      };
+    }
+    transportState.dmVersion += 1;
+    return;
+  }
   const idx = roomsStore.rooms.findIndex((r) => r.roomCode === roomCode);
   if (idx !== -1) {
     roomsStore.rooms[idx] = {
@@ -1874,6 +1935,15 @@ export function setRoomName(name: string): void {
 
 export function selfId(): string {
   return identityStore.did ?? _transport.selfId();
+}
+
+/**
+ * Whether a stored senderId refers to this user. Messages written while the
+ * identity was locked carry the raw peerId instead of the DID, so a single-
+ * form comparison misclassifies our own history as someone else's.
+ */
+export function isSelfSender(senderId: string): boolean {
+  return senderId === selfId() || senderId === _transport.selfId();
 }
 
 export function peerId(): string {

@@ -10,6 +10,8 @@ import {
   getRoom,
   putMessage,
   markRoomSeen,
+  setWatermark,
+  getLastMessageFrom,
   putPhonebookEntry,
   putRoom,
   type DMRoom,
@@ -168,6 +170,12 @@ export async function openDmConversation(peerIdOrDid: string): Promise<void> {
   const theirMessageIds = transportState.messages
     .filter((m) => m.roomCode === roomCode && m.senderId !== selfDid)
     .map((m) => m.id);
+  if (theirMessageIds.length === 0) {
+    // The loaded page can be all our own messages; ack their newest from
+    // storage so the sender-side cascade still marks the backlog read.
+    const lastTheirs = await getLastMessageFrom(roomCode, selfDid);
+    if (lastTheirs) theirMessageIds.push(lastTheirs.id);
+  }
   sendDmReadAcks(resolvedPeerId, theirMessageIds);
 }
 
@@ -235,6 +243,7 @@ export async function sendDirectMessage(text: string): Promise<void> {
   msg = signMessage(msg);
 
   await putMessage(msg);
+  await setWatermark(roomCode, mySenderId, msg.lamport);
   // Sending is reading: your own message must not count as unread, and the
   // watermark - not a sender-id comparison - is what the badge trusts.
   await markRoomSeen(roomCode, msg.lamport);
@@ -362,18 +371,52 @@ export async function addToPhonebook(peerIdOrDid: string): Promise<void> {
   const roomCode = await ensureDmRoomForPeer(did);
   if (!roomCode) return;
   const profile = await getPeerProfile(did);
+  // The store is keyed by whatever form `peerId` held at add time, so the
+  // same human can exist under a DID-keyed row and a peerId-keyed row.
+  // Merge by DID: reuse the stored row (keeping favorite/addedAt) and drop
+  // any duplicate keyed under another form.
+  const entries = await getPhonebookEntries();
+  const existing = entries.filter(
+    (e) =>
+      e.did === did ||
+      e.peerId === did ||
+      e.peerId === resolvedPeerId ||
+      (!!e.did && e.did === resolvedPeerId)
+  );
+  const keeper = existing[0];
+  for (const dup of existing) {
+    if (dup.peerId !== resolvedPeerId) await deletePhonebookEntry(dup.peerId);
+  }
   await putPhonebookEntry({
     peerId: resolvedPeerId,
     did,
-    nickname: profile?.nickname || resolveDmDisplayName(resolvedPeerId),
-    addedAt: Date.now(),
+    nickname:
+      profile?.nickname ||
+      keeper?.nickname ||
+      resolveDmDisplayName(resolvedPeerId),
+    addedAt: keeper?.addedAt ?? Date.now(),
+    favorite: keeper?.favorite,
   });
   _transport.joinRoom(roomCode);
 }
 
 export async function removeFromPhonebook(peerIdOrDid: string): Promise<void> {
+  // The stored key may be a peerId or a DID depending on whether the contact
+  // was online when added; deleting by only today's resolution left the row
+  // behind and the contact reappeared on the next refresh.
   const resolvedPeerId = resolveDmPeerId(peerIdOrDid) ?? peerIdOrDid;
-  await deletePhonebookEntry(resolvedPeerId);
+  const did = dmPeerDid(peerIdOrDid);
+  for (const e of await getPhonebookEntries()) {
+    if (
+      e.peerId === resolvedPeerId ||
+      e.peerId === peerIdOrDid ||
+      (!!did && (e.peerId === did || e.did === did)) ||
+      e.did === peerIdOrDid ||
+      e.did === resolvedPeerId
+    ) {
+      await deletePhonebookEntry(e.peerId);
+    }
+  }
 }
 
 export async function removeDmConversation(peerIdOrDid: string): Promise<void> {

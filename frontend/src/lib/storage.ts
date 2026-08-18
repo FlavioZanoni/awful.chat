@@ -233,7 +233,7 @@ export async function getDB(): Promise<AppDB> {
   return db;
 }
 
-const PAGE_SIZE = 50;
+export const PAGE_SIZE = 50;
 
 /**
  * Load a page of messages for a room, sorted by lamport ascending.
@@ -284,6 +284,29 @@ export async function getLastMessage(
   );
   const cursor = await index.openCursor(range, "prev");
   return cursor?.value;
+}
+
+/**
+ * Newest message in a room from anyone but the given sender - lets read
+ * acks name the peer's latest message even when the loaded page holds
+ * only our own.
+ */
+export async function getLastMessageFrom(
+  roomCode: string,
+  notSenderId: string
+): Promise<Message | undefined> {
+  const database = await getDB();
+  const index = database.transaction("messages").store.index("byRoomLamport");
+  const range = IDBKeyRange.bound(
+    [roomCode, 0],
+    [roomCode, Number.MAX_SAFE_INTEGER]
+  );
+  let cursor = await index.openCursor(range, "prev");
+  while (cursor) {
+    if (cursor.value.senderId !== notSenderId) return cursor.value;
+    cursor = await cursor.continue();
+  }
+  return undefined;
 }
 
 /**
@@ -346,6 +369,9 @@ export async function deleteMessagesForRoom(roomCode: string): Promise<void> {
   }
 
   await tx.done;
+  // The Yjs snapshot lives in its own store; a leftover one would resurrect
+  // the shared doc if the same room code is ever joined again.
+  await database.delete("yjsDocs", `channel:${roomCode}`).catch(() => {});
 }
 
 export async function getUnreadCount(
@@ -473,6 +499,15 @@ export async function putAttachment(attachment: Attachment): Promise<void> {
   await database.put("attachments", record);
 }
 
+const ATTACHMENT_STATUS_RANK: Record<AttachmentStatus, number> = {
+  pending: 0,
+  downloading: 1,
+  failed: 2,
+  complete: 3,
+  seeding: 4,
+};
+
+/** Advance an attachment's status. Late progress events must not regress it. */
 export async function updateAttachmentStatus(
   id: string,
   status: AttachmentStatus
@@ -481,7 +516,34 @@ export async function updateAttachmentStatus(
   const tx = database.transaction("attachments", "readwrite");
   const attachment = await tx.store.get(id);
   if (!attachment) return;
+  if (
+    ATTACHMENT_STATUS_RANK[attachment.status] >= ATTACHMENT_STATUS_RANK[status]
+  ) {
+    return;
+  }
   await tx.store.put({ ...attachment, status });
+  await tx.done;
+}
+
+/**
+ * Patch only the downloaded bytes onto an attachment, in one transaction.
+ * A whole-record put built before the (long) blob read clobbered whatever
+ * status the seeding path wrote in the meantime.
+ */
+export async function updateAttachmentData(
+  id: string,
+  data: ArrayBuffer
+): Promise<void> {
+  const database = await getDB();
+  const tx = database.transaction("attachments", "readwrite");
+  const attachment = await tx.store.get(id);
+  if (!attachment) return;
+  const status =
+    ATTACHMENT_STATUS_RANK[attachment.status] >=
+    ATTACHMENT_STATUS_RANK.complete
+      ? attachment.status
+      : ("complete" as AttachmentStatus);
+  await tx.store.put({ ...attachment, data, status });
   await tx.done;
 }
 
@@ -542,6 +604,9 @@ export async function addRoomParticipant(
   roomCode: string,
   peerId: string
 ): Promise<void> {
+  // participants are documented as DIDs; a raw peerId written here is never
+  // matched by a leave (keyed by DID) and ghosts the member list for 7 days.
+  if (!peerId.startsWith("did:")) return;
   const database = await getDB();
   const tx = database.transaction("rooms", "readwrite");
   const room = await tx.store.get(roomCode);
