@@ -51,6 +51,9 @@ const PEER_SILENCE_MS = 12_000;
 const PEER_PING_TIMEOUT_MS = 5_000;
 /** Consecutive unanswered pings before we call a peer gone. */
 const PING_MISSES_ALLOWED = 2;
+/** A fresh stream is pinged this often until its first pong. */
+const STREAM_CONFIRM_INTERVAL_MS = 700;
+const STREAM_CONFIRM_ATTEMPTS = 8;
 // Liveness lives at this layer rather than as a libp2p service: the ping
 // package pulls in a second copy of @libp2p/interface and the type skew breaks
 // the build. These ride the direct stream we already keep open.
@@ -122,6 +125,35 @@ export class LibP2PTransport implements PeerTransport {
   private lastInbound = new Map<string, number>();
   private pinging = new Set<string>();
   private pingMisses = new Map<string, number>();
+  /**
+   * The connection each peer most recently opened a stream to US on.
+   *
+   * After a peer reloads, several connections to the same peerId exist here
+   * and only the newest works - the relay keeps the old circuits looking
+   * open. dialProtocol picks among them arbitrarily, so our replies could
+   * ride a dead circuit while their traffic reaches us fine. The connection
+   * their own stream just arrived on is the one connection PROVEN to work,
+   * so outbound streams are opened on it. Closing the others instead was
+   * tried twice and regressed sync both times: both sides dial each other,
+   * so two live connections are legitimate and each side closed the one the
+   * other was using.
+   */
+  private liveConnections = new Map<string, Connection>();
+  /**
+   * Outbound streams that have proven they reach the other side.
+   *
+   * Frames flushed straight after newStream() resolve locally but can vanish
+   * before the remote handler is reading - measured directly: pings sent on
+   * long-established streams arrived while profile/digest frames flushed at
+   * stream open never did. So a fresh stream carries only retried pings until
+   * the first pong comes back, and app frames stay queued until then. The
+   * pong doubles as per-connection liveness: no pong within the retry budget
+   * means the connection underneath is dead, and it gets closed - which is
+   * the per-connection judgement that closing "the peer's other connections"
+   * could never make safely.
+   */
+  private confirmedStreams = new WeakSet<Stream>();
+  private confirmTimers = new Map<string, ReturnType<typeof setInterval>>();
   /** Dev counters. Connection-layer faults are invisible without them: every
    *  side looks connected while writes vanish into a dead circuit. */
   readonly debugStats = {
@@ -130,6 +162,15 @@ export class LibP2PTransport implements PeerTransport {
     disconnects: 0,
     staleConnectionsClosed: 0,
     livenessDrops: 0,
+    outboundResets: 0,
+    liveStreamOpens: 0,
+    dialStreamOpens: 0,
+    openFailures: 0,
+    confirmFailures: 0,
+    framesOut: 0,
+    framesIn: 0,
+    pingsIn: 0,
+    pongsIn: 0,
   };
 
   // set to true only by disconnect() - prevents any reconnect logic from firing
@@ -170,6 +211,7 @@ export class LibP2PTransport implements PeerTransport {
     this.roomPeers.clear();
     this.nextDialAt.clear();
     this.dialBackoff.clear();
+    this.liveConnections.clear();
     this.rendezvousStream = null;
 
     if (privateKeyBytes) this.privateKeyBytes = privateKeyBytes;
@@ -397,7 +439,16 @@ export class LibP2PTransport implements PeerTransport {
       // and, worse, silently loses whatever was being sent. Dropping it here
       // makes the send fall through and open a fresh one.
       if (streamIsOpen(stream)) {
-        return this.writeFrame(peerId, stream, data);
+        if (this.confirmedStreams.has(stream)) {
+          return this.writeFrame(peerId, stream, data);
+        }
+        // Still awaiting its first pong: hold the frame, the confirmation
+        // flush will carry it.
+        if (!this.pendingQueues.has(peerId)) {
+          this.pendingQueues.set(peerId, []);
+        }
+        this.pendingQueues.get(peerId)!.push(data);
+        return true;
       }
       this.cleanupPeerStream(peerId);
     }
@@ -541,6 +592,11 @@ export class LibP2PTransport implements PeerTransport {
     for (const peerId of [...this.connectedPeers]) {
       if (this.pinging.has(peerId)) continue;
       if (now - (this.lastInbound.get(peerId) ?? 0) < PEER_SILENCE_MS) continue;
+      // A stream mid-confirmation is already being pinged on a faster clock.
+      const out = this.peerStreams.get(peerId);
+      if (out && streamIsOpen(out) && !this.confirmedStreams.has(out)) {
+        continue;
+      }
       this.pinging.add(peerId);
       const askedAt = Date.now();
       void this.send(peerId, PING_FRAME).finally(() => {
@@ -565,6 +621,7 @@ export class LibP2PTransport implements PeerTransport {
   private dropPeer(peerId: string): void {
     this.debugStats.disconnects++;
     this.pingMisses.delete(peerId);
+    this.liveConnections.delete(peerId);
     this.connectedPeers.delete(peerId);
     this.relayedPeers.delete(peerId);
     this.lastInbound.delete(peerId);
@@ -710,26 +767,107 @@ export class LibP2PTransport implements PeerTransport {
   private async openOutboundStream(peerId: string): Promise<void> {
     if (!this.node) return;
 
-    const stream = await this.node.dialProtocol(
-      peerIdFromString(peerId),
-      DIRECT_MSG_PROTOCOL
-    );
+    // Open on the connection the peer most recently reached us on when we
+    // have one - see liveConnections. Falling back to dialProtocol lets
+    // libp2p pick (or dial fresh) when they have not reached us yet.
+    const live = this.liveConnections.get(peerId);
+    let stream: Stream;
+    let openedOn: Connection | null = null;
+    if (live && live.status === "open") {
+      stream = await live.newStream(DIRECT_MSG_PROTOCOL, {
+        runOnLimitedConnection: true,
+      });
+      openedOn = live;
+      this.debugStats.liveStreamOpens++;
+    } else {
+      stream = await this.node.dialProtocol(
+        peerIdFromString(peerId),
+        DIRECT_MSG_PROTOCOL
+      );
+      this.debugStats.dialStreamOpens++;
+    }
 
     this.peerStreams.set(peerId, stream);
 
     stream.addEventListener("close", (_evt: StreamCloseEvent) => {
-      this.cleanupPeerStream(peerId);
+      // Only clean up if WE are still the current stream. The close event of
+      // a stream that was already replaced arrives late and used to wipe the
+      // replacement's pending queue and opening promise - losing exactly the
+      // profile reply a freshly reconnected peer was waiting on.
+      if (this.peerStreams.get(peerId) === stream) {
+        this.cleanupPeerStream(peerId);
+      }
     });
 
+    this.beginStreamConfirmation(peerId, stream, openedOn);
+  }
+
+  /**
+   * Ping until the first pong proves the far end is reading, then flush
+   * whatever queued up. See confirmedStreams for why nothing else may be
+   * written before that.
+   */
+  private beginStreamConfirmation(
+    peerId: string,
+    stream: Stream,
+    openedOn: Connection | null
+  ): void {
+    const prior = this.confirmTimers.get(peerId);
+    if (prior) clearInterval(prior);
+
+    let attempts = 0;
+    const pingOnce = () => this.writeFrame(peerId, stream, PING_FRAME);
+
+    const timer = setInterval(() => {
+      if (
+        this.peerStreams.get(peerId) !== stream ||
+        this.confirmedStreams.has(stream) ||
+        !streamIsOpen(stream)
+      ) {
+        clearInterval(timer);
+        this.confirmTimers.delete(peerId);
+        return;
+      }
+      attempts++;
+      if (attempts > STREAM_CONFIRM_ATTEMPTS) {
+        clearInterval(timer);
+        this.confirmTimers.delete(peerId);
+        console.log(
+          "[Transport] stream never confirmed for",
+          peerId.slice(-8)
+        );
+        this.debugStats.confirmFailures++;
+        this.cleanupPeerStream(peerId);
+        // The pong never came, so the connection under the stream is dead -
+        // this is the one place a single connection is provably at fault, so
+        // it is the one place closing one is safe.
+        if (openedOn) {
+          if (this.liveConnections.get(peerId) === openedOn) {
+            this.liveConnections.delete(peerId);
+          }
+          openedOn.close().catch(() => {});
+        }
+        return;
+      }
+      pingOnce();
+    }, STREAM_CONFIRM_INTERVAL_MS);
+    this.confirmTimers.set(peerId, timer);
+    pingOnce();
+  }
+
+  /** A pong arrived: the current outbound stream provably reaches them. */
+  private confirmOutboundStream(peerId: string): void {
+    const stream = this.peerStreams.get(peerId);
+    if (!stream || this.confirmedStreams.has(stream)) return;
+    this.confirmedStreams.add(stream);
+    const timer = this.confirmTimers.get(peerId);
+    if (timer) {
+      clearInterval(timer);
+      this.confirmTimers.delete(peerId);
+    }
     const queued = this.pendingQueues.get(peerId) ?? [];
     this.pendingQueues.delete(peerId);
-    let allOk = true;
-    for (const msg of queued) {
-      allOk = this.writeFrame(peerId, stream, msg) && allOk;
-    }
-    // Reject so every send() awaiting this open reports failure and callers
-    // requeue (receivers dedupe by message id, so re-sends are safe).
-    if (!allOk) throw new Error("write failed while flushing queued frames");
+    for (const frame of queued) this.writeFrame(peerId, stream, frame);
   }
 
   private writeFrame(peerId: string, stream: Stream, data: Uint8Array): boolean {
@@ -739,6 +877,7 @@ export class LibP2PTransport implements PeerTransport {
     }
     try {
       const ok = stream.send(encodeFrame(data));
+      this.debugStats.framesOut++;
       if (!ok) {
         stream.onDrain().catch(() => this.cleanupPeerStream(peerId));
       }
@@ -755,20 +894,20 @@ export class LibP2PTransport implements PeerTransport {
     stream: Stream,
     connection?: Connection
   ): void {
-    // They just opened a stream to us, which means their side is fresh. Ours
-    // may not be: after they reload we keep the outbound stream from their
-    // previous page, which can still report itself open while everything
-    // written to it disappears. Their inbound stream is the one reliable
-    // signal that this happened - liveness checks cannot see it, because we
-    // keep hearing from them perfectly well on THIS stream while our replies
-    // go nowhere. Dropping ours costs one reopen on the next send.
-    this.resetOutboundStream(fromId);
-    // NOT closing the peer's other connections here, however tempting: both
-    // sides dial each other, so two connections legitimately exist, and each
-    // side then closes the one the other is relying on. Telling a dead
-    // connection from a redundant one needs liveness per connection, not per
-    // peer. See scenarios/reconnect-churn.mjs.
-    void connection;
+    // Reset our outbound stream ONLY when the peer reaches us over a NEW
+    // connection: that is the one reliable sign their previous incarnation -
+    // and with it the stream we hold - is gone. Resetting on every inbound
+    // stream instead caused a storm: a pong reply opens a stream, the reset
+    // forces the other side to reopen, which opens a stream back, and the two
+    // sides reset each other hundreds of times without a single confirmation
+    // completing.
+    if (connection) {
+      const prev = this.liveConnections.get(fromId);
+      this.liveConnections.set(fromId, connection);
+      if (prev && prev !== connection) {
+        this.resetOutboundStream(fromId);
+      }
+    }
     let buf = new Uint8Array(0);
 
     stream.addEventListener("message", (evt: StreamMessageEvent) => {
@@ -798,6 +937,7 @@ export class LibP2PTransport implements PeerTransport {
         buf = buf.slice(4 + len);
 
         // Anything at all from this peer proves it is alive.
+        this.debugStats.framesIn++;
         this.lastInbound.set(fromId, Date.now());
         this.pingMisses.delete(fromId);
 
@@ -807,10 +947,23 @@ export class LibP2PTransport implements PeerTransport {
             ? new TextDecoder().decode(payload)
             : "";
         if (text === PING_TEXT) {
-          void this.send(fromId, PONG_FRAME);
+          this.debugStats.pingsIn++;
+          // Reply straight onto our outbound stream even if it is not yet
+          // confirmed: the pong IS the confirmation signal, so gating it on
+          // confirmation would deadlock both sides.
+          const out = this.peerStreams.get(fromId);
+          if (out && streamIsOpen(out)) {
+            this.writeFrame(fromId, out, PONG_FRAME);
+          } else {
+            void this.send(fromId, PONG_FRAME);
+          }
           continue;
         }
-        if (text === PONG_TEXT) continue;
+        if (text === PONG_TEXT) {
+          this.debugStats.pongsIn++;
+          this.confirmOutboundStream(fromId);
+          continue;
+        }
 
         // null room = direct message (not pubsub)
         this.emit("message", fromId, payload, null);
@@ -826,6 +979,7 @@ export class LibP2PTransport implements PeerTransport {
   private resetOutboundStream(peerId: string): void {
     const stream = this.peerStreams.get(peerId);
     if (!stream) return;
+    this.debugStats.outboundResets++;
     this.peerStreams.delete(peerId);
     try {
       stream.abort(new Error("peer reopened its stream"));
@@ -833,6 +987,11 @@ export class LibP2PTransport implements PeerTransport {
   }
 
   private cleanupPeerStream(peerId: string): void {
+    const timer = this.confirmTimers.get(peerId);
+    if (timer) {
+      clearInterval(timer);
+      this.confirmTimers.delete(peerId);
+    }
     const stream = this.peerStreams.get(peerId);
     if (stream) {
       stream.abort(new Error("cleanup"));

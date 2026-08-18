@@ -1,15 +1,10 @@
 /**
- * KNOWN FAILING - this is the reproduction, not a passing test.
+ * Reconnect churn: the thing people actually do when testing.
  *
- * A peer that reloads keeps its peerId, and the relay keeps the old connection
- * object alive, so the other side never sees it drop: it holds the stream from
- * the dead page and every write disappears into it. The peer looks connected
- * and receives nothing - no profile, no presence, no history.
- *
- * Fixing it needs liveness detection (ask a quiet peer whether it is still
- * there, drop it when it is not). A first attempt at that regressed history
- * sync, caught by scenarios/sync-recovers.mjs, and was reverted rather than
- * shipped on a hunch. Left here so the bug stays visible and measurable.
+ * This scenario found, in order: the dead outbound stream a reload leaves on
+ * the other side, frames vanishing when flushed at stream open, a mutual
+ * stream-reset storm, and the final-message hole in purely event-driven sync.
+ * Each fix is only real if every cycle here stays green.
  *
  * Reconnect churn: the thing people actually do when testing.
  *
@@ -58,6 +53,8 @@ try {
     check.ok(identified, `cycle ${cycle}: both sides identified each other`);
     console.log(`    alice transport: ${JSON.stringify(await alice.transportStats())}`);
     console.log(`    bob   transport: ${JSON.stringify(await bob.transportStats())}`);
+    console.log(`    alice app: ${JSON.stringify(await alice.stats())}`);
+    console.log(`    bob   app: ${JSON.stringify(await bob.stats())}`);
 
     // And the message sent while Bob was away must reach him.
     const agreed = await waitForConvergence([alice, bob], room, { timeout: 60_000 });

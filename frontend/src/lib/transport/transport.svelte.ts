@@ -393,6 +393,40 @@ function _syncAllPeers(force = false): void {
   for (const pid of _transport.peers()) _syncPeer(pid, force);
 }
 
+/**
+ * Per-peer repair tick. Event-driven sync covers everything EXCEPT the case
+ * where the last event is the one that got lost: a message that misses its
+ * delivery window has no later event to recover it, and a profile reply that
+ * vanishes leaves the peer unbound forever. Measured directly in the churn
+ * scenario - after three reloads everything settles and the final message
+ * just sits on one side.
+ *
+ * This is not global polling: it only speaks up for a peer in an abnormal
+ * state - connected but never identified, or silent at the app level for a
+ * while. A healthy, active mesh sends nothing.
+ */
+const REPAIR_TICK_MS = 15_000;
+const APP_SILENCE_MS = 15_000;
+const _lastAppInbound = new Map<string, number>();
+
+if (typeof window !== "undefined") {
+  setInterval(() => {
+    for (const pid of _transport.peers()) {
+      if (!_peerIdToDid.has(pid)) {
+        // Connected but unbound: our profile (or their reply) was lost.
+        _sendProfile(pid);
+        continue;
+      }
+      const quietFor = Date.now() - (_lastAppInbound.get(pid) ?? 0);
+      if (quietFor > APP_SILENCE_MS) {
+        // Alive (liveness pings hold the connection) but silent: verify we
+        // did not miss anything. One digest, a number per sender.
+        _syncPeer(pid, true);
+      }
+    }
+  }, REPAIR_TICK_MS);
+}
+
 /** Away longer than this and the connections are suspect, not just history. */
 const AWAY_FULL_RESYNC_MS = 60_000;
 let _hiddenSince = 0;
@@ -1229,6 +1263,7 @@ _transport.on("message", (peerId, data, room) => {
     }
 
     // Update last seen for this peer
+    _lastAppInbound.set(peerId, Date.now());
     const did = _peerIdToDid.get(peerId);
     if (did && room) {
       updateParticipantLastSeen(room, did).catch(() => {});
