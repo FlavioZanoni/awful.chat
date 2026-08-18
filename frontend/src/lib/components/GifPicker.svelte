@@ -245,7 +245,9 @@
         savedGifs = savedGifs.filter((g) => g.gifId !== klipyGif.id);
       } else {
         const saved: SavedGif = {
-          id: crypto.randomUUID(),
+          // Keyed by the gif itself: a double-tap upserts instead of
+          // stranding a duplicate row that un-saving misses.
+          id: klipyGif.id,
           gifId: klipyGif.id,
           title: klipyGif.title,
           url: klipyGif.urls.gif,

@@ -4,6 +4,7 @@
     peerIdToDid,
     didToPeerId,
     selfId,
+    peerId as selfPeerId,
     isRelayed,
     getRoomUsers,
   } from "$lib/transport/transport.svelte";
@@ -64,7 +65,8 @@
     const allUsers: User[] = [];
 
     for (const did of roomUsers) {
-      const isSelf = did === selfDid || did === ownDid;
+      const isSelf =
+        did === selfDid || did === ownDid || did === selfPeerId();
       const connectedPeerId = peers.find(
         (peerId) => peerIdToDid(peerId) === did
       );
@@ -89,8 +91,10 @@
         name = profileStore.nickname || "You";
         avatarUrl = profileStore.avatarUrl || null;
       } else {
-        name = peerNames.get(did) || did.slice(0, 12);
-        avatarUrl = peerAvatars.get(did) || null;
+        // roomUsers can carry a raw peerId while these maps are DID-keyed.
+        const nameKey = peerIdToDid(did) || did;
+        name = peerNames.get(nameKey) || peerNames.get(did) || did.slice(0, 12);
+        avatarUrl = peerAvatars.get(nameKey) || peerAvatars.get(did) || null;
       }
 
       allUsers.push({
@@ -181,7 +185,14 @@
   }
 
   function isInPhonebook(peerId: string): boolean {
-    return roomsStore.phonebook.some((entry) => entry.peerId === peerId);
+    // An entry may be keyed by peerId or DID; compare every form.
+    const did = peerIdToDid(peerId);
+    return roomsStore.phonebook.some(
+      (entry) =>
+        entry.peerId === peerId ||
+        entry.did === peerId ||
+        (!!did && (entry.peerId === did || entry.did === did))
+    );
   }
 
   async function handleAddToPhonebook(peerId: string): Promise<void> {

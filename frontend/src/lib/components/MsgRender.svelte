@@ -218,7 +218,8 @@
       return;
     }
     await putSavedGif({
-      id: crypto.randomUUID(),
+      // Keyed by the gif URL: double-taps upsert instead of duplicating.
+      id: msg.content,
       gifId: msg.content,
       title: `GIF from ${msg.senderName}`,
       url: msg.content,

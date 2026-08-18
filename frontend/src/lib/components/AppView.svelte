@@ -73,15 +73,20 @@
     if (!identityStore.isUnlocked || bootstrapped) return;
     bootstrapped = true;
     connect();
-    loadRooms();
+    const roomsReady = loadRooms();
     loadProfile();
     if (pendingRoomCode) {
       const code = pendingRoomCode;
       pendingRoomCode = null;
       joiningRoom = true;
-      handleJoin(code, "").finally(() => {
-        joiningRoom = false;
-      });
+      // Join only after the stored rooms are loaded: the join saves the room,
+      // and racing loadRooms() could drop it from the sidebar mirror.
+      roomsReady
+        .catch(() => {})
+        .then(() => handleJoin(code, ""))
+        .finally(() => {
+          joiningRoom = false;
+        });
     }
   });
 
@@ -263,7 +268,9 @@
   function dmTitleFor(peerId: string): string {
     const did = peerIdToDid(peerId);
     return (
-      roomsStore.phonebook.find((p) => p.peerId === peerId)?.nickname ||
+      roomsStore.phonebook.find(
+        (p) => p.peerId === peerId || p.did === peerId
+      )?.nickname ||
       transportState.peerNames.get(did) ||
       transportState.peerNames.get(peerId) ||
       dmLatestByPeer.get(peerId)?.nickname ||
@@ -291,9 +298,8 @@
     await refreshDmRooms();
     const dmCode = activeRoomCode;
     if (!dmCode) return;
-    const msgs = await getMessages(dmCode);
-    const latest = msgs[msgs.length - 1];
-    if (latest) {
+    const latest = await getLastMessage(dmCode);
+    if (latest && activeRoomCode === dmCode) {
       await markSeenForDm(dmCode, latest.lamport);
     }
   }
@@ -424,9 +430,16 @@
         inPhonebook: boolean;
       }
     >();
-    const phonebookByPeer = new Map<string, PhonebookEntry>(
-      roomsStore.phonebook.map((p) => [p.peerId, p])
-    );
+    // Keyed by every identity form: dmInbox keys are DIDs while entries may
+    // be keyed by peerId (or the reverse), and a one-form map made saved
+    // contacts look unsaved here.
+    const phonebookByPeer = new Map<string, PhonebookEntry>();
+    for (const p of roomsStore.phonebook) {
+      phonebookByPeer.set(p.peerId, p);
+      if (p.did) phonebookByPeer.set(p.did, p);
+      const mapped = peerIdToDid(p.peerId);
+      if (mapped) phonebookByPeer.set(mapped, p);
+    }
     for (const [_, data] of dmInbox) {
       const peerId = data.peerId;
       const pb = phonebookByPeer.get(peerId);
@@ -456,10 +469,8 @@
       }
     }
     return [...map.values()].sort((a, b) => {
-      const aFav = !!roomsStore.phonebook.find((p) => p.peerId === a.peerId)
-        ?.favorite;
-      const bFav = !!roomsStore.phonebook.find((p) => p.peerId === b.peerId)
-        ?.favorite;
+      const aFav = !!phonebookByPeer.get(a.peerId)?.favorite;
+      const bFav = !!phonebookByPeer.get(b.peerId)?.favorite;
       if (aFav !== bFav) return aFav ? -1 : 1;
       return b.addedAt - a.addedAt;
     });

@@ -3,6 +3,7 @@ import {
   getAttachmentsWithData,
   putAttachment,
   updateAttachmentStatus,
+  updateAttachmentData,
 } from "$lib/storage";
 import {
   _peerIdToDid,
@@ -52,16 +53,14 @@ async function _persistDownloadedBlob(
   );
   const data = shouldPersistData ? await blob.arrayBuffer() : undefined;
 
+  // Patch, never whole-record put: the record read above predates the (long)
+  // blob read, and a blind put clobbered whatever status the seeding path
+  // wrote in the meantime.
   await Promise.all(
     attachments.map((attachment) =>
-      putAttachment({
-        ...attachment,
-        data:
-          attachment.size <= MAX_PERSISTED_ATTACHMENT_BYTES
-            ? data
-            : attachment.data,
-        status: "complete",
-      })
+      data && attachment.size <= MAX_PERSISTED_ATTACHMENT_BYTES
+        ? updateAttachmentData(attachment.id, data)
+        : updateAttachmentStatus(attachment.id, "complete")
     )
   );
 }

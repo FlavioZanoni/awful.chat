@@ -5,6 +5,8 @@ import {
   putRoom,
   deleteRoom,
   getUnreadCount,
+  getLastMessage,
+  getRoom,
   getMessages,
   getPhonebookEntries,
   type DMRoom,
@@ -85,6 +87,11 @@ export async function refreshUnreadCount(roomCode: string): Promise<void> {
     room.lastSeenLamport,
     selfSenderId()
   );
+  // If markSeen advanced the watermark while the count was in flight, this
+  // result is stale - writing it would relight the badge on a room the user
+  // is reading. Drop it; the next event recomputes.
+  const now = roomsStore.rooms.find((r) => r.roomCode === roomCode);
+  if (!now || now.lastSeenLamport !== room.lastSeenLamport) return;
   const next = new Map(roomsStore.unreadCounts);
   next.set(roomCode, count);
   roomsStore.unreadCounts = next;
@@ -94,8 +101,7 @@ export async function refreshUnreadCount(roomCode: string): Promise<void> {
 async function _refreshAllActivity(): Promise<void> {
   const entries = await Promise.all(
     roomsStore.rooms.map(async (r) => {
-      const msgs = await getMessages(r.roomCode).catch(() => []);
-      const last = msgs[msgs.length - 1];
+      const last = await getLastMessage(r.roomCode).catch(() => undefined);
       return [r.roomCode, last?.timestamp ?? r.createdAt] as [string, number];
     })
   );
@@ -117,8 +123,16 @@ async function _refreshAllUnread(): Promise<void> {
 }
 
 export async function saveRoom(roomCode: string, name: string): Promise<void> {
-  const existing = roomsStore.rooms.find((r) => r.roomCode === roomCode);
-  if (existing) return;
+  // Check the DATABASE, not the in-memory mirror: on a deep-link join the
+  // mirror can still be empty while loadRooms() is in flight, and recreating
+  // the record here wiped its name, watermark and member list.
+  const stored = await getRoom(roomCode);
+  if (stored) {
+    if (!roomsStore.rooms.some((r) => r.roomCode === roomCode)) {
+      roomsStore.rooms = [...roomsStore.rooms, stored];
+    }
+    return;
+  }
 
   const room: Room = {
     roomCode,
@@ -131,7 +145,9 @@ export async function saveRoom(roomCode: string, name: string): Promise<void> {
   };
 
   await putRoom(room);
-  roomsStore.rooms = [...roomsStore.rooms, room];
+  if (!roomsStore.rooms.some((r) => r.roomCode === roomCode)) {
+    roomsStore.rooms = [...roomsStore.rooms, room];
+  }
 }
 
 /**
@@ -148,7 +164,12 @@ export async function renameRoom(
   const idx = roomsStore.rooms.findIndex((r) => r.roomCode === roomCode);
   if (idx === -1) return;
   if (roomsStore.rooms[idx].name === trimmed) return;
-  const updated = { ...roomsStore.rooms[idx], name: trimmed };
+  // Patch the STORED record: the mirror is refreshed rarely, and writing a
+  // whole room from it rolled back participants and the seen watermark that
+  // other writers had advanced since page load (evicting members days early).
+  const stored = await getRoom(roomCode);
+  if (!stored) return;
+  const updated = { ...stored, name: trimmed };
   roomsStore.rooms[idx] = updated;
   await putRoom(updated);
 }

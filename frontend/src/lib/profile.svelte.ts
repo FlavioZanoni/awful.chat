@@ -43,6 +43,17 @@ export async function loadProfile(): Promise<void> {
   }
 }
 
+// saveName and saveAvatar can run near-simultaneously during first-run setup;
+// each is a check-then-create followed by a patch, and interleaving them let
+// the later create erase the earlier patch (the signup avatar vanished).
+// Serializing the pairs is enough - no storage changes needed.
+let _profileChain: Promise<void> = Promise.resolve();
+function chained(fn: () => Promise<void>): Promise<void> {
+  const next = _profileChain.then(fn, fn);
+  _profileChain = next.catch(() => {});
+  return next;
+}
+
 async function ensureProfile(did?: string): Promise<void> {
   const existing = await getOwnProfile();
   if (!existing) {
@@ -57,8 +68,10 @@ async function ensureProfile(did?: string): Promise<void> {
 
 export async function saveAvatar(url: string | undefined): Promise<void> {
   profileStore.avatarUrl = url;
-  await ensureProfile();
-  await updateOwnProfile({ pfpURL: url, pfpData: undefined });
+  await chained(async () => {
+    await ensureProfile();
+    await updateOwnProfile({ pfpURL: url, pfpData: undefined });
+  });
   broadcastProfile();
 }
 
@@ -68,7 +81,9 @@ export async function saveAvatar(url: string | undefined): Promise<void> {
  */
 export async function saveName(name: string, did?: string): Promise<void> {
   profileStore.nickname = name;
-  await ensureProfile(did);
-  await updateOwnProfile({ nickname: name });
+  await chained(async () => {
+    await ensureProfile(did);
+    await updateOwnProfile({ nickname: name });
+  });
   broadcastProfile();
 }

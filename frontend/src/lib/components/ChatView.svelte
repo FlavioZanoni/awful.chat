@@ -36,6 +36,8 @@
     transportState,
     sendMessage,
     selfId,
+    isSelfSender,
+    peerId as myPeerId,
     didToPeerId,
     peerIdToDid,
     sendReply,
@@ -180,8 +182,11 @@
       if (!byEmoji.has(m.reactionEmoji))
         byEmoji.set(m.reactionEmoji, new Set());
       const users = byEmoji.get(m.reactionEmoji)!;
-      if (m.reactionOp === "remove") users.delete(m.senderId);
-      else users.add(m.senderId);
+      // Normalize to the DID: a reaction added before the sender's binding
+      // was known (peerId form) must cancel against one added after.
+      const reactor = senderDid(m.senderId) || m.senderId;
+      if (m.reactionOp === "remove") users.delete(reactor);
+      else users.add(reactor);
     }
     return byMessage;
   });
@@ -654,7 +659,9 @@
 
   function shouldShowHeader(current: Message, previous?: Message): boolean {
     if (!previous) return true;
-    if (current.senderId !== previous.senderId) return true;
+    const a = senderDid(current.senderId) || current.senderId;
+    const b = senderDid(previous.senderId) || previous.senderId;
+    if (a !== b) return true;
     return current.timestamp - previous.timestamp > 2 * 60 * 1000;
   }
 
@@ -732,7 +739,7 @@
   }
 
   function openUserMenuFromMessage(msg: Message, e: MouseEvent): void {
-    if (msg.senderId === selfId()) return;
+    if (isSelfSender(msg.senderId)) return;
     e.stopPropagation();
     const peerId = peerIdForSender(msg.senderId);
     const pos = clampMenu(e.clientX, e.clientY);
@@ -1044,7 +1051,7 @@
               prev?.timestamp
             )}
             {@const showHeader = shouldShowHeader(msg, prev)}
-            {@const isOwn = msg.senderId === selfId()}
+            {@const isOwn = isSelfSender(msg.senderId)}
             <div>
               {#if showDate}
                 <div class="flex items-center gap-3 py-3">
@@ -1166,7 +1173,7 @@
                         .get(msg.id)
                         ?.entries() ?? [])] as [emoji, users] (emoji)}
                       {#if users.size > 0}
-                        {@const reacted = users.has(selfId())}
+                        {@const reacted = users.has(selfId()) || users.has(myPeerId())}
                         <button
                           type="button"
                           class="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs cursor-pointer transition-colors {reacted
