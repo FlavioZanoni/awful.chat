@@ -6,7 +6,6 @@
  * stream-reset storm, and the final-message hole in purely event-driven sync.
  * Each fix is only real if every cycle here stays green.
  *
- * Reconnect churn: the thing people actually do when testing.
  *
  * A peer leaves and comes back repeatedly while the other keeps talking. Each
  * cycle must end with both sides connected, naming each other, and holding the

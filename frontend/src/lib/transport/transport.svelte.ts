@@ -238,6 +238,7 @@ function _replayPendingDm(peerId: string, senderDid: string): void {
 function _setPeerDid(peerId: string, did: string): void {
   if (_peerIdToDid.get(peerId) === did) return;
   _peerIdToDid.set(peerId, did);
+  _profileRepair.delete(peerId);
   transportState.peerDidVersion += 1;
 }
 const _seededByFingerprint = new Map<string, FileDescriptor>();
@@ -407,16 +408,30 @@ function _syncAllPeers(force = false): void {
  */
 const REPAIR_TICK_MS = 15_000;
 const APP_SILENCE_MS = 15_000;
+const PROFILE_REPAIR_MAX_MS = 5 * 60_000;
 const _lastAppInbound = new Map<string, number>();
+const _profileRepair = new Map<string, { next: number; delay: number }>();
 
 if (typeof window !== "undefined") {
   setInterval(() => {
     for (const pid of _transport.peers()) {
       if (!_peerIdToDid.has(pid)) {
         // Connected but unbound: our profile (or their reply) was lost.
-        // Catch: getOwnProfile can reject (blocked IDB upgrade, private-mode
-        // quota), and this recurs every tick while the state persists.
-        _sendProfile(pid).catch(() => {});
+        // Backed off per peer: a peer that can NEVER bind (locked identity,
+        // old build) would otherwise receive the full profile - avatar
+        // payload included - every 15s for the whole session.
+        const repair = _profileRepair.get(pid) ?? { next: 0, delay: 0 };
+        if (Date.now() >= repair.next) {
+          repair.delay = Math.min(
+            Math.max(repair.delay * 2, REPAIR_TICK_MS),
+            PROFILE_REPAIR_MAX_MS
+          );
+          repair.next = Date.now() + repair.delay;
+          _profileRepair.set(pid, repair);
+          // Catch: getOwnProfile can reject (blocked IDB upgrade,
+          // private-mode quota).
+          _sendProfile(pid).catch(() => {});
+        }
         continue;
       }
       const quietFor = Date.now() - (_lastAppInbound.get(pid) ?? 0);
@@ -967,7 +982,8 @@ function _handleChatMessage(
     // Force past the debounce: a detected gap is the strongest signal we get,
     // and a routine profile exchange must not be allowed to consume the window
     // and swallow it.
-    if (seen >= 0 && msg.lamport > seen + 1) _syncPeer(receivedFromPeerId, true);
+    if (seen >= 0 && msg.lamport > seen + 1)
+      _syncPeer(receivedFromPeerId, true);
     if (msg.lamport > seen) {
       _lastSeenLamport.set(`${roomCode}|${msg.senderId}`, msg.lamport);
     }
@@ -1100,6 +1116,8 @@ _transport.on("connect", (peerId) => {
 });
 
 _transport.on("disconnect", (peerId) => {
+  _lastAppInbound.delete(peerId);
+  _profileRepair.delete(peerId);
   transportState.peers = _transport.peers();
   _fileTransport.onPeerDisconnect(peerId);
 
@@ -1216,6 +1234,11 @@ function _handleDmChat(
 }
 
 _transport.on("message", (peerId, data, room) => {
+  // Before ANY branch: the DM and file-signal paths return early, and a peer
+  // we only ever DM with would otherwise read as permanently app-silent -
+  // making the repair tick send it a digest every 15s for the lifetime of the
+  // connection, the exact busywork the tick promises not to do.
+  _lastAppInbound.set(peerId, Date.now());
   if (room === null) {
     const envelope = parseDmEnvelope(data);
     if (envelope) {
@@ -1265,7 +1288,6 @@ _transport.on("message", (peerId, data, room) => {
     }
 
     // Update last seen for this peer
-    _lastAppInbound.set(peerId, Date.now());
     const did = _peerIdToDid.get(peerId);
     if (did && room) {
       updateParticipantLastSeen(room, did).catch(() => {});
