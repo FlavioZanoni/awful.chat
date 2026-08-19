@@ -48,6 +48,7 @@
     requestFileDownload,
   } from "$lib/transport/transport.svelte";
   import { roomsStore, refreshPhonebook } from "$lib/rooms.svelte";
+  import { formatReactorNames } from "$lib/reaction-names";
   import {
     addToPhonebook,
     openDmConversation,
@@ -729,6 +730,16 @@
     return displayNameFor(msg.senderId, msg.senderName);
   }
 
+  function reactorNames(users: Set<string>): string {
+    const names: string[] = [];
+    let self = false;
+    for (const id of users) {
+      if (isSelfSender(id)) self = true;
+      else names.push(displayNameFor(id));
+    }
+    return formatReactorNames(names, self);
+  }
+
   function peerIdForSender(senderId: string): string | null {
     if (peers.includes(senderId)) return senderId;
     const mapped = didToPeerId(senderId);
@@ -1174,20 +1185,25 @@
                         ?.entries() ?? [])] as [emoji, users] (emoji)}
                       {#if users.size > 0}
                         {@const reacted = users.has(selfId()) || users.has(myPeerId())}
-                        <button
-                          type="button"
-                          class="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs cursor-pointer transition-colors {reacted
-                            ? 'border-blue-400/70 bg-blue-500/20 text-blue-200'
-                            : 'border-border/80 bg-muted/40 text-muted-foreground hover:text-foreground'}"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            toggleReaction?.(msg.id, emoji);
-                            activeMessageId = null;
-                          }}
-                        >
-                          <span>{emoji}</span>
-                          <span>{users.size}</span>
-                        </button>
+                        <Tip text={reactorNames(users)}>
+                          {#snippet children(props)}
+                            <button
+                              {...props}
+                              type="button"
+                              class="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs cursor-pointer transition-colors {reacted
+                                ? 'border-blue-400/70 bg-blue-500/20 text-blue-200'
+                                : 'border-border/80 bg-muted/40 text-muted-foreground hover:text-foreground'}"
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                toggleReaction?.(msg.id, emoji);
+                                activeMessageId = null;
+                              }}
+                            >
+                              <span>{emoji}</span>
+                              <span>{users.size}</span>
+                            </button>
+                          {/snippet}
+                        </Tip>
                       {/if}
                     {/each}
                   </div>
