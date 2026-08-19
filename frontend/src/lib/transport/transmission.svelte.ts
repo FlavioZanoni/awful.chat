@@ -5,6 +5,8 @@ import {
   playTransmissionLeaveSound,
 } from "$lib/sounds";
 import { transportState, _transport } from "./transport.svelte";
+import { encode } from "../utils";
+import { MessageType } from "../types/message";
 import type { MediasoupVideo } from "./mediasoup";
 
 let _video: MediasoupVideo | null = null;
@@ -124,6 +126,11 @@ _video.on("trackRemoved", (peerId, source) => {
     const next = new Map(transportState.pendingTransmissions);
     next.delete(peerId);
     transportState.pendingTransmissions = next;
+    if (transportState.transmissionViewers.has(peerId)) {
+      const viewers = new Map(transportState.transmissionViewers);
+      viewers.delete(peerId);
+      transportState.transmissionViewers = viewers;
+    }
     if (transportState.watchingTransmissionPeerId === peerId) {
       transportState.watchingTransmissionPeerId = null;
       transportState.watchingTransmissionProducerId = null;
@@ -161,6 +168,24 @@ export function setTransmissionOutputVolume(volume: number): void {
     });
 }
 
+/** Tell the call who we are watching (or that we stopped: watching null). */
+export function _sendWatchPresence(peerId?: string): void {
+  const payload = encode({
+    type: MessageType.WatchPresence,
+    watching: transportState.watchingTransmissionPeerId,
+  });
+  if (peerId) {
+    _transport.send(peerId, payload);
+    return;
+  }
+  const rooms = new Set(
+    [transportState.callRoomCode, transportState.roomCode].filter(
+      (r): r is string => !!r
+    )
+  );
+  for (const room of rooms) _transport.broadcast(payload, room);
+}
+
 export async function watchTransmission(
   peerId: string,
   producerId: string
@@ -170,6 +195,7 @@ export async function watchTransmission(
     await getVideo().watchTransmission(peerId, producerId);
     transportState.watchingTransmissionPeerId = peerId;
     transportState.watchingTransmissionProducerId = producerId;
+    _sendWatchPresence();
     const next = new Map(transportState.pendingTransmissions);
     next.delete(peerId);
     transportState.pendingTransmissions = next;
@@ -189,4 +215,5 @@ export function stopWatchingTransmission(): void {
   ).set(peerId, producerId);
   transportState.watchingTransmissionPeerId = null;
   transportState.watchingTransmissionProducerId = null;
+  _sendWatchPresence();
 }

@@ -10,6 +10,7 @@ export enum MessageType {
   Profile = "profile",
   CallPresence = "call_presence",
   CallState = "call_state",
+  WatchPresence = "watch_presence",
   RoomName = "room_name",
   // room users - wire only, never persisted
   JoinRoom = "join_room",
@@ -156,6 +157,12 @@ export interface WireCallState {
   deafened: boolean;
 }
 
+export interface WireWatchPresence {
+  type: MessageType.WatchPresence;
+  /** Sharer peerId being watched, or null when the viewer stopped. */
+  watching: string | null;
+}
+
 export interface WireRoomName {
   type: MessageType.RoomName;
   name: string;
@@ -214,6 +221,7 @@ export type AnyWireMessage =
   | WireChatMessage
   | WireProfile
   | WireCallPresence
+  | WireWatchPresence
   | WireCallState
   | WireRoomName
   | WireJoinRoom

@@ -162,6 +162,7 @@ export function leaveCall(): void {
   transportState.screenSharing = false;
   transportState.sfuPeerIds = new Set();
   transportState.pendingTransmissions = new Map();
+  transportState.transmissionViewers = new Map();
   transportState.watchingTransmissionPeerId = null;
   transportState.watchingTransmissionProducerId = null;
 }

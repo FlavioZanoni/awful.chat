@@ -67,6 +67,7 @@ import {
 } from "../messaging";
 import { encode, decode, normalizeAvatarUrl } from "../utils";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
+import { _sendWatchPresence } from "./transmission.svelte";
 import {
   type DmPayload,
   encodeDmAckEnvelope,
@@ -170,6 +171,7 @@ interface TransportState {
   error: string | null;
   callPeerIds: Set<string>;
   callPeerRooms: Map<string, string>; // peerId -> roomCode they're calling in
+  transmissionViewers: Map<string, Set<string>>; // sharer peerId -> viewer peerIds
   sfuPeerIds: Set<string>;
   pendingTransmissions: Map<string, string>;
   watchingTransmissionPeerId: string | null;
@@ -208,6 +210,7 @@ export const transportState = $state<TransportState>({
   error: null,
   callPeerIds: new Set(),
   callPeerRooms: new Map(),
+  transmissionViewers: new Map(),
   sfuPeerIds: new Set(),
   pendingTransmissions: new Map(),
   watchingTransmissionPeerId: null,
@@ -802,6 +805,7 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
     if (transportState.inCall) {
       _sendCallPresence(peerId);
       _sendCallState(peerId);
+      _sendWatchPresence(peerId);
     }
   }
   // Reconcile history with them either way; debounced, so a burst is one.
@@ -847,6 +851,25 @@ function _peerCallSound(
   });
   if (chime === "join") playPeerJoinSound();
   else if (chime === "leave") playPeerLeaveSound();
+}
+
+/** One viewer watches at most one share; a new announcement replaces it. */
+export function _handleWatchPresence(
+  viewerPeerId: string,
+  watching: string | null
+): void {
+  const next = new Map<string, Set<string>>();
+  for (const [sharer, viewers] of transportState.transmissionViewers) {
+    const copy = new Set(viewers);
+    copy.delete(viewerPeerId);
+    if (copy.size > 0) next.set(sharer, copy);
+  }
+  if (watching) {
+    const set = new Set(next.get(watching) ?? []);
+    set.add(viewerPeerId);
+    next.set(watching, set);
+  }
+  transportState.transmissionViewers = next;
 }
 
 function _handleCallPresence(
@@ -1214,6 +1237,7 @@ _transport.on("connect", (peerId) => {
   _sendRoomName(peerId);
   if (transportState.inCall) _sendCallPresence(peerId);
   if (transportState.inCall) _sendCallState(peerId);
+  if (transportState.inCall) _sendWatchPresence(peerId);
   _sendDigest(peerId);
   const selfDid = identityStore.did ?? _transport.selfId();
   const participants = [...new Set([...transportState.roomUsers, selfDid])];
@@ -1241,6 +1265,14 @@ _transport.on("disconnect", (peerId) => {
   const parts = new Map(transportState.participants);
   parts.delete(peerId);
   transportState.participants = parts;
+
+  // Gone peers neither watch nor share.
+  _handleWatchPresence(peerId, null);
+  if (transportState.transmissionViewers.has(peerId)) {
+    const viewers = new Map(transportState.transmissionViewers);
+    viewers.delete(peerId);
+    transportState.transmissionViewers = viewers;
+  }
 
   // A peer that drops out never sends a leave, so the chime belongs here too.
   const calls = new Set(transportState.callPeerIds);
@@ -1440,6 +1472,9 @@ _transport.on("message", (peerId, data, room) => {
         break;
       case MessageType.CallState:
         _handleCallState(peerId, msg);
+        break;
+      case MessageType.WatchPresence:
+        _handleWatchPresence(peerId, msg.watching);
         break;
       case MessageType.RoomName:
         _handleRoomName(msg, room);

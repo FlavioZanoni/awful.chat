@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { Tip } from "$lib/components/ui/tooltip";
+  import { formatReactorNames } from "$lib/reaction-names";
   import GifImage from "./GifImage.svelte";
   import { RELAY_TIP } from "$lib/copy";
   import { openDmConversation } from "$lib/transport/dm.svelte";
@@ -35,6 +36,7 @@
   } from "$lib/transport/call.svelte";
 
   import {
+    Eye,
     Mic,
     MicOff,
     Camera,
@@ -101,6 +103,21 @@
   function getPeerLabel(peerId: string): string {
     const did = peerIdToDid(peerId);
     return peerNames.get(did) ?? peerNames.get(peerId) ?? peerId.slice(0, 8);
+  }
+
+  function transmissionAudience(sharerPeerId: string): {
+    count: number;
+    label: string;
+  } {
+    const remote = [
+      ...(transportState.transmissionViewers.get(sharerPeerId) ?? []),
+    ];
+    const self =
+      transportState.watchingTransmissionPeerId === sharerPeerId;
+    return {
+      count: remote.length + (self ? 1 : 0),
+      label: formatReactorNames(remote.map(getPeerLabel), self),
+    };
   }
 
   function getPeerAvatar(peerId: string): string | null {
@@ -734,6 +751,23 @@
           {tile.label.charAt(0).toUpperCase()}
         {/if}
       </div>
+    {/if}
+
+    {#if tile.kind === "screen" || tile.kind === "transmission" || isPendingTx}
+      {@const audience = transmissionAudience(tile.peerId)}
+      {#if audience.count > 0}
+        <Tip text={audience.label}>
+          {#snippet children(props)}
+            <div
+              {...props}
+              class="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-mono text-white"
+            >
+              <Eye class="size-3" />
+              {audience.count}
+            </div>
+          {/snippet}
+        </Tip>
+      {/if}
     {/if}
 
     <!-- Pending transmission overlay - "Click to watch" -->
