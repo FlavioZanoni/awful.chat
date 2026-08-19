@@ -17,6 +17,7 @@
   } from "$lib/audio/volume-curve";
   import {
     transportState,
+    _transport,
     selfId,
     peerIdToDid,
     isRelayed,
@@ -74,6 +75,8 @@
     peerId: string;
     muted?: boolean;
     deafened?: boolean;
+    /** Announced in the call but their voice link is not up yet. */
+    connecting?: boolean;
     /** True when this is a screen-share transmission tile that hasn't been joined yet. */
     isPending?: boolean;
     /** The SFU producerId - only set on pending transmission tiles. */
@@ -233,6 +236,28 @@
   const SPEAKING_ON = 5;
   const SPEAKING_OFF = 2;
   const lastLoudAt = new Map<string, number>();
+
+  // Peers whose voice ICE actually completed - a roster tile without a track
+  // AND without this is still connecting, and must not render as present.
+  let iceConnectedPeers = $state(new Set<string>());
+  $effect(() => {
+    const onStatus = (st: { type: string; peerId?: string }) => {
+      if (st.type === "voice-ice-connected" && st.peerId) {
+        iceConnectedPeers = new Set([...iceConnectedPeers, st.peerId]);
+      }
+      if (
+        (st.type === "voice-peer-left" ||
+          st.type === "voice-connection-failed") &&
+        st.peerId
+      ) {
+        const next = new Set(iceConnectedPeers);
+        next.delete(st.peerId);
+        iceConnectedPeers = next;
+      }
+    };
+    _transport?.on("status", onStatus);
+    return () => _transport?.off("status", onStatus);
+  });
 
   // Hoisted: allocating a fresh buffer per animation frame churned the GC.
   const speakerBuf = new Uint8Array(512);
@@ -411,6 +436,8 @@
         peerId,
         muted: remoteCallState?.muted,
         deafened: remoteCallState?.deafened,
+        connecting:
+          !p.audioTrack && !p.videoTrack && !iceConnectedPeers.has(peerId),
       });
     }
     if (localScreenTrack) {
@@ -698,6 +725,7 @@
     type="button"
     oncontextmenu={(e) => openPeerMenu(e, tile)}
     class="group relative flex items-center justify-center overflow-hidden rounded-lg bg-muted/30 cursor-pointer transition-shadow duration-200
+      {tile.connecting ? 'animate-pulse opacity-60' : ''}
       {isFocused ? 'w-full h-full' : ''}
       {compact ? 'aspect-video' : ''}
       {isSpeaking
