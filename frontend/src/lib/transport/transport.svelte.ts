@@ -254,6 +254,7 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
     sendReply,
     toggleReaction,
     sendFiles,
+    _handleCallPresence,
   };
 }
 
@@ -503,6 +504,45 @@ if (typeof window !== "undefined") {
         // Alive (liveness pings hold the connection) but silent: verify we
         // did not miss anything. One digest, a number per sender.
         _syncPeer(pid, true);
+      }
+    }
+
+    // Call-roster ghosts: an entry neither refreshed by presence heartbeats
+    // nor backed by a live voice link within the TTL is gone - remove it so
+    // the sidebar group and the call status stop counting a phantom.
+    if (transportState.callPeerRooms.size > 0) {
+      const live = new Set(_voice?.activePeers() ?? []);
+      const now = Date.now();
+      let purged = false;
+      const roomNext = new Map(transportState.callPeerRooms);
+      const idsNext = new Set(transportState.callPeerIds);
+      const statesNext = new Map(transportState.callPeerStates);
+      for (const [pid] of transportState.callPeerRooms) {
+        if (live.has(pid)) {
+          _callPeerSeen.set(pid, now);
+          continue;
+        }
+        const seen = _callPeerSeen.get(pid) ?? 0;
+        if (seen === 0) {
+          // Pre-TTL entry (or restored state): start its clock now.
+          _callPeerSeen.set(pid, now);
+          continue;
+        }
+        if (now - seen > CALL_PRESENCE_TTL_MS) {
+          // For everyone still in the call this IS a disconnect - same
+          // chime as a drop, not a silent vanishing.
+          _peerCallSound(roomNext.get(pid), false, idsNext.has(pid));
+          roomNext.delete(pid);
+          idsNext.delete(pid);
+          statesNext.delete(pid);
+          _callPeerSeen.delete(pid);
+          purged = true;
+        }
+      }
+      if (purged) {
+        transportState.callPeerRooms = roomNext;
+        transportState.callPeerIds = idsNext;
+        transportState.callPeerStates = statesNext;
       }
     }
 
@@ -872,6 +912,15 @@ export function _handleWatchPresence(
   transportState.transmissionViewers = next;
 }
 
+/**
+ * When a call-roster entry was last confirmed alive: presence or call-state
+ * heard, or the peer's voice link actually up. Entries older than the TTL
+ * are ghosts (wedged app, backgrounded PWA whose leave never arrived) and
+ * get swept by the repair tick.
+ */
+const _callPeerSeen = new Map<string, number>();
+const CALL_PRESENCE_TTL_MS = 60_000;
+
 function _handleCallPresence(
   peerId: string,
   inCall: boolean,
@@ -885,8 +934,10 @@ function _handleCallPresence(
   if (inCall && roomCode) {
     next.add(peerId);
     roomNext.set(peerId, roomCode);
+    _callPeerSeen.set(peerId, Date.now());
     _peerCallSound(roomCode, true, wasInCall);
   } else {
+    _callPeerSeen.delete(peerId);
     next.delete(peerId);
     roomNext.delete(peerId);
     _peerCallSound(theirRoom, false, wasInCall);
@@ -918,6 +969,9 @@ function _handleCallPresence(
 }
 
 function _handleCallState(peerId: string, msg: WireCallState): void {
+  if (transportState.callPeerRooms.has(peerId)) {
+    _callPeerSeen.set(peerId, Date.now());
+  }
   const next = new Map(transportState.callPeerStates);
   next.set(peerId, {
     muted: !!msg.muted,
