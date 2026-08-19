@@ -213,8 +213,8 @@
   // ring strobe. Hold it on briefly after the last loud frame, and use a lower
   // threshold to stay on than to switch on.
   const SPEAKING_HOLD_MS = 500;
-  const SPEAKING_ON = 8;
-  const SPEAKING_OFF = 4;
+  const SPEAKING_ON = 5;
+  const SPEAKING_OFF = 2;
   const lastLoudAt = new Map<string, number>();
 
   // Hoisted: allocating a fresh buffer per animation frame churned the GC.
@@ -1071,7 +1071,7 @@
           </div>
         </div>
       {:else}
-        <div class="flex items-end gap-4">
+        <div class="flex items-center gap-4">
           <div
             class={cn(
               "flex gap-2",

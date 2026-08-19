@@ -14,6 +14,16 @@ sleep 3
 for spec in "9307:p1" "9308:p2" "9309:p3"; do
   port="${spec%%:*}"; prof="${spec##*:}"
   mkdir -p "$DIR/$prof"
+  # Fake media devices so voice calls work headless: getUserMedia succeeds
+  # without a prompt and the fake mic emits a tone (which conveniently
+  # triggers the speaking detector in tests).
+  cat > "$DIR/$prof/user.js" <<'PREFS'
+user_pref("media.navigator.streams.fake", true);
+user_pref("media.navigator.permission.disabled", true);
+user_pref("media.autoplay.default", 0);
+user_pref("media.autoplay.blocking_policy", 0);
+user_pref("media.autoplay.block-webaudio", false);
+PREFS
   setsid /usr/lib/firefox/firefox --headless --profile "$DIR/$prof" \
     --remote-debugging-port="$port" >"$DIR/$prof.log" 2>&1 </dev/null &
 done

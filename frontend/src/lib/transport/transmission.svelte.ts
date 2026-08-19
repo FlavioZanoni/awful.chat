@@ -1,9 +1,10 @@
 import {
   playTransmissionEndedSound,
+  playScreenShareStartSound,
   playTransmissionJoinSound,
   playTransmissionLeaveSound,
 } from "$lib/sounds";
-import { transportState } from "./transport.svelte";
+import { transportState, _transport } from "./transport.svelte";
 import type { MediasoupVideo } from "./mediasoup";
 
 let _video: MediasoupVideo | null = null;
@@ -99,6 +100,15 @@ _video.on("trackRemoved", (peerId, source) => {
   });
 
   _video.on("transmissionAvailable", (peerId, producerId) => {
+    // A share appearing is news to everyone in the call - same idea as the
+    // join chime. Only on a NEW share, not on producer-id churn.
+    if (
+      transportState.inCall &&
+      peerId !== _transport.selfId() &&
+      !transportState.pendingTransmissions.has(peerId)
+    ) {
+      playScreenShareStartSound();
+    }
     transportState.pendingTransmissions = new Map(
       transportState.pendingTransmissions
     ).set(peerId, producerId);

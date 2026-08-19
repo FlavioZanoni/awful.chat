@@ -99,7 +99,9 @@
     };
 
     const handleTrackAdded = () => {
-      quality = "p2p";
+      // A track is proof of connection but says nothing about the path -
+      // never overwrite the ICE event's relayed verdict with "p2p".
+      if (quality === "connecting" || quality === "degraded") quality = "p2p";
     };
 
     const handleTrackRemoved = () => {
@@ -121,8 +123,44 @@
 
   onDestroy(() => handlers.forEach((h) => h()));
 
+  // "Connected" used to flip on the FIRST peer while the rest were still
+  // handshaking - true for one friend, false for the call. Compare who is
+  // actually connected against who announced they are in this call.
+  let activeCount = $state(0);
+  let expectedCount = $state(0);
+
+  $effect(() => {
+    const tick = setInterval(() => {
+      if (!transportState.inCall) return;
+      activeCount = _voice?.activePeers().length ?? 0;
+      let expected = 0;
+      const self = _transport?.selfId();
+      for (const [pid, room] of transportState.callPeerRooms) {
+        if (room === transportState.callRoomCode && pid !== self) expected++;
+      }
+      expectedCount = expected;
+    }, 1000);
+    return () => clearInterval(tick);
+  });
+
   const deafened = $derived(transportState.deafened ?? false);
-  const config = $derived(getStatusConfig(quality));
+  const config = $derived.by(() => {
+    const base = getStatusConfig(quality);
+    if (quality === "failed" || quality === "degraded") return base;
+    if (expectedCount === 0) {
+      return { ...getStatusConfig("connecting"), label: "Waiting for others" };
+    }
+    if (activeCount === 0) return getStatusConfig("connecting");
+    if (activeCount < expectedCount) {
+      return {
+        ...getStatusConfig("connecting"),
+        label: `Connecting ${activeCount}/${expectedCount}...`,
+      };
+    }
+    // Everyone announced is connected; if the ICE event was missed, the
+    // active peers are still proof enough.
+    return quality === "connecting" ? getStatusConfig("p2p") : base;
+  });
   const StatusIcon = $derived(config.icon);
 </script>
 
