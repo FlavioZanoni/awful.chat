@@ -17,7 +17,13 @@
   import { profileStore, loadProfile } from "$lib/profile.svelte";
   import GifImage from "./GifImage.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
-  import { UserPlus, UserRoundMinus, Users, Workflow } from "@lucide/svelte";
+  import {
+    Headphones,
+    UserPlus,
+    UserRoundMinus,
+    Users,
+    Workflow,
+  } from "@lucide/svelte";
   import { roomsStore, refreshPhonebook } from "$lib/rooms.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Tip } from "$lib/components/ui/tooltip";
@@ -46,6 +52,7 @@
     isOnline: boolean;
     isSelf: boolean;
     isRelayed: boolean;
+    inCall: boolean;
   }
 
   const roomUsers = $derived(transportState.roomUsers);
@@ -97,6 +104,16 @@
         avatarUrl = peerAvatars.get(nameKey) || peerAvatars.get(did) || null;
       }
 
+      // In a call in THIS room: presence is announced per peer, self via
+      // local state. Grouped separately in the list, like a voice channel.
+      const inCall = isSelf
+        ? transportState.inCall &&
+          transportState.callRoomCode === transportState.roomCode
+        : (!!mappedPeerId &&
+            transportState.callPeerRooms.get(mappedPeerId) ===
+              transportState.roomCode) ||
+          transportState.callPeerRooms.get(did) === transportState.roomCode;
+
       allUsers.push({
         did,
         peerId: mappedPeerId,
@@ -105,6 +122,7 @@
         isOnline,
         isSelf,
         isRelayed: userIsRelayed,
+        inCall,
       });
     }
 
@@ -117,8 +135,9 @@
     });
   });
 
-  const onlineUsers = $derived(users.filter((u) => u.isOnline));
-  const offlineUsers = $derived(users.filter((u) => !u.isOnline));
+  const inCallUsers = $derived(users.filter((u) => u.inCall));
+  const onlineUsers = $derived(users.filter((u) => u.isOnline && !u.inCall));
+  const offlineUsers = $derived(users.filter((u) => !u.isOnline && !u.inCall));
 
   let isMobile = $state(false);
 
@@ -297,8 +316,10 @@
           </Tip>
         {/if}
       </div>
-      <div class="text-xs text-muted-foreground truncate">
-        {user.isOnline ? "Online" : "Offline"}
+      <div class="text-xs truncate {user.inCall
+          ? 'text-primary'
+          : 'text-muted-foreground'}">
+        {user.inCall ? "In call" : user.isOnline ? "Online" : "Offline"}
       </div>
     </div>
   </div>
@@ -321,6 +342,23 @@
         No users in this room
       </div>
     {:else}
+      {#if inCallUsers.length > 0}
+        <div class="rounded-lg border border-primary/20 bg-primary/5 pb-1 mb-2">
+          <div class="flex items-center gap-2 px-2 py-1.5">
+            <Headphones class="size-3.5 text-primary" />
+            <span
+              class="text-xs font-semibold text-primary uppercase tracking-wider font-mono"
+              >In call</span
+            >
+            <Badge variant="secondary" class="text-muted-foreground"
+              >{inCallUsers.length}</Badge
+            >
+          </div>
+          {#each inCallUsers as user (user.did)}
+            {@render UserItem(user)}
+          {/each}
+        </div>
+      {/if}
       {#if onlineUsers.length > 0}
         {@render SectionDivider("Online", onlineUsers.length)}
         {#each onlineUsers as user (user.did)}

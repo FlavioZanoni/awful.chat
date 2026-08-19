@@ -32,6 +32,16 @@ try {
     { timeout: 60000 });
   check.ok(true, "reaches Connected once the peer's voice link is up");
 
+  // The users sidebar groups call members into an "In call" container.
+  await alice.clickLabel("Toggle user list");
+  await alice.waitFor("in-call group", () => alice.eval(`(() => {
+    const t = document.body.innerText;
+    if (!/In call/.test(t)) return null;
+    const inCallLines = t.split(String.fromCharCode(10)).filter((l) => l.trim() === 'In call').length;
+    return inCallLines >= 2 ? true : null;
+  })()`), { timeout: 20000 });
+  check.ok(true, "sidebar groups both members under 'In call'");
+
   // The local mic pipeline is live: the fake mic emits a tone, so our own
   // speaking ring must be on.
   await alice.waitFor("own speaking ring", () =>
