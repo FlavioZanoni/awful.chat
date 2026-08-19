@@ -254,6 +254,7 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
     sendReply,
     toggleReaction,
     sendFiles,
+    sendMessage,
     _handleCallPresence,
   };
 }

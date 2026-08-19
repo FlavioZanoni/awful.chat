@@ -42,6 +42,13 @@ try {
     { timeout: 20000 });
   check.ok(true, "pending peer's tile pulses instead of posing as connected");
 
+  // The members chip lives in the panel's top-right cluster, so it stays
+  // visible in fullscreen too - and lists everyone in the call.
+  await alice.waitFor("members chip", () =>
+    alice.eval(`(document.querySelector('[aria-label="Call members"]')?.textContent ?? '').includes('2') || null`),
+    { timeout: 15000 });
+  check.ok(true, "call members chip shows both members in the panel");
+
   // The users sidebar groups call members into an "In call" container.
   await alice.clickLabel("Toggle user list");
   await alice.waitFor("in-call group", () => alice.eval(`(() => {

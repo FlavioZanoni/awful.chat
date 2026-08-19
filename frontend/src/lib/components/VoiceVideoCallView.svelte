@@ -55,7 +55,7 @@
     VolumeX,
     Workflow,
   } from "@lucide/svelte";
-  import { MessageSquare, MonitorIcon } from "@lucide/svelte";
+  import { MessageSquare, MonitorIcon, Users as UsersIcon } from "@lucide/svelte";
   import { profileStore, loadProfile } from "$lib/profile.svelte";
   import { cn } from "$lib/utils";
   import { Slider } from "./ui/slider";
@@ -107,6 +107,14 @@
     const did = peerIdToDid(peerId);
     return peerNames.get(did) ?? peerNames.get(peerId) ?? peerId.slice(0, 8);
   }
+
+  const callMembers = $derived.by(() => {
+    const names = [...callPeerIds].map(getPeerLabel);
+    return {
+      count: names.length + (transportState.inCall ? 1 : 0),
+      label: formatReactorNames(names, transportState.inCall),
+    };
+  });
 
   function transmissionAudience(sharerPeerId: string): {
     count: number;
@@ -1257,6 +1265,21 @@
         </div>
       {/if}
     </div>
+
+    {#if callMembers.count > 0}
+      <Tip text={callMembers.label}>
+        {#snippet children(props)}
+          <div
+            {...props}
+            aria-label="Call members"
+            class="absolute top-3 right-12 sm:top-4 sm:right-16 z-20 flex h-8 sm:h-10 items-center gap-1.5 rounded-lg bg-zinc-900 px-2.5 font-mono text-xs text-zinc-300"
+          >
+            <UsersIcon class="size-4" />
+            {callMembers.count}
+          </div>
+        {/snippet}
+      </Tip>
+    {/if}
 
     <button
       type="button"
