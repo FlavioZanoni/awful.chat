@@ -38,7 +38,7 @@ try {
   check.ok(true, "status shows Connecting while the peer's link is pending");
 
   await alice.waitFor("connecting tile pulses", () =>
-    alice.eval(`document.querySelector('[class*="animate-pulse"][class*="rounded-lg"]') ? true : null`),
+    alice.eval(`document.querySelector('[class*="connecting-wave"]') ? true : null`),
     { timeout: 20000 });
   check.ok(true, "pending peer's tile pulses instead of posing as connected");
 

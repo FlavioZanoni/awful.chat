@@ -733,7 +733,7 @@
     type="button"
     oncontextmenu={(e) => openPeerMenu(e, tile)}
     class="group relative flex items-center justify-center overflow-hidden rounded-lg bg-muted/30 cursor-pointer transition-shadow duration-200
-      {tile.connecting ? 'animate-pulse opacity-60' : ''}
+      {tile.connecting ? 'connecting-wave' : ''}
       {isFocused ? 'w-full h-full' : ''}
       {compact ? 'aspect-video' : ''}
       {isSpeaking
@@ -1354,3 +1354,20 @@
     </div>
   </div>
 {/if}
+
+<style>
+  /* Connecting tiles: a pronounced opacity wave - Tailwind's pulse was too
+     subtle to read as "not here yet". */
+  .connecting-wave {
+    animation: connecting-wave 1.4s ease-in-out infinite;
+  }
+  @keyframes connecting-wave {
+    0%,
+    100% {
+      opacity: 0.9;
+    }
+    50% {
+      opacity: 0.2;
+    }
+  }
+</style>
