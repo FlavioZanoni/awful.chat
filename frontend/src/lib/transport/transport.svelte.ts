@@ -1284,6 +1284,12 @@ _transport.on("disconnect", (peerId) => {
   calls.delete(peerId);
   transportState.callPeerIds = calls;
 
+  // The roster too: every other call map is cleaned here, and a stale entry
+  // kept the status stuck at "Connecting x/y" after someone dropped out.
+  const callRoomsNext = new Map(transportState.callPeerRooms);
+  callRoomsNext.delete(peerId);
+  transportState.callPeerRooms = callRoomsNext;
+
   const callStates = new Map(transportState.callPeerStates);
   callStates.delete(peerId);
   transportState.callPeerStates = callStates;

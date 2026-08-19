@@ -49,6 +49,18 @@ try {
     { timeout: 15000 });
   check.ok(true, "local mic pipeline live (own speaking ring on)");
 
+  // A peer leaving on purpose must not leave the status stuck at
+  // "Connecting 1/2..." - the roster shrinks and alice goes back to waiting.
+  await bob.clickLabel("Leave call");
+  await bob.waitFor("bob left", () =>
+    bob.eval(`window.__awful.state.inCall === false || null`));
+  await alice.waitFor("status back to waiting", () => alice.eval(`(() => {
+    const t = document.body.innerText;
+    return /Waiting for others/.test(t) && t.indexOf('Connecting 1/2') === -1
+      ? true : null;
+  })()`), { timeout: 30000 });
+  check.ok(true, "leaver drops out of the roster; no stuck Connecting 1/2");
+
   check.finish();
 } finally {
   await closeAll([alice, bob]);
