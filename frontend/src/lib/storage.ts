@@ -509,17 +509,11 @@ export async function getAttachmentsWithData(
   roomCode: string
 ): Promise<Attachment[]> {
   const database = await getDB();
-  const all = await database.getAllFromIndex(
-    "attachments",
-    "byStatus",
-    "complete"
-  );
-  const maybeSeeding = await database.getAllFromIndex(
-    "attachments",
-    "byStatus",
-    "seeding"
-  );
-  return [...all, ...maybeSeeding].filter(
+  // Select by the bytes, not the status: rows written before the status
+  // rank guards could be stuck at "downloading"/"failed" WITH data present,
+  // and filtering on status made those images unrenderable forever.
+  const all = await database.getAll("attachments");
+  return all.filter(
     (attachment) => attachment.roomCode === roomCode && !!attachment.data
   );
 }

@@ -139,6 +139,79 @@ try {
   const bobSees = await bob.eval(`window.__awful.state.messages.some((m) => m.type === 'file')`);
   check.ok(bobSees === true, "receiver renders the file while viewing the dm");
 
+  // ── Reply cancel: Escape and the X both back out ──
+  await alice.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.title === 'Reply');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`);
+  await alice.waitFor("reply banner", () =>
+    alice.eval(`/Replying to/.test(document.body.innerText) || null`));
+  await alice.eval(`(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    return true;
+  })()`);
+  await alice.waitFor("reply cancelled by escape", () =>
+    alice.eval(`!/Replying to/.test(document.body.innerText) || null`));
+  check.ok(true, "escape cancels the reply");
+
+  await alice.eval(`(() => {
+    [...document.querySelectorAll('button')].find((b) => b.title === 'Reply')?.click();
+    return true;
+  })()`);
+  await alice.waitFor("reply banner again", () =>
+    alice.eval(`/Replying to/.test(document.body.innerText) || null`));
+  await alice.eval(`(() => {
+    [...document.querySelectorAll('button')].find(
+      (b) => b.getAttribute('aria-label') === 'Cancel reply')?.click();
+    return true;
+  })()`);
+  await alice.waitFor("reply cancelled by x", () =>
+    alice.eval(`!/Replying to/.test(document.body.innerText) || null`));
+  check.ok(true, "the X cancels the reply");
+
+  // ── A saved image still renders after a reload (DM hydration) ──
+  await alice.eval(`(() => {
+    const png = Uint8Array.from(atob(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    ), (c) => c.charCodeAt(0));
+    const file = new File([png], 'tiny.png', { type: 'image/png' });
+    window.__awful.sendFiles([file], '');
+    return true;
+  })()`);
+  await alice.waitFor("image rendered live", () =>
+    alice.eval(`!!document.querySelector('img[src^="blob:"]') || null`));
+  await alice.go("/app");
+  // No network wait needed: the DM row and its opening resolve from storage
+  // (participantDid is a DID), so this tests hydration, not reconnection.
+  // Through the real UI: the DMs tab row is what a user clicks after reload.
+  // Two steps - the row only exists once the tab has rendered.
+  await alice.waitFor("dm row visible", async () => {
+    // The tab click toggles: only click when the DM list is not showing,
+    // or every retry flips it straight back to Rooms.
+    await alice.eval(`(() => {
+      const showing = [...document.querySelectorAll('aside button')].some((b) => /Bob/.test(b.innerText));
+      if (!showing) {
+        [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'DMs')?.click();
+      }
+      return true;
+    })()`);
+    return alice.eval(
+      `[...document.querySelectorAll('aside button')].some((b) => /Bob/.test(b.innerText)) || null`);
+  });
+  await alice.waitFor("dm reopened", async () => {
+    await alice.eval(`(() => {
+      [...document.querySelectorAll('aside button')].find((b) => /Bob/.test(b.innerText))?.click();
+      return true;
+    })()`);
+    return alice.eval(`window.__awful.state.chatMode === 'dm' || null`);
+  });
+  await alice.waitFor("saved image renders after reload", () =>
+    alice.eval(`!!document.querySelector('img[src^="blob:"]') || null`),
+    { timeout: 20000 });
+  check.ok(true, "saved image hydrates and renders after a reload");
+
   check.finish();
 } finally {
   await closeAll([alice, bob]);

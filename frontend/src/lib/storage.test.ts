@@ -23,6 +23,8 @@ import {
   putOwnProfile,
   updateOwnProfile,
   getAllMessages,
+  getAttachmentsWithData,
+  getDB,
 } from "./storage";
 import { MessageType, type Message } from "./types/message";
 
@@ -275,5 +277,36 @@ describe("history pagination", () => {
     expect(all).toHaveLength(120);
     expect(all[0].lamport).toBe(1);
     expect(all[119].lamport).toBe(120);
+  });
+});
+
+describe("getAttachmentsWithData", () => {
+  it("returns saved bytes even when the status is stuck pre-complete", async () => {
+    const db = await getDB();
+    await db.put("attachments", {
+      id: "att-stuck",
+      roomCode: "room-att",
+      messageId: "m-att",
+      filename: "pic.png",
+      mimeType: "image/png",
+      size: 3,
+      infoHash: "hash-stuck",
+      status: "downloading",
+      createdAt: 1,
+      data: new Uint8Array([1, 2, 3]).buffer,
+    });
+    await db.put("attachments", {
+      id: "att-empty",
+      roomCode: "room-att",
+      messageId: "m-att2",
+      filename: "no-data.png",
+      mimeType: "image/png",
+      size: 3,
+      infoHash: "hash-empty",
+      status: "complete",
+      createdAt: 2,
+    });
+    const withData = await getAttachmentsWithData("room-att");
+    expect(withData.map((a) => a.id)).toEqual(["att-stuck"]);
   });
 });

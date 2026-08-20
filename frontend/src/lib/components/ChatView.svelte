@@ -584,7 +584,14 @@
 
   $effect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || stagedFiles.length === 0) return;
+      if (e.key !== "Escape") return;
+      // A reply in progress is the most immediate thing to back out of.
+      if (replyTargetId) {
+        e.preventDefault();
+        replyTargetId = null;
+        return;
+      }
+      if (stagedFiles.length === 0) return;
       e.preventDefault();
       clearStagedFiles();
     };
@@ -1341,11 +1348,12 @@
         </div>
         <button
           type="button"
-          class="size-5 inline-flex items-center justify-center rounded hover:bg-muted cursor-pointer"
+          class="size-6 shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
           onclick={() => (replyTargetId = null)}
           aria-label="Cancel reply"
+          title="Cancel reply (Esc)"
         >
-          <X class="size-3.5" />
+          <X class="size-4" />
         </button>
       </div>
     </div>

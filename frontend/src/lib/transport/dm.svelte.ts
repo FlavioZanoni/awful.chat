@@ -20,6 +20,7 @@ import {
 import { MessageType, type Message } from "$lib/types/message";
 import { signMessage } from "$lib/messaging";
 import { leaveCall } from "./call.svelte";
+import { _hydrateFileTransfersFromStorage } from "./files.svelte";
 import {
   appendSorted,
   beginConversationOpen,
@@ -177,6 +178,10 @@ export async function openDmConversation(
   if (!stillCurrent()) return false;
   _transport.joinRoom(roomCode);
   await _loadHistory(roomCode, stillCurrent);
+  // Rooms rebuild blob URLs for saved attachments on join; DMs never did,
+  // so an image saved last night rendered as a bare file card after a
+  // reload even though its bytes sat in storage.
+  await _hydrateFileTransfersFromStorage(roomCode).catch(() => {});
   if (!stillCurrent()) return false;
   transportState.chatMode = "dm";
   transportState.activeDmPeerId = resolvedPeerId;
