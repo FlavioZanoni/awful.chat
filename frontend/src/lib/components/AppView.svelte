@@ -36,6 +36,7 @@
     type PhonebookEntry,
   } from "$lib/storage";
   import { loadProfile } from "$lib/profile.svelte";
+import { displayPrefs } from "$lib/display-prefs.svelte";
   import { consumeLatestSharedPayload } from "$lib/share-target";
   import ReloadPrompt from "./ReloadPrompt.svelte";
   import InstallPrompt from "./InstallPrompt.svelte";
@@ -476,6 +477,16 @@
     await refreshPhonebook();
   }
 
+  /** User-picked nickname color for a contact row, if the peer has one. */
+  function colorForPeer(peerId: string): string | undefined {
+    if (!displayPrefs.showPeerNicknameColors) return undefined;
+    const did = peerIdToDid(peerId);
+    return (
+      transportState.peerColors.get(peerId) ??
+      (did ? transportState.peerColors.get(did) : undefined)
+    );
+  }
+
   async function removePhonebookContact(peerId: string) {
     await removeFromPhonebook(peerId);
     await refreshPhonebook();
@@ -815,6 +826,7 @@
                 >
                   <div
                     class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold font-mono flex items-center justify-center shrink-0"
+                    style={colorForPeer(entry.peerId) ? `color: ${colorForPeer(entry.peerId)}` : ""}
                   >
                     {#if entry.avatarUrl}
                       <GifImage
@@ -835,7 +847,10 @@
                       handleSelectDm(contactId);
                     }}
                   >
-                    <div class="truncate text-sm font-medium">
+                    <div
+                      class="truncate text-sm font-medium"
+                      style={colorForPeer(entry.peerId) ? `color: ${colorForPeer(entry.peerId)}` : ""}
+                    >
                       {entry.nickname}
                     </div>
                     <div class="truncate text-xs text-muted-foreground">
@@ -876,6 +891,7 @@
                 >
                   <div
                     class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold font-mono flex items-center justify-center shrink-0"
+                    style={colorForPeer(entry.peerId) ? `color: ${colorForPeer(entry.peerId)}` : ""}
                   >
                     {#if entry.avatarUrl}
                       <GifImage
@@ -896,7 +912,10 @@
                       handleSelectDm(contactId);
                     }}
                   >
-                    <div class="truncate text-sm font-medium">
+                    <div
+                      class="truncate text-sm font-medium"
+                      style={colorForPeer(entry.peerId) ? `color: ${colorForPeer(entry.peerId)}` : ""}
+                    >
                       {entry.nickname}
                     </div>
                     <div class="truncate text-xs text-muted-foreground">
@@ -963,6 +982,7 @@
                   >
                     <div
                       class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold font-mono flex items-center justify-center shrink-0"
+                      style={colorForPeer(entry.peerId) ? `color: ${colorForPeer(entry.peerId)}` : ""}
                     >
                       {#if entry.avatarUrl}
                         <GifImage
@@ -983,7 +1003,10 @@
                         handleSelectDm(contactId);
                       }}
                     >
-                      <div class="truncate text-sm font-medium">
+                      <div
+                        class="truncate text-sm font-medium"
+                        style={colorForPeer(entry.peerId) ? `color: ${colorForPeer(entry.peerId)}` : ""}
+                      >
                         {entry.nickname}
                       </div>
                       <div class="truncate text-xs text-muted-foreground">
@@ -1029,6 +1052,7 @@
                   >
                     <div
                       class="size-8 rounded-full overflow-hidden bg-secondary text-secondary-foreground text-xs font-semibold font-mono flex items-center justify-center shrink-0"
+                      style={colorForPeer(entry.peerId) ? `color: ${colorForPeer(entry.peerId)}` : ""}
                     >
                       {#if entry.avatarUrl}
                         <GifImage
@@ -1049,7 +1073,10 @@
                         handleSelectDm(contactId);
                       }}
                     >
-                      <div class="truncate text-sm font-medium">
+                      <div
+                        class="truncate text-sm font-medium"
+                        style={colorForPeer(entry.peerId) ? `color: ${colorForPeer(entry.peerId)}` : ""}
+                      >
                         {entry.nickname}
                       </div>
                       <div class="truncate text-xs text-muted-foreground">

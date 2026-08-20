@@ -12,6 +12,8 @@
   import GifImage from "./GifImage.svelte";
   import { Tip } from "$lib/components/ui/tooltip";
   import CallStatus from "./CallStatus.svelte";
+  import { transportState, peerIdToDid } from "$lib/transport/transport.svelte";
+  import { displayPrefs } from "$lib/display-prefs.svelte";
 
   interface DmPreview {
     text: string;
@@ -109,6 +111,14 @@
     dmContextMenu = null;
     confirmingRemove = false;
     confirmingRemoveDm = false;
+  }
+
+  const peerColors = $derived(transportState.peerColors);
+
+  function colorForPeer(peerId: string): string | undefined {
+    const did = peerIdToDid(peerId);
+    if (!displayPrefs.showPeerNicknameColors) return undefined;
+    return peerColors.get(peerId) ?? (did ? peerColors.get(did) : undefined);
   }
 
   // Deleting a room or conversation destroys its stored history, so it takes
@@ -335,6 +345,9 @@
           >
             <div
               class="mt-px flex size-6 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground text-xs font-semibold font-mono"
+              style={colorForPeer(entry.peerId)
+                ? `color: ${colorForPeer(entry.peerId)}`
+                : ""}
             >
               {#if entry.avatarUrl}
                 <GifImage
@@ -348,7 +361,12 @@
               {/if}
             </div>
             <div class="min-w-0 flex-1">
-              <div class="truncate text-sm font-medium font-mono">
+              <div
+                class="truncate text-sm font-medium font-mono"
+                style={colorForPeer(entry.peerId)
+                  ? `color: ${colorForPeer(entry.peerId)}`
+                  : ""}
+              >
                 {entry.nickname}
               </div>
               <div class="truncate text-xs opacity-60 font-mono">

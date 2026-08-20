@@ -21,6 +21,7 @@
     selfId,
     peerIdToDid,
     isRelayed,
+    peerId as selfPeerId,
   } from "$lib/transport/transport.svelte";
   import {
     setTransmissionOutputVolume,
@@ -56,8 +57,9 @@
     Workflow,
   } from "@lucide/svelte";
   import { MessageSquare, MonitorIcon, Users as UsersIcon } from "@lucide/svelte";
-  import { profileStore, loadProfile } from "$lib/profile.svelte";
-  import { cn } from "$lib/utils";
+import { profileStore, loadProfile } from "$lib/profile.svelte";
+import { displayPrefs } from "$lib/display-prefs.svelte";
+import { cn } from "$lib/utils";
   import { Slider } from "./ui/slider";
 
   $effect(() => {
@@ -134,6 +136,19 @@
   function getPeerAvatar(peerId: string): string | null {
     const did = peerIdToDid(peerId);
     return peerAvatars.get(did) ?? peerAvatars.get(peerId) ?? null;
+  }
+
+  function getPeerColor(peerId: string): string | null {
+    if (peerId === selfId() || peerId === selfPeerId()) {
+      return profileStore.color ?? null;
+    }
+    if (!displayPrefs.showPeerNicknameColors) return null;
+    const did = peerIdToDid(peerId);
+    return (
+      transportState.peerColors.get(peerId) ??
+      (did ? transportState.peerColors.get(did) : undefined) ??
+      null
+    );
   }
 
   // ── Per-peer volume menu ──────────────────────────────────────────────────
@@ -729,6 +744,7 @@
 )}
   {@const hasVideo = tile.videoTrack !== null}
   {@const isPendingTx = tile.kind === "transmission" && tile.isPending}
+  {@const tileColor = getPeerColor(tile.peerId)}
   <button
     type="button"
     oncontextmenu={(e) => openPeerMenu(e, tile)}
@@ -775,6 +791,7 @@
           ? 'bg-primary/20 text-primary'
           : 'bg-secondary text-secondary-foreground'} font-semibold overflow-hidden font-mono transition-shadow duration-200
         {compact ? 'size-8 text-sm' : 'size-16 text-2xl'}"
+        style={tileColor ? `color: ${tileColor}` : ""}
       >
         {#if tile.avatarUrl}
           <GifImage
@@ -831,7 +848,10 @@
         {#if tile.kind === "camera" && tile.deafened}
           <HeadphoneOff class="size-3 text-red-400" />
         {/if}
-        <span class="text-xs mt-0.75 leading-none text-white font-mono">
+        <span
+          class="text-xs mt-0.75 leading-none text-white font-mono"
+          style={tileColor ? `color: ${tileColor}` : ""}
+        >
           {tile.kind === "transmission"
             ? `${tile.label}'s screen`
             : tile.isLocal

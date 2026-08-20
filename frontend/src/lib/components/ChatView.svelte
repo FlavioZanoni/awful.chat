@@ -31,6 +31,7 @@
   import EmojiPickerPopup from "./EmojiPickerPopup.svelte";
   import UserListSidebar from "./UserListSidebar.svelte";
   import { profileStore, loadProfile } from "$lib/profile.svelte";
+  import { displayPrefs } from "$lib/display-prefs.svelte";
   import { viewportHeight } from "$lib/actions/viewport-height";
   import {
     transportState,
@@ -99,6 +100,7 @@
     callPeerRooms,
     peerNames,
     peerAvatars,
+    peerColors,
     fileTransfers,
     connecting,
   } = $derived(transportState);
@@ -720,6 +722,12 @@
     );
   }
 
+  /** User-picked nickname color, keyed like names (by DID, peerId fallback). */
+  function senderColor(senderId: string): string | undefined {
+    if (!displayPrefs.showPeerNicknameColors) return undefined;
+    return peerColors.get(senderDid(senderId)) ?? peerColors.get(senderId);
+  }
+
   /** Live name wins over the one stored with the message, so a rename shows up
    *  on everything that person ever said, not just what they say next. */
   function displayNameFor(senderId: string, stored?: string): string {
@@ -1141,6 +1149,13 @@
                       {isOwn
                         ? 'bg-primary/20 text-primary'
                         : 'bg-secondary text-secondary-foreground'}"
+                      style={isOwn
+                        ? profileStore.color
+                          ? `color: ${profileStore.color}`
+                          : ""
+                        : senderColor(msg.senderId)
+                          ? `color: ${senderColor(msg.senderId)}`
+                          : ""}
                     >
                       {#if isOwn && profileStore.avatarUrl}
                         <img
@@ -1163,7 +1178,16 @@
                       <span
                         class="text-sm font-medium {isOwn
                           ? 'text-primary'
-                          : 'text-foreground'}"
+                          : 'text-foreground'} {isOwn && displayPrefs.italicOwnName
+                          ? 'italic'
+                          : ''}"
+                        style={isOwn
+                          ? profileStore.color
+                            ? `color: ${profileStore.color}`
+                            : ""
+                          : senderColor(msg.senderId)
+                            ? `color: ${senderColor(msg.senderId)}`
+                            : ""}
                       >
                         {isOwn
                           ? profileStore.nickname || "You"
