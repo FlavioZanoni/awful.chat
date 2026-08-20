@@ -24,7 +24,8 @@ interface WithTransportManager {
     transportManager: { listen(addrs: Multiaddr[]): Promise<void> };
   };
 }
-import type { PeerTransport, TransportEvents } from "../types";
+import type {
+  TransportStatus, PeerTransport, TransportEvents } from "../types";
 import {
   installFaultHook,
   shouldBlockDial,
@@ -1367,6 +1368,11 @@ export class LibP2PTransport implements PeerTransport {
 
   private async privateKeyFromRawKey(privateKeyBytes: Uint8Array) {
     return keys.generateKeyPairFromSeed("Ed25519", privateKeyBytes);
+  }
+
+  /** App-level toast through the same pipe the transport statuses use. */
+  announce(status: TransportStatus): void {
+    this.emit("status", status);
   }
 
   private emit<K extends keyof TransportEvents>(

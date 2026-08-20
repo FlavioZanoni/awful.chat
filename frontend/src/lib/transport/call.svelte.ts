@@ -239,10 +239,36 @@ export async function startScreenShare(): Promise<void> {
     throw new Error("Screen sharing is not supported on this device");
   }
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
+    // Game and media audio verbatim: mic-style processing (AEC, noise
+    // suppression, AGC) mangles music and adds nothing to a loopback
+    // capture. The extra hints are Chromium-only and ignored elsewhere:
+    // they surface the audio checkbox for screens, hide our own tab from
+    // the picker, and let the sharer switch surfaces mid-share.
+    const options = {
       video: { frameRate: { ideal: 15 } },
-      audio: true,
-    });
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+      systemAudio: "include",
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "include",
+    } as MediaStreamConstraints;
+    const stream = await navigator.mediaDevices.getDisplayMedia(options);
+    // Whole-screen audio loops the call itself back into the stream, so
+    // everyone hears their own voice with a delay. Window audio (Chrome or
+    // Edge on Windows) carries only that app's sound - tell the sharer.
+    const surface = stream
+      .getVideoTracks()[0]
+      ?.getSettings?.().displaySurface;
+    if (surface === "monitor" && stream.getAudioTracks().length > 0) {
+      _transport.announce({
+        type: "app-warning",
+        message:
+          "Sharing the whole screen sends ALL system audio - people will hear themselves. Share the game window instead (with 'Also share audio') to send only its sound.",
+      });
+    }
     transportState.localScreenStream = stream;
     transportState.screenSharing = true;
     playScreenShareStartSound();

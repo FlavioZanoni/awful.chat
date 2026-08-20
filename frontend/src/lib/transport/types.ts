@@ -6,6 +6,7 @@ export interface TransportEvents {
 }
 
 export type TransportStatus =
+  | { type: "app-warning"; message: string }
   | { type: "relay-connected"; message: string }
   | { type: "relay-disconnected"; message: string }
   | { type: "relay-dial-failed"; message: string }

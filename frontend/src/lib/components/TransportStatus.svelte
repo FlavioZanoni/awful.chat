@@ -94,6 +94,9 @@
     const handleStatus = (status: TransportStatus) => {
       if (status.type.startsWith("relay-")) sawRelayEvent = true;
       switch (status.type) {
+        case "app-warning":
+          addStatus("warning", status.message, CircleAlert);
+          break;
         case "relay-connected":
           addStatus("connected", status.message, Server);
           break;
