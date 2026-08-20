@@ -216,7 +216,7 @@
   <div
     class={cn(
       "fixed z-50 flex flex-col gap-2 max-w-sm",
-      "bottom-20 right-3.75",
+      "bottom-36 right-3.75",
       isVisible ? "opacity-100" : "opacity-0 pointer-events-none"
     )}
   >
@@ -277,7 +277,7 @@
 <!-- Toggle button when hidden -->
 {#if !isVisible && (peerCount > 0 || (!relayConnected && sawRelayEvent))}
   <button
-    class="fixed bottom-20 right-3.75 z-50 p-2 rounded-full bg-background border shadow-lg hover:bg-accent transition-colors"
+    class="fixed bottom-36 right-3.75 z-50 p-2 rounded-full bg-background border shadow-lg hover:bg-accent transition-colors"
     onclick={() => (isVisible = true)}
     aria-label="Show transport status"
   >
