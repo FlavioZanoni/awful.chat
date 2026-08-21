@@ -699,7 +699,18 @@ export class LibP2PVoice implements VoiceTransport {
       return;
     }
 
-    if (remote.pc.signalingState === "have-local-offer") return;
+    if (remote.pc.signalingState === "have-local-offer") {
+      // We already offered and the answer never came - almost certainly on the
+      // stream that just died. Returning here left the link to sit until the
+      // wedge timer rebuilt it from scratch; re-sending the offer we still
+      // hold costs one frame and usually settles it immediately.
+      const pending = remote.pc.localDescription;
+      if (pending?.sdp) {
+        this.debugStats.offersSent++;
+        this.sendSignal(peerId, { type: "offer", sdp: pending.sdp });
+      }
+      return;
+    }
 
     const offer = await remote.pc.createOffer();
     await remote.pc.setLocalDescription(offer);

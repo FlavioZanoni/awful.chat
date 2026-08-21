@@ -227,7 +227,20 @@ export const transportState = $state<TransportState>({
   callRoomCode: null,
 });
 
-let _lamport = 0;
+/**
+ * Lamport clock PER ROOM.
+ *
+ * It used to be a single counter shared by every non-DM room and absorbed from
+ * all of them, so somebody active in a busy room carried a large counter into a
+ * quiet one: their next message there outranked messages that were genuinely
+ * older, and two people posting at the same moment could be ordered by which
+ * of them had been busier elsewhere rather than by what happened first.
+ * Ordering is a per-room question, so the clock is per room.
+ *
+ * Seeded from stored history in _loadHistory, so a room continues above its own
+ * past rather than restarting under it.
+ */
+const _lamports = new Map<string, number>();
 let _connectPromise: Promise<void> | null = null;
 
 const BATCH_SIZE = 20;
@@ -346,13 +359,15 @@ async function _cascadeReadAcks(messageIds: string[]): Promise<void> {
   }
 }
 
-function lamportSend(): number {
-  _lamport += 1;
-  return _lamport;
+function lamportSend(roomCode: string): number {
+  const next = (_lamports.get(roomCode) ?? 0) + 1;
+  _lamports.set(roomCode, next);
+  return next;
 }
 
-function lamportReceive(remote: number): void {
-  _lamport = Math.max(_lamport, remote) + 1;
+function lamportReceive(roomCode: string, remote: number): void {
+  const at = _lamports.get(roomCode) ?? 0;
+  _lamports.set(roomCode, Math.max(at, remote) + 1);
 }
 
 if (typeof window !== "undefined") {
@@ -653,8 +668,9 @@ export async function _loadHistory(
   transportState.messages = msgs;
   // DM rooms use wall-clock ms as their lamport - absorbing those here would
   // catapult the shared room clock to ~1.7e12 and skew every room after.
-  if (msgs.length > 0 && !roomCode.startsWith("dm-")) {
-    _lamport = Math.max(_lamport, ...msgs.map((m) => m.lamport));
+  if (msgs.length > 0) {
+    const seen = Math.max(...msgs.map((m) => m.lamport));
+    _lamports.set(roomCode, Math.max(_lamports.get(roomCode) ?? 0, seen));
   }
   if (profiles.length > 0) {
     const names = new Map(transportState.peerNames);
@@ -815,7 +831,7 @@ async function _handleSyncBatch(
   for (const m of fullMessages) {
     // DM lamports are wall-clock ms; absorbing one would catapult the shared
     // room counter to ~1.7e12 and poison every room message sent after.
-    if (!roomCode.startsWith("dm-")) lamportReceive(m.lamport);
+    lamportReceive(m.roomCode, m.lamport);
     const floor = rejectedFloor.get(m.senderId);
     if (floor === undefined || m.lamport < floor) {
       await setWatermark(m.roomCode, m.senderId, m.lamport);
@@ -1262,7 +1278,9 @@ async function _handleChatMessage(
   // DM rooms now start with "dm-" (hash-based)
   // We don't need to ensure room here - it should already exist from sender context
 
-  lamportReceive(wire.lamport);
+  // Per room, so a DM's wall-clock lamport can no longer be absorbed into a
+  // chat room's counter - which it was, unguarded, on this path.
+  lamportReceive(roomCode, wire.lamport);
 
   const msg = wireToMessage(wire, roomCode);
 
@@ -1425,6 +1443,11 @@ _transport.on("connect", (peerId) => {
 _transport.on("disconnect", (peerId) => {
   _lastAppInbound.delete(peerId);
   _profileRepair.delete(peerId);
+  // Same lifetime as the two above, and it was not being pruned. Deliberately
+  // NOT _pendingDmByPeer: those are DMs already delivered to us and held only
+  // until the sender's DID binds, so dropping them on a disconnect would throw
+  // away messages that a reconnect would otherwise replay.
+  _lastDigestAt.delete(peerId);
   transportState.peers = _transport.peers();
   _fileTransport.onPeerDisconnect(peerId);
 
@@ -2011,7 +2034,7 @@ export async function sendMessage(
   const profile = await getOwnProfile();
   const senderName = profile?.nickname?.trim() || "Anonymous";
   const myId = identityStore.did ?? _transport.selfId();
-  const lamport = lamportSend();
+  const lamport = lamportSend(transportState.roomCode);
 
   let msg: Message = {
     id: crypto.randomUUID(),
@@ -2127,7 +2150,7 @@ export async function sendFiles(
   // filed the file before the entire conversation and it vanished on reload.
   const lamport = transportState.roomCode.startsWith("dm-")
     ? await nextDmLamport(transportState.roomCode, createdAt)
-    : lamportSend();
+    : lamportSend(transportState.roomCode);
 
   let msg: Message = {
     id: messageId,

@@ -13,7 +13,7 @@ import {
   getDB,
   wipeLocalDatabase,
   putIdentityRecord,
-  putMessage,
+  bulkPutMessages,
   putAttachment,
   putRoom,
   putPeerProfile,
@@ -796,8 +796,11 @@ async function importDatabase(
   console.log(
     `[Sync] Importing ${data.messages.length} messages, ${data.rooms.length} rooms, etc.`
   );
+  // One transaction for the messages rather than one per message: a device
+  // sync carries the whole history, and hundreds of independent transactions
+  // are both slower and able to leave the database half-imported if one fails.
+  await bulkPutMessages(data.messages);
   await Promise.all([
-    ...data.messages.map((m) => putMessage(m)),
     ...data.attachments.map((a) =>
       putAttachment({
         ...a,
