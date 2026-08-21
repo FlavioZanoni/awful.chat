@@ -403,7 +403,7 @@
           >
         </DrawerTitle>
       </DrawerHeader>
-      <ScrollArea class="flex-1 overflow-y-auto">
+      <ScrollArea class="flex-1 min-h-0 overflow-y-auto">
         {@render UserListContent()}
       </ScrollArea>
     </DrawerContent>
@@ -423,7 +423,7 @@
         >{users.length}</Badge
       >
     </div>
-    <ScrollArea class="flex-1">
+    <ScrollArea class="flex-1 min-h-0">
       {@render UserListContent()}
     </ScrollArea>
   </aside>
