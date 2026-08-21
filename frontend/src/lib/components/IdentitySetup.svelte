@@ -525,6 +525,21 @@
         <CardDescription class="text-muted-foreground text-xs font-mono">
           Enter your 12-word recovery phrase and choose a new password
         </CardDescription>
+        <p
+          class="text-muted-foreground text-xs font-mono leading-relaxed mt-2"
+        >
+          This brings back who you are, not what you have. Your rooms and
+          messages live only on the device that already has them, so this
+          browser starts empty. To carry them over, use
+          <button
+            type="button"
+            onclick={() => {
+              syncDialogOpen = true;
+            }}
+            class="underline underline-offset-2 hover:text-foreground transition-colors"
+            >sync from another device</button
+          > on the device that has your history.
+        </p>
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
         <textarea
