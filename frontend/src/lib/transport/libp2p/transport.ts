@@ -49,8 +49,8 @@ const PEER_REDIAL_MAX_MS = 60_000;
 const RELAY_RECONNECT_DELAY_MS = 3_000;
 const CONNECTION_RECONCILE_MS = 5_000;
 /**
- * How soon after noticing a relayed peer we first try to upgrade it to a
- * direct WebRTC connection, and the ceiling once attempts keep failing.
+ * The gap between upgrade attempts, and the ceiling once they keep failing.
+ * The FIRST attempt goes out on the next reconcile tick, not after this delay.
  */
 const RELAY_UPGRADE_MIN_MS = 15_000;
 const RELAY_UPGRADE_MAX_MS = 5 * 60_000;
@@ -478,6 +478,9 @@ export class LibP2PTransport implements PeerTransport {
   leaveRoom(roomCode: string): void {
     if (!this.joinedRooms.has(roomCode)) return;
     this.joinedRooms.delete(roomCode);
+    // Otherwise the set grows for the whole session; retryMissingRoomPeers
+    // skips unjoined rooms, so this is tidiness rather than a leak of work.
+    this.roomPeers.delete(roomCode);
     this.rendezvousSend({ type: "UNREGISTER", room: roomCode });
     try {
       this.node?.services.pubsub.unsubscribe(roomTopic(roomCode));
@@ -652,7 +655,14 @@ export class LibP2PTransport implements PeerTransport {
    */
   provenConnection(peerId: string): Connection | null {
     const conn = this.liveConnections.get(peerId);
-    return conn && conn.status === "open" ? conn : null;
+    if (!conn || conn.status !== "open") return null;
+    // Deliberately NOT bounded by freshness. The proof ages - a superseded
+    // circuit keeps reporting "open" - but the fallback for a null here is
+    // dialProtocol, which picks arbitrarily among the several connections a
+    // peer has and lands on a dead circuit far more often than this does.
+    // Returning the best available guess and letting the caller's own repair
+    // loop handle a bad one beats failing open to a worse choice.
+    return conn;
   }
 
   rooms(): string[] {
@@ -875,9 +885,12 @@ export class LibP2PTransport implements PeerTransport {
     if (live && live.remoteAddr.toString().includes("/p2p-circuit")) {
       this.liveConnections.delete(peerId);
     }
-    // Move the traffic. Queued frames resolve false and their callers requeue,
-    // exactly as they already do on every repeat identify (see registerPeer).
-    this.cleanupPeerStream(peerId);
+    // Move the traffic. resetOutboundStream, NOT cleanupPeerStream: the latter
+    // fails the pending queue, and the claim that callers requeue only holds on
+    // the connect path, where the app immediately re-sends profile, digest and
+    // room name. An upgrade emits no event, so a failed sync batch here would
+    // simply be gone. This keeps the queue and re-opens on the new connection.
+    this.resetOutboundStream(peerId);
   }
 
   /**
@@ -1269,9 +1282,9 @@ export class LibP2PTransport implements PeerTransport {
     try {
       stream.abort(new Error("peer reopened its stream"));
     } catch {}
-    // Anything already queued has no other trigger to reopen the stream: a
-    // peer active over pubsub keeps lastInbound fresh, so the silence probe
-    // that would have kicked a send never fires and the frames just sit.
+    // Anything already queued has no other trigger to reopen the stream, and
+    // the silence probe only fires after PEER_SILENCE_MS - so without this the
+    // frames would just sit there for at least that long.
     if (this.pendingQueues.get(peerId)?.length) {
       this.ensureOutboundOpen(peerId);
     }
@@ -1362,6 +1375,13 @@ export class LibP2PTransport implements PeerTransport {
     });
 
     stream.addEventListener("close", (_evt: StreamCloseEvent) => {
+      // Only if we are still the current stream. Two reconnect paths race
+      // here (this listener and the relay's peer:disconnect), so the loser is
+      // left holding an open stream nobody uses - and when the relay finally
+      // pruned it, its close handler wiped the LIVE stream. rendezvousSend
+      // then silently no-opped, so a leaveRoom UNREGISTER was lost with no
+      // retry and the relay kept telling peers we were still in the room.
+      if (this.rendezvousStream !== stream) return;
       this.rendezvousStream = null;
       if (!this.intentionalDisconnect && this.node) {
         console.warn("[Rendezvous] stream closed, reconnecting");

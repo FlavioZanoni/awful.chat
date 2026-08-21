@@ -710,8 +710,22 @@ async function _handleDigest(
     if (stored.length) mine = await getWatermarksForRoom(roomCode);
   }
 
-  const theyAreMissing = Object.keys(mine).filter(
-    (sid) => (theirWatermarks[sid] ?? -1) < mine[sid]
+  // Senders we hold messages from, not senders we happen to have a watermark
+  // row for. A partial watermark map (one row lost, or written before a sender
+  // was known) silently excluded that sender from every push we ever made,
+  // even though _pushMissingTo scans all stored messages anyway.
+  const stored = await getAllMessages(roomCode);
+  const highest = new Map<string, number>();
+  for (const m of stored) {
+    const at = highest.get(m.senderId);
+    if (at === undefined || m.lamport > at) highest.set(m.senderId, m.lamport);
+  }
+  for (const [sid, lamport] of Object.entries(mine)) {
+    const at = highest.get(sid);
+    if (at === undefined || lamport > at) highest.set(sid, lamport);
+  }
+  const theyAreMissing = [...highest.keys()].filter(
+    (sid) => (theirWatermarks[sid] ?? -1) < highest.get(sid)!
   );
 
   if (theyAreMissing.length > 0) {
@@ -846,10 +860,19 @@ async function _handleSyncBatch(
   );
 }
 
-function _handleSyncComplete(peerId: string): void {
-  transportState.messages = [...transportState.messages].sort(MSG_ORDER);
+function _handleSyncComplete(peerId: string, roomCode?: string): void {
+  // The room the batch was for, not whatever is on screen. Re-sorting another
+  // room's list is pointless, and fanning out a digest for the open room meant
+  // a background room that had just synced never told anybody else about it -
+  // it healed only via the slow one-room-per-tick rotation.
+  const room = roomCode ?? transportState.roomCode;
+  if (room && transportState.roomCode === room) {
+    transportState.messages = [...transportState.messages].sort(MSG_ORDER);
+  }
   for (const pid of _transport.peers()) {
-    if (pid !== peerId) _sendDigest(pid).catch(() => {});
+    if (pid === peerId) continue;
+    if (room) _sendDigestForRoom(pid, room).catch(() => {});
+    else _sendDigest(pid).catch(() => {});
   }
 }
 
@@ -1268,7 +1291,18 @@ async function _handleChatMessage(
 
   // Only a genuinely new message is written: re-putting a replayed one
   // would overwrite the stored row with this handler's view of it.
-  if (isNewMessage) putMessage(msg).catch(() => {});
+  // Await the write before claiming it. Fire-and-forget put plus an
+  // unconditional watermark meant a failed write (quota, blocked upgrade) lost
+  // the message AND told every future digest we already had it, so nobody
+  // would ever send it again.
+  if (isNewMessage) {
+    try {
+      await putMessage(msg);
+    } catch (err) {
+      console.warn("[chat] store failed, not claiming the message:", err);
+      return;
+    }
+  }
   setWatermark(msg.roomCode, msg.senderId, msg.lamport).catch(() => {});
   refreshUnreadCount(msg.roomCode).catch(() => {});
   noteRoomActivity(msg.roomCode, msg.timestamp);
@@ -1642,7 +1676,7 @@ _transport.on("message", (peerId, data, room) => {
         _handleSyncBatch(msg.roomCode, msg.messages).catch(() => {});
         break;
       case MessageType.SyncComplete:
-        _handleSyncComplete(peerId);
+        _handleSyncComplete(peerId, msg.roomCode);
         break;
       case MessageType.Text:
       case MessageType.Reply:
@@ -1718,6 +1752,7 @@ export async function connect() {
       transportState.error = null;
       _connectRetryDelay = CONNECT_RETRY_BASE_MS;
       joinPhonebookDmRooms().catch(() => {});
+      _joinSavedRooms().catch(() => {});
     } catch (err) {
       transportState.error = err instanceof Error ? err.message : String(err);
       transportState.relayConnected = false;
@@ -1728,6 +1763,27 @@ export async function connect() {
   })();
 
   await _connectPromise;
+}
+
+/**
+ * Subscribe every room we have saved, not just the one that gets opened.
+ *
+ * Only DM rooms were re-subscribed on connect, so a chat room stayed unjoined
+ * until the user clicked into it - and until then _handleDigest and
+ * _handleSyncBatch both early-return for it (they refuse a room we have not
+ * joined) and pubsub does not deliver it at all. Whether your history caught
+ * up therefore depended on the OTHER side happening to have that room open.
+ * The background reconcile in the repair tick already rotates over
+ * _transport.rooms(), so this is what it was always meant to iterate.
+ */
+async function _joinSavedRooms(): Promise<void> {
+  const rooms = await getAllRooms();
+  for (const room of rooms) {
+    // DMs are handled by joinPhonebookDmRooms, which derives the room code
+    // from the DID rather than trusting a stored one.
+    if (room.roomCode.startsWith("dm-")) continue;
+    _transport.joinRoom(room.roomCode);
+  }
 }
 
 /**
@@ -1756,6 +1812,14 @@ export async function joinRoom(roomCode: string): Promise<boolean> {
   transportState.error = null;
   transportState.connecting = true;
   try {
+    // Claim the room before the awaits, not after. Everything that routes an
+    // incoming message compares against transportState.roomCode, so during the
+    // gap a message for the room being opened was dropped from the view, and -
+    // worse - a message for the room being LEFT still matched and was appended
+    // into the freshly loaded list. Clear the outgoing room's messages with it
+    // so nothing from the old conversation is on screen under the new name.
+    transportState.roomCode = roomCode;
+    transportState.messages = [];
     await _loadHistory(roomCode, stillCurrent);
     await _hydrateFileTransfersFromStorage(roomCode);
     if (!stillCurrent()) return false;
@@ -1825,6 +1889,10 @@ export function getRoomUsers(): string[] {
  */
 export async function removeRoomCompletely(roomCode: string): Promise<void> {
   if (!roomCode) return;
+  // As in _leaveCurrentRoom, and it matters more here: an in-flight join
+  // resolving after the delete would resurrect the room as a live
+  // subscription that quietly stores messages again.
+  beginConversationOpen();
   const selfDid = identityStore.did ?? _transport.selfId();
   if (selfDid && _transport.rooms().includes(roomCode)) {
     // Before unsubscribing, or the broadcast no-ops and nobody sees us leave.
@@ -1860,6 +1928,11 @@ export function leaveRoom(): void {
  * only looked right again after a reload.
  */
 async function _leaveCurrentRoom(): Promise<void> {
+  // Claim the conversation token. Only joinRoom and openDmConversation did,
+  // so a join still awaiting _loadHistory would finish AFTER this and put the
+  // room back: re-set roomCode, re-subscribe the topic, re-add the
+  // participant. Leaving is a conversation change like any other.
+  beginConversationOpen();
   const roomCode = transportState.roomCode;
   if (!roomCode) return;
   const selfDid = identityStore.did ?? _transport.selfId();

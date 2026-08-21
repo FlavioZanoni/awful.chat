@@ -89,6 +89,11 @@
     roomCode;
     initialScrollDone = false;
     autoScroll = true;
+    // hasMoreHistory too. This component is not keyed by room, so switching
+    // rooms does not remount it: paging to the top of one room set this false
+    // and every other room then opened with no way to page back for the rest
+    // of the session.
+    hasMoreHistory = true;
   });
 
   let {

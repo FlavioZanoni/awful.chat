@@ -455,9 +455,23 @@ export class MediasoupVideo implements VideoTransport {
     }, delay);
   }
 
+  /**
+   * Whether the SFU session is actually usable - not merely whether a socket
+   * is open. An open socket with no transports behind it is the state you land
+   * in when the handshake stalls after connecting, and treating that as "live"
+   * is what stopped it ever healing.
+   */
+  private sessionIsLive(): boolean {
+    return (
+      this.sfuWs?.readyState === WebSocket.OPEN &&
+      this.sendTransport != null &&
+      this.recvTransport != null
+    );
+  }
+
   /** Whether the SFU session is actually up right now. */
   isConnected(): boolean {
-    return this.sfuWs?.readyState === WebSocket.OPEN;
+    return this.sessionIsLive();
   }
 
   /**
@@ -466,7 +480,7 @@ export class MediasoupVideo implements VideoTransport {
    */
   ensureLive(): void {
     if (!this.currentRoomCode || !this.currentPeerId) return;
-    if (this.sfuWs && this.sfuWs.readyState === WebSocket.OPEN) return;
+    if (this.sessionIsLive()) return;
     this.attemptRejoin(this.joinGeneration).catch(() => {
       this.scheduleRejoin(this.joinGeneration, 2);
     });
@@ -484,7 +498,13 @@ export class MediasoupVideo implements VideoTransport {
     if (!roomCode || !peerId) return;
     // Bail if joinGeneration changed (manual rejoin happened in the interim)
     if (this.joinGeneration !== expectedGeneration) return;
-    if (this.sfuWs && this.sfuWs.readyState === WebSocket.OPEN) return;
+    // A live session cancels the ladder; an OPEN SOCKET does not. The
+    // handshake can fail with the socket still up (capabilities timeout,
+    // device.load throwing), and a transport can go "failed" underneath a
+    // perfectly healthy socket - both used to make this a no-op that resolved,
+    // so the retry ladder stopped after one rung and video stayed dead for the
+    // rest of the call.
+    if (this.sessionIsLive()) return;
 
     const republish: { source: VideoSource; stream: MediaStream }[] = [];
     for (const [source, ps] of this.producers) {
@@ -511,6 +531,10 @@ export class MediasoupVideo implements VideoTransport {
     this.sendTransport = null;
     this.recvTransport = null;
     this.device = null;
+    // join() assigns a fresh socket, so close this one rather than orphaning
+    // it - and a half-open socket is exactly what we may be recovering from.
+    this.sfuWs?.close();
+    this.sfuWs = null;
 
     await this.join(roomCode, peerId);
     for (const { source, stream } of republish) {

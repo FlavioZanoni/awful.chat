@@ -228,7 +228,17 @@ export async function startCamera(): Promise<void> {
     transportState.localCameraStream = stream;
     transportState.cameraOff = false;
     playCameraOnSound();
-    await _video.startCamera(stream);
+    try {
+      await _video.startCamera(stream);
+    } catch (err) {
+      // Publishing can fail for real now that a call survives a dead SFU. The
+      // state was set before the await, so without this the camera light stays
+      // on and the UI says you are on camera while nobody receives anything.
+      stream.getTracks().forEach((t) => t.stop());
+      transportState.localCameraStream = null;
+      transportState.cameraOff = true;
+      throw err;
+    }
   } catch (err) {
     transportState.error = err instanceof Error ? err.message : String(err);
     throw err;
@@ -288,7 +298,16 @@ export async function startScreenShare(): Promise<void> {
     transportState.screenSharing = true;
     playScreenShareStartSound();
     stream.getVideoTracks()[0].onended = () => stopScreenShare();
-    await _video.startScreenShare(stream);
+    try {
+      await _video.startScreenShare(stream);
+    } catch (err) {
+      // As with the camera: otherwise we advertise a transmission that does
+      // not exist and the browser keeps the capture indicator up.
+      stream.getTracks().forEach((t) => t.stop());
+      transportState.localScreenStream = null;
+      transportState.screenSharing = false;
+      throw err;
+    }
   } catch (err) {
     transportState.error = err instanceof Error ? err.message : String(err);
     throw err;

@@ -22,6 +22,8 @@ const VOICE_DIAL_MAX_MS = 30_000;
  * the connection never comes back on its own.
  */
 const VOICE_LINK_GRACE_MS = 20_000;
+/** Ceiling on signals buffered while a peer has no signalling stream. */
+const MAX_QUEUED_SIGNALS = 64;
 /** Rate limit on asking the other side to dial us. */
 const VOICE_REDIAL_ASK_MS = 5_000;
 
@@ -84,7 +86,8 @@ export class LibP2PVoice implements VoiceTransport {
   /**
    * Per-peer listening volume, multiplied with the master output volume.
    * Kept outside RemotePeer so the setting survives that peer dropping and
-   * rejoining during the same call.
+   * rejoining. Deliberately NOT cleared by leave(): it lasts the session, and
+   * the durable copy lives in audio-prefs keyed by DID.
    */
   private peerVolumes = new Map<string, number>();
   private active = new Set<string>();
@@ -774,7 +777,12 @@ export class LibP2PVoice implements VoiceTransport {
     const remote = this.remotePeers.get(peerId);
     if (!remote?.sigStream) {
       if (!this.signalQueues.has(peerId)) this.signalQueues.set(peerId, []);
-      this.signalQueues.get(peerId)!.push(signal);
+      const queue = this.signalQueues.get(peerId)!;
+      // Bounded: every ICE candidate generated while the stream is down queues
+      // here, and a link that never comes up would otherwise grow it for the
+      // whole call. The oldest candidates are also the least useful.
+      if (queue.length >= MAX_QUEUED_SIGNALS) queue.shift();
+      queue.push(signal);
       return;
     }
 
@@ -821,6 +829,28 @@ export class LibP2PVoice implements VoiceTransport {
       if (track.kind !== "audio") return;
       const stream = streams[0] ?? new MediaStream([track]);
       this.setupRemoteAudio(peerId, stream, track);
+    };
+
+    // A track added to an already-established connection needs a new
+    // offer/answer, and there was none: join with the mic denied (listen-only)
+    // and grant it later and your audio never reached anybody, with the link
+    // still "connected" so the wedge check never rebuilt it - leave and rejoin
+    // was the only cure, which is the very symptom this file exists to remove.
+    // Guarded so it cannot interfere with the initial negotiation: only once a
+    // remote description exists and we are back in "stable".
+    pc.onnegotiationneeded = () => {
+      if (pc.signalingState !== "stable" || !pc.remoteDescription) return;
+      void (async () => {
+        try {
+          const offer = await pc.createOffer();
+          if (pc.signalingState !== "stable") return;
+          await pc.setLocalDescription(offer);
+          this.debugStats.offersSent++;
+          this.sendSignal(peerId, { type: "offer", sdp: offer.sdp! });
+        } catch (err) {
+          console.warn(`[LibP2PVoice] renegotiation failed for ${peerId}:`, err);
+        }
+      })();
     };
 
     // ICE reaching "checking" is real progress on a slow path; without this
