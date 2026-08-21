@@ -4,8 +4,12 @@
 # machine). Exits nonzero if any scenario fails.
 set -u
 cd "$(dirname "$0")"
+# Three groups, not two: with the call and relay scenarios added, a run long
+# enough to cover a whole group started failing scenarios for harness reasons
+# (rooms never entering, peers never coming back) that pass on a re-run.
 FIRST="dm-extras sync-recovers dm-removal title-and-sound dtln-gain clock-skew"
-SECOND="room-removal reconnect-churn audio-prefs peer-volume background-sync rapid-switch drag-drop call-status call-roster-ttl history-pull"
+SECOND="room-removal reconnect-churn audio-prefs peer-volume background-sync rapid-switch drag-drop"
+THIRD="call-status call-roster-ttl call-late-join call-without-sfu relay-upgrade history-pull"
 fail=0
 run() {
   for sc in $1; do
@@ -17,5 +21,7 @@ run() {
 run "$FIRST"
 ./browsers.sh >/dev/null || exit 1
 run "$SECOND"
+./browsers.sh >/dev/null || exit 1
+run "$THIRD"
 [ "$fail" -eq 0 ] && echo "ALL SCENARIOS PASSED" || echo "FAILURES ABOVE"
 exit $fail

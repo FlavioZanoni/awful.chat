@@ -12,6 +12,8 @@
  *   __faults.set({ drop: ["sync_digest"] })   // sync silently fails
  *   __faults.set({ blockDial: ["*"] })        // nobody is reachable
  *   __faults.set({ suppress: ["connect"] })   // connection lives, event does not
+ *   __faults.set({ blockSfu: true })          // media server is down
+ *   __faults.set({ blockWebrtcDial: true })   // peers can only reach the relay
  *   __faults.clear()                          // then assert it recovers
  */
 
@@ -24,6 +26,13 @@ export interface FaultConfig {
   blockDial: string[];
   /** Transport events to swallow: "connect" | "disconnect" | "message". */
   suppress: string[];
+  /** Make the SFU unreachable, as if the media server were down. */
+  blockSfu: boolean;
+  /**
+   * Fail the direct /webrtc dial so peers fall back to a plain relay circuit -
+   * the reservation race that happens for real, on demand.
+   */
+  blockWebrtcDial: boolean;
 }
 
 const EMPTY: FaultConfig = {
@@ -31,6 +40,8 @@ const EMPTY: FaultConfig = {
   dropProbability: 0,
   blockDial: [],
   suppress: [],
+  blockSfu: false,
+  blockWebrtcDial: false,
 };
 
 let active: FaultConfig = { ...EMPTY };
@@ -81,6 +92,18 @@ export function shouldBlockDial(peerId: string): boolean {
     active.blockDial.includes("*") || active.blockDial.includes(peerId);
   if (blocked) faultStats.blockedDials++;
   return blocked;
+}
+
+export function shouldBlockSfu(): boolean {
+  if (!enabled || !active.blockSfu) return false;
+  faultStats.blockedDials++;
+  return true;
+}
+
+export function shouldBlockWebrtcDial(): boolean {
+  if (!enabled || !active.blockWebrtcDial) return false;
+  faultStats.blockedDials++;
+  return true;
 }
 
 export function shouldSuppressEvent(event: string): boolean {

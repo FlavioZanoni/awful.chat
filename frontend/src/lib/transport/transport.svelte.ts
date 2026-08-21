@@ -252,6 +252,9 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
     peerIdToDid: _peerIdToDid,
     stats: _stats,
     transportStats: () => _transport.debugStats,
+    voice: () => _voice.debugVoice(),
+    video: () => ({ connected: _video.isConnected() }),
+    relayed: () => _transport.peers().filter((p) => _transport.isRelayed(p)),
     selfId: () => _transport.selfId(),
     node: () => _transport.p2pNode,
     sendReply,
@@ -549,6 +552,9 @@ if (typeof window !== "undefined") {
         transportState.callPeerIds = idsNext;
         transportState.callPeerStates = statesNext;
       }
+      // Backstop: presence events drive this too, but the whole point of the
+      // tick is that the last event is the one that goes missing.
+      _syncVoiceRoster();
     }
 
     // Digests only ever covered the open room, so a room in the background
@@ -587,6 +593,9 @@ function _resyncEverything(): void {
   if (transportState.inCall) {
     _sendCallPresence();
     _sendCallState();
+    // The SFU session can die silently while voice (p2p) keeps working;
+    // rejoining it re-triggers the producer replay so live shares reappear.
+    _video.ensureLive();
   }
   _syncAllPeers(true);
 }
@@ -986,6 +995,27 @@ function _handleCallPresence(
 
   transportState.callPeerIds = next;
   transportState.callPeerRooms = roomNext;
+  _syncVoiceRoster();
+}
+
+/**
+ * Tell the voice layer who it should have a link with: everyone whose call
+ * presence puts them in OUR call's room. The voice layer cannot work this out
+ * itself - it only sees libp2p connections, which say nothing about who is in
+ * a call - and without it, a link was only ever created on a connect event,
+ * so joining a call over an already-open connection silently got no audio.
+ */
+export function _syncVoiceRoster(): void {
+  const room = transportState.callRoomCode;
+  if (!transportState.inCall || !room) {
+    _voice.setCallPeers([]);
+    return;
+  }
+  const peers: string[] = [];
+  for (const [peerId, theirRoom] of transportState.callPeerRooms) {
+    if (theirRoom === room) peers.push(peerId);
+  }
+  _voice.setCallPeers(peers);
 }
 
 function _handleCallState(peerId: string, msg: WireCallState): void {
@@ -1363,6 +1393,7 @@ _transport.on("disconnect", (peerId) => {
   const callRoomsNext = new Map(transportState.callPeerRooms);
   callRoomsNext.delete(peerId);
   transportState.callPeerRooms = callRoomsNext;
+  _syncVoiceRoster();
 
   const callStates = new Map(transportState.callPeerStates);
   callStates.delete(peerId);
@@ -1552,6 +1583,9 @@ _transport.on("message", (peerId, data, room) => {
         break;
       case MessageType.CallState:
         _handleCallState(peerId, msg);
+        break;
+      case MessageType.VoiceRedial:
+        _voice.handleRedialRequest(peerId);
         break;
       case MessageType.WatchPresence:
         _handleWatchPresence(peerId, msg.watching);

@@ -13,6 +13,7 @@ import {
 import { MessageType } from "$lib/types/message";
 import { encode } from "$lib/utils";
 import {
+  _syncVoiceRoster,
   _transport,
   _video,
   _voice,
@@ -114,9 +115,23 @@ async function _joinCall(): Promise<void> {
       await connect();
     }
     await _voice.join(transportState.roomCode ?? "");
-    await _video.join(transportState.roomCode ?? "", _transport.selfId());
+    // Voice is peer-to-peer; only camera and screen share go through the SFU.
+    // Awaiting this unguarded meant a media server that was down (or a VPS
+    // whose DNS had moved) failed the whole join, taking out calls that never
+    // needed it. Keep the call, say what is missing, heal in the background.
+    try {
+      await _video.join(transportState.roomCode ?? "", _transport.selfId());
+    } catch {
+      // The error event already put a readable message on transportState;
+      // all that is left is to keep trying in the background.
+      _video.ensureLive();
+    }
     transportState.inCall = true;
     transportState.callRoomCode = transportState.roomCode; // Track which room the call is in
+    // Peers already in this call are known from their presence heartbeats -
+    // hand them over now rather than waiting for the next heartbeat, which is
+    // the difference between hearing people at once and 20s of silence.
+    _syncVoiceRoster();
     acquireWakeLock();
     playJoinSound();
     _sendCallPresence();

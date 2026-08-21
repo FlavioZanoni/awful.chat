@@ -3,6 +3,15 @@
 // turn a camera on.
 import type * as mediasoupClient from "mediasoup-client";
 import type { VideoTransport, VideoEvents, VideoSource } from "./types";
+import { shouldBlockSfu } from "./faults";
+
+/**
+ * Reaches the user verbatim - transmission.svelte assigns an error event's
+ * message straight to transportState.error - so it says what it means to
+ * somebody in a call rather than naming a component they have never heard of.
+ */
+const SFU_UNREACHABLE =
+  "Video server unreachable - voice still works, retrying in the background";
 
 // ── Message types (mirrored on the SFU server) ────────────────────────────────
 
@@ -352,6 +361,10 @@ export class MediasoupVideo implements VideoTransport {
    */
   private connectSfu(roomCode: string, peerId: string): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (shouldBlockSfu()) {
+        reject(new Error(SFU_UNREACHABLE));
+        return;
+      }
       const sfuUrl =
         (import.meta as any).env?.VITE_SFU_URL ??
         `${location.origin.replace(/^http/, "ws")}/sfu`;
@@ -373,7 +386,7 @@ export class MediasoupVideo implements VideoTransport {
       };
 
       ws.onerror = () => {
-        reject(new Error("SFU WebSocket error"));
+        reject(new Error(SFU_UNREACHABLE));
       };
 
       ws.onmessage = (e: MessageEvent<string>) => {
@@ -402,21 +415,60 @@ export class MediasoupVideo implements VideoTransport {
           const err: Error = new Error("SFU connection closed unexpectedly");
           this.emit("error", err);
 
-          // Attempt ONE automatic rejoin after ~2s. The SFU destroyed all
-          // of our server-side state on disconnect, so this must be a FULL
-          // rebuild (device + transports + producers), not just a re-dial.
-          const rejoinGen = this.joinGeneration;
-          setTimeout(() => {
-            this.attemptRejoin(rejoinGen).catch((err) => {
-              console.warn("[MediasoupVideo] rejoin failed:", err);
-              this.emit(
-                "error",
-                new Error("Video reconnect failed - leave and rejoin the call")
-              );
-            });
-          }, 2000);
+          // Rejoin with backoff. The SFU destroyed all of our server-side
+          // state on disconnect, so this must be a FULL rebuild (device +
+          // transports + producers), not just a re-dial.
+          this.scheduleRejoin(this.joinGeneration);
         }
       };
+    });
+  }
+
+  /**
+   * Rejoin with backoff. One shot was not enough: a network blip longer
+   * than the single 2s retry left the user "in the call" (voice is p2p and
+   * kept working) with no SFU session at all - no streams visible until a
+   * manual leave and rejoin.
+   */
+  private scheduleRejoin(expectedGeneration: number, attempt = 1): void {
+    const MAX_ATTEMPTS = 5;
+    const delay = Math.min(2000 * 2 ** (attempt - 1), 30_000);
+    setTimeout(() => {
+      this.attemptRejoin(expectedGeneration).catch((err) => {
+        console.warn(
+          `[MediasoupVideo] rejoin attempt ${attempt}/${MAX_ATTEMPTS} failed:`,
+          err
+        );
+        if (attempt < MAX_ATTEMPTS) {
+          // join() bumps joinGeneration even when it fails, so chaining the
+          // ORIGINAL generation made every later rung bail silently. Re-read
+          // it; a manual rejoin still cancels the ladder because its open
+          // socket makes attemptRejoin a no-op.
+          this.scheduleRejoin(this.joinGeneration, attempt + 1);
+        } else {
+          this.emit(
+            "error",
+            new Error("Video reconnect failed - leave and rejoin the call")
+          );
+        }
+      });
+    }, delay);
+  }
+
+  /** Whether the SFU session is actually up right now. */
+  isConnected(): boolean {
+    return this.sfuWs?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Heal the SFU session if it silently died: cheap to call from any app
+   * resync moment (tab back to foreground, relay reconnect).
+   */
+  ensureLive(): void {
+    if (!this.currentRoomCode || !this.currentPeerId) return;
+    if (this.sfuWs && this.sfuWs.readyState === WebSocket.OPEN) return;
+    this.attemptRejoin(this.joinGeneration).catch(() => {
+      this.scheduleRejoin(this.joinGeneration, 2);
     });
   }
 
@@ -470,7 +522,13 @@ export class MediasoupVideo implements VideoTransport {
     stream: MediaStream,
     source: VideoSource
   ): Promise<void> {
-    if (!this.sendTransport) throw new Error("Not joined");
+    // Reached whenever the SFU was unavailable at join time (the call itself
+    // survives that now), so name the actual cause rather than "Not joined".
+    if (!this.sendTransport) {
+      throw new Error(
+        "The video server is unavailable - camera and screen share are off until it is back"
+      );
+    }
 
     // stop any existing producer for this source
     this.stopSource(source);
@@ -562,16 +620,7 @@ export class MediasoupVideo implements VideoTransport {
     this.sendTransport.on("connectionstatechange", (state: string) => {
       if (state === "failed") {
         this.emit("error", new Error("Send transport connection failed"));
-        const rejoinGen = this.joinGeneration;
-        setTimeout(() => {
-          this.attemptRejoin(rejoinGen).catch((err) => {
-            console.warn("[MediasoupVideo] rejoin after send transport failed:", err);
-            this.emit(
-              "error",
-              new Error("Video reconnect failed - leave and rejoin the call")
-            );
-          });
-        }, 2000);
+        this.scheduleRejoin(this.joinGeneration);
       }
     });
   }
@@ -601,16 +650,7 @@ export class MediasoupVideo implements VideoTransport {
     this.recvTransport.on("connectionstatechange", (state: string) => {
       if (state === "failed") {
         this.emit("error", new Error("Receive transport connection failed"));
-        const rejoinGen = this.joinGeneration;
-        setTimeout(() => {
-          this.attemptRejoin(rejoinGen).catch((err) => {
-            console.warn("[MediasoupVideo] rejoin after recv transport failed:", err);
-            this.emit(
-              "error",
-              new Error("Video reconnect failed - leave and rejoin the call")
-            );
-          });
-        }, 2000);
+        this.scheduleRejoin(this.joinGeneration);
       }
     });
 

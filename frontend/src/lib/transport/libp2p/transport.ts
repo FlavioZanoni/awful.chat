@@ -29,6 +29,7 @@ import type {
 import {
   installFaultHook,
   shouldBlockDial,
+  shouldBlockWebrtcDial,
   shouldDropFrame,
   shouldSuppressEvent,
 } from "../faults";
@@ -47,6 +48,12 @@ const PEER_REDIAL_DELAY_MS = 3_000;
 const PEER_REDIAL_MAX_MS = 60_000;
 const RELAY_RECONNECT_DELAY_MS = 3_000;
 const CONNECTION_RECONCILE_MS = 5_000;
+/**
+ * How soon after noticing a relayed peer we first try to upgrade it to a
+ * direct WebRTC connection, and the ceiling once attempts keep failing.
+ */
+const RELAY_UPGRADE_MIN_MS = 15_000;
+const RELAY_UPGRADE_MAX_MS = 5 * 60_000;
 /** Silence after which we check a peer is really still there. */
 const PEER_SILENCE_MS = 12_000;
 const PEER_PING_TIMEOUT_MS = 5_000;
@@ -141,6 +148,17 @@ export class LibP2PTransport implements PeerTransport {
   /** peerId -> earliest time we may dial it again. */
   private nextDialAt = new Map<string, number>();
   private dialBackoff = new Map<string, number>();
+  /**
+   * Same, for relay -> direct upgrade attempts.
+   *
+   * dialPeer tries the WebRTC address first and falls back to a plain circuit,
+   * and the first dial routinely loses a race with the other side's relay
+   * reservation (up to 20s). Whoever lost that race stayed on the relay for
+   * the rest of the session: every app frame through the relay's circuit, and
+   * a connection that dies whenever the relay hiccups.
+   */
+  private nextUpgradeAt = new Map<string, number>();
+  private upgradeBackoff = new Map<string, number>();
   /** peerId -> last time we heard anything from them. */
   private lastInbound = new Map<string, number>();
   private pinging = new Set<string>();
@@ -184,6 +202,8 @@ export class LibP2PTransport implements PeerTransport {
     connects: 0,
     disconnects: 0,
     staleConnectionsClosed: 0,
+    relayUpgradeAttempts: 0,
+    relayUpgrades: 0,
     livenessDrops: 0,
     outboundResets: 0,
     liveStreamOpens: 0,
@@ -260,6 +280,8 @@ export class LibP2PTransport implements PeerTransport {
     this.roomPeers.clear();
     this.nextDialAt.clear();
     this.dialBackoff.clear();
+    this.nextUpgradeAt.clear();
+    this.upgradeBackoff.clear();
     this.liveConnections.clear();
     this.rendezvousStream = null;
 
@@ -284,6 +306,14 @@ export class LibP2PTransport implements PeerTransport {
       ],
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
+      // The browser's default gater denies insecure websockets AND private
+      // addresses, which is exactly what a relay running on localhost is - so
+      // docker-compose.dev.yml's own relay address could never be dialled and
+      // local dev silently fell back to needing the deployed one. Dev builds
+      // only: production dials a public wss relay, which the default allows.
+      ...(import.meta.env.DEV
+        ? { connectionGater: { denyDialMultiaddr: () => false } }
+        : {}),
       services: {
         identify: identify(),
         pubsub: gossipsub({
@@ -597,6 +627,21 @@ export class LibP2PTransport implements PeerTransport {
     return this.isRelayPeer(peerId);
   }
 
+  /**
+   * The one connection to this peer that is PROVEN to work - the one their own
+   * stream last arrived on - or null if we have no proof yet.
+   *
+   * Exposed because voice has the same problem this was built for: several
+   * connections to one peerId exist at once (the relay keeps superseded
+   * circuits looking open), dialProtocol picks among them arbitrarily, and a
+   * stream opened on a dead one reports itself open while nothing ever
+   * reaches the far side.
+   */
+  provenConnection(peerId: string): Connection | null {
+    const conn = this.liveConnections.get(peerId);
+    return conn && conn.status === "open" ? conn : null;
+  }
+
   rooms(): string[] {
     return Array.from(this.joinedRooms);
   }
@@ -615,6 +660,8 @@ export class LibP2PTransport implements PeerTransport {
   reconcileNow(): void {
     this.nextDialAt.clear();
     this.dialBackoff.clear();
+    this.nextUpgradeAt.clear();
+    this.upgradeBackoff.clear();
     this.reconcileConnections();
   }
 
@@ -728,6 +775,88 @@ export class LibP2PTransport implements PeerTransport {
     }
     this.probeSilentPeers();
     this.retryMissingRoomPeers();
+    this.upgradeRelayedPeers();
+  }
+
+  /**
+   * Try to promote relayed peers to a direct WebRTC connection.
+   *
+   * Both sides listen on /webrtc and hold a relay reservation, so the circuit
+   * is only ever meant to be the signalling path for a direct connection. When
+   * the first dial happens before the other side's reservation completes, the
+   * fallback circuit becomes permanent - nothing ever retried the good address.
+   *
+   * Safe to attempt while connected. libp2p short-circuits a dial when it
+   * already holds a connection, EXCEPT when that connection is indirect and
+   * one of the dial addresses would be direct - which is exactly this case, so
+   * the dial really happens. (Not because circuit connections are "limited":
+   * our relay grants infinite limits, so they are not.)
+   */
+  private upgradeRelayedPeers(): void {
+    if (this.intentionalDisconnect || !this.node) return;
+    if (typeof document !== "undefined" && document.hidden) return;
+    const now = Date.now();
+    for (const peerId of [...this.connectedPeers]) {
+      // Refresh first. updateRelayedStatus only ever ran on connect events, so
+      // when a direct connection died the peer stayed marked direct forever -
+      // the status shown in the UI went stale, and nothing here would have
+      // tried to win the direct connection back.
+      this.updateRelayedStatus(peerId);
+      if (!this.relayedPeers.has(peerId)) {
+        this.nextUpgradeAt.delete(peerId);
+        this.upgradeBackoff.delete(peerId);
+        continue;
+      }
+      if (this.dialingPeers.has(peerId)) continue;
+      const due = this.nextUpgradeAt.get(peerId) ?? 0;
+      if (now < due) continue;
+      const previous = due === 0 ? 0 : (this.upgradeBackoff.get(peerId) ?? 0);
+      const next = Math.min(
+        Math.max(RELAY_UPGRADE_MIN_MS, previous * 2),
+        RELAY_UPGRADE_MAX_MS
+      );
+      this.upgradeBackoff.set(peerId, next);
+      this.nextUpgradeAt.set(peerId, now + next);
+      this.upgradeToDirect(peerId).catch(() => {});
+    }
+  }
+
+  private async upgradeToDirect(peerId: string): Promise<void> {
+    if (!this.node || shouldBlockDial(peerId)) return;
+    if (this.dialingPeers.has(peerId)) return;
+    this.dialingPeers.add(peerId);
+    this.debugStats.relayUpgradeAttempts++;
+    try {
+      if (shouldBlockWebrtcDial()) throw new Error("webrtc dial blocked");
+      const relayAddr = import.meta.env.VITE_RELAY_MULTIADDR as string;
+      await this.node.dial(
+        multiaddr(`${relayAddr}/p2p-circuit/webrtc/p2p/${peerId}`)
+      );
+    } catch {
+      return; // still relayed; the backoff decides when to try again
+    } finally {
+      this.dialingPeers.delete(peerId);
+    }
+
+    this.updateRelayedStatus(peerId);
+    // The dial can resolve while still handing back something relayed.
+    if (this.relayedPeers.has(peerId)) return;
+
+    this.debugStats.relayUpgrades++;
+    this.nextUpgradeAt.delete(peerId);
+    this.upgradeBackoff.delete(peerId);
+    console.log("[Transport] upgraded to direct:", peerId.slice(-8));
+
+    // Stop PREFERRING the circuit for outbound streams. The circuit itself is
+    // left open on purpose: closing a peer's other connections regressed sync
+    // twice, because both sides dial and each closed the one the other used.
+    const live = this.liveConnections.get(peerId);
+    if (live && live.remoteAddr.toString().includes("/p2p-circuit")) {
+      this.liveConnections.delete(peerId);
+    }
+    // Move the traffic. Queued frames resolve false and their callers requeue,
+    // exactly as they already do on every repeat identify (see registerPeer).
+    this.cleanupPeerStream(peerId);
   }
 
   /**
@@ -1251,6 +1380,7 @@ export class LibP2PTransport implements PeerTransport {
       const withoutWebRTC = multiaddr(`${relayAddr}/p2p-circuit/p2p/${peerId}`);
 
       try {
+        if (shouldBlockWebrtcDial()) throw new Error("webrtc dial blocked");
         await this.node.dial(withWebRTC);
         return;
       } catch {}

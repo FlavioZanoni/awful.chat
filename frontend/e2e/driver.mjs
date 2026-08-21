@@ -258,10 +258,25 @@ export class Peer {
     // Retry the click: a single one can land before the handler is wired, and
     // the resulting "it just sat there" failure is indistinguishable from an
     // app bug.
+    //
+    // Two scenarios per full suite run used to die here, reporting "room
+    // entered" against a page sitting on the room picker. The create flow had
+    // been interrupted - a re-render, or a click landing somewhere stale - and
+    // the loop went on clicking at a screen that had moved on. Clicking harder
+    // cannot fix that, so notice it and start the flow again. No bail-out
+    // count: waitFor's own deadline is the bound.
     return this.waitFor("room entered", async () => {
-      await this.clickText("Join Room");
-      const code = await this.eval(`window.__awful?.state.roomCode ?? null`);
-      return code && code !== before ? code : null;
+      const seen = await this.eval(`window.__awful?.state.roomCode ?? null`);
+      if (seen && seen !== before) return seen;
+      if (await this.eval(`/Share this code/i.test(document.body.innerText)`)) {
+        // The share screen's own button, and the only one matching here.
+        await this.clickText("Join Room");
+        return null;
+      }
+      await this.clickLabel("Create or join room");
+      await this.fill("Room name (optional)", name);
+      await this.clickText("Create Room");
+      return null;
     });
   }
 
@@ -316,6 +331,26 @@ export class Peer {
       callPeers: [...window.__awful.state.callPeerIds].length,
       messages: window.__awful.state.messages.map(m => m.content),
     })`);
+  }
+
+  /** What the voice layer holds: the call roster it was fed, and its links. */
+  voice() {
+    return this.json(
+      `JSON.stringify(window.__awful.voice ? window.__awful.voice() : null)`
+    );
+  }
+
+  selfId() {
+    return this.eval(`window.__awful.selfId()`);
+  }
+
+  /** peerIds we can only reach through the relay's circuit. */
+  relayed() {
+    return this.json(`JSON.stringify(window.__awful.relayed())`);
+  }
+
+  videoConnected() {
+    return this.eval(`window.__awful.video().connected`);
   }
 
   /** Everything stored for a room, independent of what is on screen. */

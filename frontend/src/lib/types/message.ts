@@ -11,6 +11,7 @@ export enum MessageType {
   CallPresence = "call_presence",
   CallState = "call_state",
   WatchPresence = "watch_presence",
+  VoiceRedial = "voice_redial",
   RoomName = "room_name",
   // room users - wire only, never persisted
   JoinRoom = "join_room",
@@ -159,6 +160,18 @@ export interface WireCallState {
   deafened: boolean;
 }
 
+/**
+ * "I am in this call with you and I have no working voice link - dial me."
+ *
+ * Only one side of a pair dials (the higher peerId), so the other side had no
+ * way to repair a link that failed: it could tear its dead RTCPeerConnection
+ * down and then wait for the dialer to independently notice, which takes an
+ * ICE timeout plus a reconcile tick. This is the ask.
+ */
+export interface WireVoiceRedial {
+  type: MessageType.VoiceRedial;
+}
+
 export interface WireWatchPresence {
   type: MessageType.WatchPresence;
   /** Sharer peerId being watched, or null when the viewer stopped. */
@@ -222,6 +235,7 @@ export interface FileSignalWireMessage {
 export type AnyWireMessage =
   | WireChatMessage
   | WireProfile
+  | WireVoiceRedial
   | WireCallPresence
   | WireWatchPresence
   | WireCallState
