@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 # (rooms never entering, peers never coming back) that pass on a re-run.
 FIRST="dm-extras sync-recovers dm-removal title-and-sound dtln-gain clock-skew"
 SECOND="room-removal reconnect-churn audio-prefs peer-volume background-sync rapid-switch drag-drop"
-THIRD="call-status call-roster-ttl call-late-join call-without-sfu relay-upgrade history-pull"
+THIRD="backfill-below-window call-status call-roster-ttl call-late-join call-without-sfu relay-upgrade history-pull"
 fail=0
 run() {
   for sc in $1; do

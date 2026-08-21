@@ -159,7 +159,10 @@ export class LibP2PTransport implements PeerTransport {
    */
   private nextUpgradeAt = new Map<string, number>();
   private upgradeBackoff = new Map<string, number>();
-  /** peerId -> last time we heard anything from them. */
+  /**
+   * peerId -> last time something arrived on our DIRECT stream with them.
+   * Only proof of that stream counts here; see the pubsub handler.
+   */
   private lastInbound = new Map<string, number>();
   private pinging = new Set<string>();
   private pingMisses = new Map<string, number>();
@@ -355,7 +358,14 @@ export class LibP2PTransport implements PeerTransport {
       if (from === myId || this.isRelayPeer(from)) return;
       const topic: string = evt.detail.topic;
       const room = topic.startsWith("app:room:") ? topic.slice(9) : null;
-      this.lastInbound.set(from, Date.now());
+      // Deliberately NOT lastInbound. `from` is the message AUTHOR, and
+      // gossipsub routes through whoever is in the mesh, so a third peer
+      // forwarding B's message was counted as proof that OUR link to B works.
+      // That suppressed the liveness probe - the only thing that notices a
+      // direct stream writing into a dead circuit - and send() then returns
+      // true for frames that never arrive, which makes the DM layer delete
+      // them from its persisted queue. The message itself is the presence
+      // signal, so there is nothing further to record here.
       if (room && this.joinedRooms.has(room)) {
         this.emit("message", from, evt.detail.data, room);
       }
@@ -433,10 +443,13 @@ export class LibP2PTransport implements PeerTransport {
       this.relayedPeers.delete(id);
       this.pingMisses.delete(id);
       this.lastInbound.delete(id);
-      const liveConn = this.liveConnections.get(id);
-      if (liveConn && liveConn.status !== "open") {
-        this.liveConnections.delete(id);
-      }
+      // peer:disconnect is dispatched only once the LAST connection to the
+      // peer is gone, so by definition nothing here is usable - keeping an
+      // entry whose status merely still reads "open" leaves a dead connection
+      // for provenConnection to hand out.
+      this.liveConnections.delete(id);
+      this.nextUpgradeAt.delete(id);
+      this.upgradeBackoff.delete(id);
       this.cleanupPeerStream(id);
       this.emit("disconnect", id);
 
@@ -691,6 +704,12 @@ export class LibP2PTransport implements PeerTransport {
     this.updateRelayedStatus(peerId);
     this.nextDialAt.delete(peerId);
     this.dialBackoff.delete(peerId);
+    // Same reasoning as the dial backoff above: a peer that was unreachable by
+    // WebRTC ten minutes ago may be reachable now that it has reconnected, and
+    // inheriting a five-minute ceiling would keep the whole session on the
+    // relay.
+    this.nextUpgradeAt.delete(peerId);
+    this.upgradeBackoff.delete(peerId);
   }
 
   /** Forget a peer and tear down everything we hold for it. */
@@ -745,6 +764,8 @@ export class LibP2PTransport implements PeerTransport {
   private dropPeer(peerId: string): void {
     this.debugStats.disconnects++;
     this.pingMisses.delete(peerId);
+    this.nextUpgradeAt.delete(peerId);
+    this.upgradeBackoff.delete(peerId);
     this.confirmNonces.delete(peerId);
     this.liveConnections.delete(peerId);
     this.connectedPeers.delete(peerId);
@@ -1485,12 +1506,22 @@ export class LibP2PTransport implements PeerTransport {
   private updateRelayedStatus(peerId: string): void {
     if (!this.node) return;
     const pid = this.node.getPeers().find((p) => p.toString() === peerId);
+    // getConnections(undefined) returns EVERY connection in the node, relay
+    // included, which reads as "direct" and silently answers a question we
+    // cannot answer. A peer with no connections has no status.
+    if (pid == null) return;
     const connections = this.node.getConnections(pid);
     if (!connections?.length) return;
 
-    const hasDirect = connections.some(
-      (c) => !c.remoteAddr.toString().includes("/p2p-circuit")
-    );
+    // Not a substring test on the address. A direct WebRTC connection is
+    // DIALLED through the relay for signalling, so the dialer's own side keeps
+    // `.../p2p-circuit/webrtc/p2p/<peer>` as its remoteAddr - which contains
+    // "/p2p-circuit" while being exactly the direct connection we wanted. That
+    // made every upgrade look like it had failed on the side that performed
+    // it, so the traffic never moved off the circuit. libp2p already answers
+    // this properly: it sets `direct` from a real circuit matcher when the
+    // connection is built, so use its answer rather than a second, wrong one.
+    const hasDirect = connections.some((c) => c.direct);
 
     if (hasDirect) this.relayedPeers.delete(peerId);
     else this.relayedPeers.add(peerId);

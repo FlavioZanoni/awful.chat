@@ -781,6 +781,18 @@ async function _handleSyncBatch(
       `[sync] dropped ${messages.length - verified.length} message(s) with invalid signatures`
     );
   }
+  // The lowest lamport we REJECTED, per sender. A watermark may not pass it:
+  // claiming a message we threw away means no peer will ever offer it again,
+  // and there is no repair for that. It bites for real on legacy v1-signed
+  // history, which _verifyIncoming rejects wholesale.
+  const rejectedFloor = new Map<string, number>();
+  messages.forEach((m, i) => {
+    if (verdicts[i]) return;
+    const at = rejectedFloor.get(m.senderId);
+    if (at === undefined || m.lamport < at) {
+      rejectedFloor.set(m.senderId, m.lamport);
+    }
+  });
   if (!verified.length) return;
   const fullMessages = verified.map((w) => wireToMessage(w, roomCode));
 
@@ -790,7 +802,10 @@ async function _handleSyncBatch(
     // DM lamports are wall-clock ms; absorbing one would catapult the shared
     // room counter to ~1.7e12 and poison every room message sent after.
     if (!roomCode.startsWith("dm-")) lamportReceive(m.lamport);
-    await setWatermark(m.roomCode, m.senderId, m.lamport);
+    const floor = rejectedFloor.get(m.senderId);
+    if (floor === undefined || m.lamport < floor) {
+      await setWatermark(m.roomCode, m.senderId, m.lamport);
+    }
   }
 
   refreshUnreadCount(roomCode).catch(() => {});
@@ -803,14 +818,32 @@ async function _handleSyncBatch(
   if (transportState.roomCode !== roomCode) return;
   const windowFloor = transportState.messages[0]?.lamport ?? 0;
   const existingIds = new Set(transportState.messages.map((m) => m.id));
-  const newMsgs = fullMessages.filter(
-    (m) => !existingIds.has(m.id) && m.lamport >= windowFloor
-  );
-  if (newMsgs.length > 0) {
-    transportState.messages = [...transportState.messages, ...newMsgs].sort(
-      MSG_ORDER
+  const fresh = fullMessages.filter((m) => !existingIds.has(m.id));
+  if (!fresh.length) return;
+
+  // Anything below the loaded window is backfill: history that arrived late
+  // and belongs BEFORE what is on screen. Splicing it in would make it
+  // messages[0] and break the load-older cursor - but dropping it, which is
+  // what used to happen, left it stored and invisible. The view is only ever
+  // re-read from storage by _loadHistory and loadMoreMessages, so nothing
+  // brought it back short of a reload. That is the "history does not sync
+  // until I ctrl+shift+R" report. Re-read the page instead.
+  if (fresh.some((m) => m.lamport < windowFloor)) {
+    const page = await getMessages(roomCode);
+    if (transportState.roomCode !== roomCode) return;
+    const seen = new Set(page.map((m) => m.id));
+    // Keep anything already on screen that the newest page does not cover
+    // (the user may have paged back), so a refill never loses scrollback.
+    const kept = transportState.messages.filter(
+      (m) => m.roomCode === roomCode && !seen.has(m.id)
     );
+    transportState.messages = [...kept, ...page].sort(MSG_ORDER);
+    return;
   }
+
+  transportState.messages = [...transportState.messages, ...fresh].sort(
+    MSG_ORDER
+  );
 }
 
 function _handleSyncComplete(peerId: string): void {
