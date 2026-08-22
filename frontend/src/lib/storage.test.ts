@@ -20,6 +20,7 @@ import {
   getPhonebookEntries,
   markOwnMessagesReadUpTo,
   getOwnProfile,
+  putPeerProfile,
   putOwnProfile,
   updateOwnProfile,
   getAllMessages,
@@ -226,6 +227,35 @@ describe("own profile color", () => {
     });
     await updateOwnProfile({ color: undefined });
     expect((await getOwnProfile())?.color).toBeUndefined();
+  });
+});
+
+describe("own profile survives a second device", () => {
+  // Reported from real use: name and picture gone after a refresh. Profiles
+  // are keyed by did and getOwnProfile finds the row flagged isMe, so an
+  // incoming profile stored under our OWN did replaced it with isMe:false.
+  // The peer that carries our did is our own other browser - the restore key
+  // gives it the same identity - so this needs no attacker to happen.
+  it("finds the profile again when the isMe flag was overwritten", async () => {
+    await putOwnProfile({
+      did: "did:key:zMe",
+      isMe: true,
+      nickname: "Me",
+      updatedAt: 1_000,
+    });
+    // What the old code did on hearing from our second device.
+    await putPeerProfile({
+      did: "did:key:zMe",
+      isMe: false,
+      nickname: "Me",
+      updatedAt: 2_000,
+    });
+
+    expect(await getOwnProfile()).toBeUndefined();
+    const recovered = await getOwnProfile("did:key:zMe");
+    expect(recovered?.nickname).toBe("Me");
+    // ...and the flag is repaired, so it is found without help next time.
+    expect((await getOwnProfile())?.nickname).toBe("Me");
   });
 });
 

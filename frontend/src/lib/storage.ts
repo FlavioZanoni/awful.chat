@@ -739,10 +739,27 @@ export async function deleteRoom(roomCode: string): Promise<void> {
   await database.delete("rooms", roomCode);
 }
 
-export async function getOwnProfile(): Promise<OwnProfile | undefined> {
+export async function getOwnProfile(
+  selfDid?: string
+): Promise<OwnProfile | undefined> {
   const database = await getDB();
   const all = await database.getAll("profiles");
-  return all.find((p): p is OwnProfile => p.isMe === true);
+  const mine = all.find((p): p is OwnProfile => p.isMe === true);
+  if (mine) return mine;
+  // Fall back to the row under our own did, and repair the flag. An incoming
+  // profile used to be written over that row with isMe:false - our own second
+  // device carries the same did - and the flag alone then hid a row that was
+  // otherwise intact, so the app looked like it had forgotten who we are.
+  if (!selfDid) return undefined;
+  const byDid = all.find((p) => p.did === selfDid);
+  if (!byDid) return undefined;
+  const repaired = { ...byDid, isMe: true as const } as OwnProfile;
+  try {
+    await database.put("profiles", repaired);
+  } catch {
+    // Reading still works even if the repair write does not.
+  }
+  return repaired;
 }
 
 export async function putOwnProfile(profile: OwnProfile): Promise<void> {

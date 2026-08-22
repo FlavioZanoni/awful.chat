@@ -24,7 +24,7 @@ export const profileStore = $state<ProfileStore>({
 let _blobUrl: string | undefined;
 
 export async function loadProfile(): Promise<void> {
-  const p = await getOwnProfile();
+  const p = await getOwnProfile(identityStore.did ?? undefined);
   if (!p) return;
   // Repair profiles written before the identity was known: the row was keyed
   // by an empty did, which detaches it from the identity it belongs to.
@@ -59,7 +59,7 @@ function chained(fn: () => Promise<void>): Promise<void> {
 }
 
 async function ensureProfile(did?: string): Promise<void> {
-  const existing = await getOwnProfile();
+  const existing = await getOwnProfile(identityStore.did ?? undefined);
   if (!existing) {
     await putOwnProfile({
       did: did ?? identityStore.did ?? "",

@@ -962,6 +962,17 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
     transportState.peerColors = colors;
   }
 
+  // NEVER write over our own row. Profiles are keyed by did and getOwnProfile
+  // finds the one flagged isMe, so a peer profile stored under our own did
+  // replaces it with isMe:false and their name and avatar - and our identity
+  // silently disappears on the next reload.
+  //
+  // The peer that legitimately carries our did is our OWN other device: the
+  // restore key gives it the same identity, its device key gives it a
+  // different peerId, and it can sign a perfectly valid binding for it. So
+  // this is not an attack to be rejected, it is a normal thing to ignore.
+  if (did === (identityStore.did ?? "")) return;
+
   getPeerProfile(did)
     .then((existing) =>
       putPeerProfile({
