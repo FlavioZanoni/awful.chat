@@ -59,6 +59,14 @@ export function _sendCallPresence(peerId?: string): void {
     [callRoom, transportState.roomCode].filter((r): r is string => !!r)
   );
   for (const room of rooms) _transport.broadcast(payload, room);
+  // ...and directly to everyone we hold a connection to. Broadcast alone is
+  // gossipsub, which is best effort and needs a formed mesh - somebody who has
+  // just joined the topic may not be in anyone's mesh yet, so their "I am in
+  // the call" could be dropped and not retried until the 20s heartbeat. Nobody
+  // can dial a voice link to a peer they have not heard is in the call, so a
+  // lost announcement is dead air for everyone else. The direct streams are
+  // confirmed and already open; the frame is a few bytes.
+  for (const pid of _transport.peers()) _transport.send(pid, payload);
 }
 
 // Keep the screen awake for the duration of a call. The browser drops the lock
@@ -114,6 +122,13 @@ async function _joinCall(): Promise<void> {
     if (!transportState.relayConnected) {
       await connect();
     }
+    // Joining a call is the clearest signal there is that this person wants to
+    // reach the others RIGHT NOW, so drop any accumulated dial backoff and
+    // reconcile. A peer whose earlier dials failed sits in a wait that doubles
+    // to a minute, and no voice link can exist before the peer connection
+    // does - which is how hopping into a call ended up connecting to one
+    // person immediately and the rest a couple of minutes later.
+    _transport.reconcileNow();
     await _voice.join(transportState.roomCode ?? "");
     // Voice is peer-to-peer; only camera and screen share go through the SFU.
     // Awaiting this unguarded meant a media server that was down (or a VPS

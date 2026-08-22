@@ -676,6 +676,23 @@ export class LibP2PTransport implements PeerTransport {
    * though messages flow over it.
    */
   /**
+   * Dial one peer immediately, ignoring whatever backoff it had accumulated.
+   *
+   * retryMissingRoomPeers doubles its wait to a minute, which is right for a
+   * peer that may simply be offline and wrong for one we have just been told
+   * is sitting in our call: the voice layer cannot dial a link until the peer
+   * connection exists, so the backoff became the wait. Cheap to be wrong -
+   * dialPeer no-ops if we are already connected.
+   */
+  dialNow(peerId: string): void {
+    if (this.intentionalDisconnect || !this.node) return;
+    if (this.connectedPeers.has(peerId) || this.dialingPeers.has(peerId)) return;
+    this.nextDialAt.delete(peerId);
+    this.dialBackoff.delete(peerId);
+    this.dialPeer(peerId).catch(() => {});
+  }
+
+  /**
    * Reconnect anything that drifted, right now. Clears the dial backoff, so a
    * peer we had given up on for the next minute is retried immediately. Meant
    * for the moment a user returns to a page that sat in the background.

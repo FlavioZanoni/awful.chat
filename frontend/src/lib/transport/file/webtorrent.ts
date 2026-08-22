@@ -26,6 +26,11 @@ type TorrentLike = {
   addPeer?: (peer: unknown) => void;
 };
 
+/** How often the file links are compared against the seeders we know of. */
+const WT_RECONCILE_MS = 5_000;
+/** Ceiling on the per-pair retry wait. */
+const WT_RETRY_MAX_MS = 60_000;
+
 function wtKey(infoHash: string, peerId: string): string {
   return `${infoHash}:${peerId}`;
 }
@@ -63,10 +68,68 @@ export class WebTorrentFileTransport implements FileTransferTransport {
   private connectedPeers = new Set<string>();
   private seedersByHash = new Map<string, Set<string>>();
   private wtPeers = new Map<string, SimplePeerInstance>();
+  /**
+   * Per-pair retry state for the WebRTC links that carry file data.
+   *
+   * Each (file, peer) pair gets its own SimplePeer, created either when a
+   * download starts or when a signal arrives - and when one failed it was
+   * deleted and never rebuilt. With one or two people that is rarely visible;
+   * with a roomful it is the difference between a transfer and a stall,
+   * because every additional person is another handful of connections that can
+   * lose the ICE race, and each loss silently subtracted a seeder for the rest
+   * of the transfer. Same shape as the voice reconcile: a tick that compares
+   * what should exist against what does.
+   */
+  private wtNextTry = new Map<string, number>();
+  private wtBackoff = new Map<string, number>();
+  private wtReconcileTimer: ReturnType<typeof setInterval> | null = null;
   private attachedTorrents = new Set<string>();
   private seedingByHash = new Map<string, boolean>();
 
-  constructor(private readonly selfId: () => string) {}
+  constructor(private readonly selfId: () => string) {
+    if (typeof window !== "undefined") {
+      this.wtReconcileTimer = setInterval(
+        () => this.reconcileWtPeers(),
+        WT_RECONCILE_MS
+      );
+    }
+  }
+
+  /**
+   * Rebuild the file links that should exist and do not.
+   *
+   * Costs nothing while everything is healthy - a walk over transfers that are
+   * still downloading. Only pairs whose connection failed, or never got made,
+   * are dialled, and each backs off on its own so an unreachable peer is not
+   * retried every few seconds for the whole transfer.
+   */
+  private reconcileWtPeers(): void {
+    if (typeof document !== "undefined" && document.hidden) return;
+    const now = Date.now();
+    for (const [infoHash, snapshot] of this.transfers) {
+      // Only what we are still trying to fetch.
+      if (snapshot.status !== "downloading" && snapshot.status !== "pending") {
+        continue;
+      }
+      const seeders = this.seedersByHash.get(infoHash);
+      if (!seeders?.size) continue;
+      for (const peerId of seeders) {
+        if (peerId === this.selfId()) continue;
+        // A seeder we cannot currently reach at all is not worth dialling.
+        if (!this.connectedPeers.has(peerId)) continue;
+        const key = wtKey(infoHash, peerId);
+        if (this.wtPeers.has(key)) continue;
+        if (now < (this.wtNextTry.get(key) ?? 0)) continue;
+        const wait = Math.min(
+          Math.max((this.wtBackoff.get(key) ?? 0) * 2, WT_RECONCILE_MS),
+          WT_RETRY_MAX_MS
+        );
+        this.wtBackoff.set(key, wait);
+        this.wtNextTry.set(key, now + wait);
+        this.createWTPeer(infoHash, peerId, true);
+      }
+    }
+  }
 
   async seedFiles(files: File[]): Promise<FileDescriptor[]> {
     const seeded = await Promise.all(
@@ -199,6 +262,14 @@ export class WebTorrentFileTransport implements FileTransferTransport {
 
   onPeerDisconnect(peerId: string): void {
     this.connectedPeers.delete(peerId);
+    // Their retry state goes with them, so a peer that reconnects is dialled
+    // straight away rather than inheriting a wait from before it dropped.
+    for (const key of [...this.wtNextTry.keys()]) {
+      if (key.endsWith(peerId)) {
+        this.wtNextTry.delete(key);
+        this.wtBackoff.delete(key);
+      }
+    }
 
     for (const [infoHash, seeders] of this.seedersByHash) {
       if (seeders.delete(peerId)) {
@@ -381,6 +452,8 @@ export class WebTorrentFileTransport implements FileTransferTransport {
     });
 
     peer.on("connect", () => {
+      this.wtNextTry.delete(key);
+      this.wtBackoff.delete(key);
       void this.client().then((client) => {
         const torrent = client.get(
           infoHash

@@ -1067,6 +1067,18 @@ function _handleCallPresence(
 
   transportState.callPeerIds = next;
   transportState.callPeerRooms = roomNext;
+  // Somebody in OUR call that we have no peer connection to is the one case
+  // worth jumping the dial backoff for: no connection means no voice link, and
+  // the presence frame we just handled may have come the long way round via
+  // gossipsub rather than from them directly.
+  if (
+    inCall &&
+    transportState.inCall &&
+    roomCode === transportState.callRoomCode &&
+    !_transport.peers().includes(peerId)
+  ) {
+    _transport.dialNow(peerId);
+  }
   _syncVoiceRoster();
 }
 
