@@ -57,14 +57,21 @@ export async function playLeaveSound() {
  * join/leave: you already know when you pressed the button, so those stay the
  * prominent ones, but you still hear the room fill up behind you.
  */
+// These two were the quietest cues in the file (0.07 and 0.06) while being the
+// only ones that play OVER live call audio - everything else sounds into
+// silence. Competing with people talking needs more level, not less, so they
+// now sit slightly above the join sound you hear for yourself, and last a
+// little longer so a short blip is not lost under a voice.
 export async function playPeerJoinSound() {
-  playOsc(660, 0.07, "sine", 0.07);
-  setTimeout(() => playOsc(880, 0.1, "sine", 0.06), 55);
+  playOsc(660, 0.09, "sine", 0.16);
+  setTimeout(() => playOsc(880, 0.12, "sine", 0.14), 55);
 }
 
 export async function playPeerLeaveSound() {
-  playOsc(660, 0.07, "sine", 0.06);
-  setTimeout(() => playOsc(440, 0.12, "sine", 0.05), 55);
+  // Kept below the join cue: someone arriving is the one you want to look up
+  // for. Raised in step with it so the pair still sounds related.
+  playOsc(660, 0.09, "sine", 0.13);
+  setTimeout(() => playOsc(440, 0.14, "sine", 0.11), 55);
 }
 
 export async function playMuteSound() {
