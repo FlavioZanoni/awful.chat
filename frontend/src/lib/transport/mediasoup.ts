@@ -573,6 +573,19 @@ export class MediasoupVideo implements VideoTransport {
         // Track lifecycle is owned by the app (stopSource / call.svelte),
         // and rejoin republishes the same tracks after a transport rebuild.
         stopTracks: false,
+        // The only audio through the SFU is screen-share loopback (voice is
+        // p2p): game and media sound, not speech. Default Opus is mono,
+        // voice-tuned, with DTX gating quiet passages - music through that
+        // collapses to a phone call. Stereo, no DTX, and enough bitrate.
+        ...(track.kind === "audio"
+          ? {
+              codecOptions: {
+                opusStereo: true,
+                opusDtx: false,
+                opusMaxAverageBitrate: 128_000,
+              },
+            }
+          : {}),
       });
 
       const entry: Producer = { producer, source, stream };

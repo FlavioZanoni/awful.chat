@@ -290,6 +290,9 @@ export async function startScreenShare(): Promise<void> {
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
+        // Stereo at full rate: without asking, Chromium hands over mono.
+        channelCount: 2,
+        sampleRate: 48000,
       },
       systemAudio: "include",
       selfBrowserSurface: "exclude",
@@ -309,6 +312,10 @@ export async function startScreenShare(): Promise<void> {
           "Sharing the whole screen sends ALL system audio - people will hear themselves. Share the game window instead (with 'Also share audio') to send only its sound.",
       });
     }
+    // "music" keeps the browser's encoder from treating loopback audio as
+    // speech. Video hint stays unset: "motion" would smooth games but smear
+    // shared text, and we cannot know which this share is.
+    for (const track of stream.getAudioTracks()) track.contentHint = "music";
     transportState.localScreenStream = stream;
     transportState.screenSharing = true;
     playScreenShareStartSound();
