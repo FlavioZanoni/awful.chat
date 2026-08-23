@@ -24,6 +24,20 @@ registerSW({
   },
 });
 
+// A tab that loaded before a deploy holds the old index.html, and its lazy
+// imports (webtorrent, mediasoup-client, shiki...) point at hashed chunks the
+// new deploy deleted - the click that needed one just failed. Vite fires this
+// event for exactly that; a reload gets the new index whose chunks all exist.
+// The once-a-minute guard stops a reload loop when the failure is not a stale
+// hash (offline, server down).
+window.addEventListener("vite:preloadError", (event) => {
+  const last = Number(sessionStorage.getItem("preload-error-reload") ?? 0);
+  if (Date.now() - last < 60_000) return; // let it surface as a normal error
+  sessionStorage.setItem("preload-error-reload", String(Date.now()));
+  event.preventDefault();
+  window.location.reload();
+});
+
 const app = mount(App, {
   target: document.getElementById("app")!,
 });
