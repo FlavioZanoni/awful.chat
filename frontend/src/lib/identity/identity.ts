@@ -78,8 +78,11 @@ export interface WebAuthnCapabilities {
   supported: boolean;
   /** Platform authenticator available (Touch ID, Windows Hello, Android biometrics) */
   platformAuthenticator: boolean;
-  /** Browser reports PRF extension support (doesn't guarantee authenticator support) */
-  prfBrowserSupport: boolean;
+  /**
+   * true/false when getClientCapabilities() gave a definitive answer,
+   * null when the browser is too old to ask (support still possible).
+   */
+  prfBrowserSupport: boolean | null;
   /** Full confidence: browser + platform authenticator + PRF all available */
   canEnroll: boolean;
 }
@@ -395,11 +398,29 @@ export async function enrollWebAuthn(password: string): Promise<void> {
   })) as PublicKeyCredential;
 
   const ext = (cred.getClientExtensionResults() as any).prf;
-  if (!ext?.results?.first) {
+  let prfOutput: ArrayBuffer | undefined = ext?.results?.first;
+  if (!prfOutput && ext?.enabled !== false) {
+    // Most browsers spent years only ENABLING prf at create() and evaluating
+    // it exclusively in a follow-up get() - which is why this feature
+    // originally "did not work": capable devices threw here. One extra
+    // fingerprint prompt right after enrollment covers all of them.
+    const assertion = (await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rpId: location.hostname,
+        allowCredentials: [{ type: "public-key", id: cred.rawId }],
+        userVerification: "required",
+        extensions: { prf: { eval: { first: prfSalt } } },
+      },
+    })) as PublicKeyCredential;
+    prfOutput = (assertion.getClientExtensionResults() as any).prf?.results
+      ?.first;
+  }
+  if (!prfOutput) {
     throw new Error("PRF extension not supported by this authenticator");
   }
 
-  const aesKey = await AESFromPRF(ext.results.first);
+  const aesKey = await AESFromPRF(prfOutput);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
@@ -491,15 +512,16 @@ export async function getWebAuthnCapabilities(): Promise<WebAuthnCapabilities> {
     PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(
       () => false
     ),
-    (async () => {
+    (async (): Promise<boolean | null> => {
       if (typeof PublicKeyCredential.getClientCapabilities !== "function")
-        return false;
+        return null;
       try {
         const caps = await PublicKeyCredential.getClientCapabilities();
-        // spec: prf key is present and true
-        return !!(caps as Record<string, unknown>)["prf"];
+        const prf = (caps as Record<string, unknown>)["prf"];
+        // Absent key = the browser does not know either.
+        return typeof prf === "boolean" ? prf : null;
       } catch {
-        return false;
+        return null;
       }
     })(),
   ]);
@@ -508,6 +530,12 @@ export async function getWebAuthnCapabilities(): Promise<WebAuthnCapabilities> {
     supported,
     platformAuthenticator,
     prfBrowserSupport,
-    canEnroll: platformAuthenticator && prfBrowserSupport,
+    // Optimistic on purpose. getClientCapabilities() is too new to demand
+    // (Chrome 133+/Safari 17.4+): requiring prf===true hid the enroll button
+    // on every browser without the probe, including ones whose PRF works
+    // fine. Only an EXPLICIT "prf: false" answer rules it out - anything
+    // less knowable is settled by attempting enrollment, which reports
+    // cleanly when the authenticator truly cannot do it.
+    canEnroll: platformAuthenticator && prfBrowserSupport !== false,
   };
 }

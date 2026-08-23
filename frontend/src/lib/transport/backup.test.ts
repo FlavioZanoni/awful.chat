@@ -8,6 +8,7 @@ import {
   pfpToJson,
   summarizeBackup,
   type BackupFile,
+  bytesFromExport,
 } from "./backup";
 
 function backupJson(overrides: Record<string, unknown> = {}): string {
@@ -164,5 +165,20 @@ describe("mergeImportedRoom", () => {
     );
     expect(merged.lastSeenLamport).toBe(900);
     expect(merged.name).toBe("Real Name");
+  });
+});
+
+describe("bytesFromExport", () => {
+  it("decodes both the base64 and the legacy number[] encodings", () => {
+    const bytes = [104, 105, 33];
+    const fromLegacy = bytesFromExport(bytes);
+    const fromB64 = bytesFromExport(btoa("hi!"));
+    expect([...new Uint8Array(fromLegacy!)]).toEqual(bytes);
+    expect([...new Uint8Array(fromB64!)]).toEqual(bytes);
+  });
+
+  it("returns undefined for absent or garbage data", () => {
+    expect(bytesFromExport(undefined)).toBeUndefined();
+    expect(bytesFromExport("%%%not-base64%%%")).toBeUndefined();
   });
 });

@@ -25,6 +25,7 @@ import {
   getPeerProfile,
 } from "../storage";
 import type { Message, Attachment, PendingMessage } from "../types/message";
+import { bytesToBase64 } from "../utils";
 import type {
   Room,
   DMRoom,
@@ -36,6 +37,7 @@ import type {
 import {
   BACKUP_FORMAT,
   BACKUP_VERSION,
+  bytesFromExport,
   parseBackup,
   mergeImportedRoom,
   pfpFromJson,
@@ -114,6 +116,11 @@ function tokenPrefix(t: string | undefined | null): string {
 const SYNC_ROOM_PREFIX = "__sync_";
 const SYNC_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 const BATCH_SIZE = 50;
+/** Encoded-bytes budget per frame; the transport aborts frames over 4MB. */
+const MAX_BATCH_BYTES = 2_500_000;
+/** How long the source waits for the target's import ack before erroring. */
+const ACK_TIMEOUT_MS = 120_000;
+let _ackTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
 function encode(data: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(data));
@@ -340,10 +347,15 @@ async function startSyncServer(): Promise<void> {
         // Target acknowledged receipt (can be used for flow control)
         console.log("[Sync][Source] Received acknowledgment");
       } else if (msg.type === SyncMessageType.ExportComplete) {
+        if (_ackTimeoutTimer) clearTimeout(_ackTimeoutTimer);
+        _ackTimeoutTimer = null;
         syncState.isSyncing = false;
         syncState.isComplete = true;
+        syncState.syncProgress = 100;
         await cleanup();
       } else if (msg.type === SyncMessageType.SyncError) {
+        if (_ackTimeoutTimer) clearTimeout(_ackTimeoutTimer);
+        _ackTimeoutTimer = null;
         syncState.syncError = (msg.payload as { error: string }).error;
         await cleanup();
       }
@@ -403,29 +415,64 @@ async function sendExportData(
 
     let processed = 0;
     for (const section of sections) {
-      const batches = Math.ceil(section.data.length / BATCH_SIZE);
+      // Batches close on bytes as well as count: 50 attachments per frame
+      // put whole image blobs into one message and blew the receiver's 4MB
+      // frame cap, which killed the stream - the sync that sat at 90% on one
+      // device and 20% on the other. An item too big even alone travels
+      // without its bytes; the record still syncs and the file layer
+      // re-fetches the bytes from this device later.
+      const batches: unknown[][] = [];
+      let cur: unknown[] = [];
+      let curBytes = 0;
+      for (const item of section.data as unknown[]) {
+        let entry = item;
+        let sz = JSON.stringify(entry)?.length ?? 0;
+        if (sz > MAX_BATCH_BYTES) {
+          const { data: _dropped, ...rest } = entry as { data?: unknown };
+          console.warn(
+            `[Sync][Source] ${section.name} item exceeds the frame budget - sent without bytes`
+          );
+          entry = rest;
+          sz = JSON.stringify(entry)?.length ?? 0;
+        }
+        if (cur.length && (cur.length >= BATCH_SIZE || curBytes + sz > MAX_BATCH_BYTES)) {
+          batches.push(cur);
+          cur = [];
+          curBytes = 0;
+        }
+        cur.push(entry);
+        curBytes += sz;
+      }
+      if (cur.length) batches.push(cur);
       console.log(
-        `[Sync][Source] Sending ${section.name}: ${section.data.length} items in ${batches} batches`
+        `[Sync][Source] Sending ${section.name}: ${section.data.length} items in ${batches.length} batches`
       );
 
-      for (let i = 0; i < batches; i++) {
-        const batch = section.data.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
-        _transport.send(
+      for (let i = 0; i < batches.length; i++) {
+        // send() resolving false means the stream is gone; silently pouring
+        // the rest of the export into it is how the source reached 90% with
+        // a target that had stopped hearing anything at 20%.
+        const ok = await _transport.send(
           peerId,
           encode({
             type: SyncMessageType.ExportData,
             payload: {
               section: section.name,
               batchIndex: i,
-              totalBatches: batches,
-              data: batch,
+              totalBatches: batches.length,
+              data: batches[i],
               token,
             },
           })
         );
+        if (!ok) {
+          throw new Error(
+            `Connection lost while sending ${section.name} - try again`
+          );
+        }
 
         // Small delay between batches to prevent overwhelming the target
-        if (i < batches - 1) {
+        if (i < batches.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
       }
@@ -439,9 +486,22 @@ async function sendExportData(
 
     console.log("[Sync][Source] Sending ExportComplete");
     // Send completion
-    _transport.send(peerId, encode({ type: SyncMessageType.ExportComplete }));
+    const okComplete = await _transport.send(
+      peerId,
+      encode({ type: SyncMessageType.ExportComplete })
+    );
+    if (!okComplete) {
+      throw new Error("Connection lost before the export finished - try again");
+    }
 
-    // Don't set to 100% here - wait for target's acknowledgment
+    // Don't set to 100% here - wait for target's acknowledgment, but not
+    // forever: a target that died mid-import used to leave this side parked
+    // at 90% with no error.
+    _ackTimeoutTimer = setTimeout(() => {
+      syncState.syncError =
+        "The other device never confirmed the import - try again";
+      syncState.isSyncing = false;
+    }, ACK_TIMEOUT_MS);
     console.log("[Sync][Source] Waiting for target to finish importing...");
   } catch (err) {
     console.error("[Sync] Error sending export data:", err);
@@ -731,7 +791,7 @@ async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
     messages,
     attachments: (attachments as Attachment[]).map((a) => ({
       ...a,
-      data: a.data ? Array.from(new Uint8Array(a.data)) : undefined,
+      data: a.data ? bytesToBase64(new Uint8Array(a.data)) : undefined,
     })),
     pending,
     watermarks,
@@ -741,7 +801,14 @@ async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
     })),
     rooms: (rooms as (Room | DMRoom)[]).map(pfpToJson),
     profiles: (profiles as (PeerProfile | OwnProfile)[]).map(pfpToJson),
-    savedGifs,
+    // Saved uploaded gifs carry bytes, and JSON.stringify(ArrayBuffer) is {} -
+    // without this they silently arrived empty on the other device.
+    savedGifs: (savedGifs as SavedGif[]).map((g) => ({
+      ...g,
+      data: g.data
+        ? (bytesToBase64(new Uint8Array(g.data)) as unknown as ArrayBuffer)
+        : undefined,
+    })),
   };
 
   if (identity) {
@@ -804,7 +871,7 @@ async function importDatabase(
     ...data.attachments.map((a) =>
       putAttachment({
         ...a,
-        data: a.data ? new Uint8Array(a.data).buffer : undefined,
+        data: bytesFromExport(a.data),
       } as Attachment)
     ),
     ...data.rooms.map((r) => {
@@ -850,7 +917,14 @@ async function importDatabase(
         }
       }
     }),
-    ...data.savedGifs.map((g) => putSavedGif(g)),
+    ...data.savedGifs.map((g) =>
+      putSavedGif({
+        ...g,
+        data: bytesFromExport(
+          g.data as unknown as string | number[] | undefined
+        ),
+      })
+    ),
     ...data.pending.map((p) => {
       return (async () => {
         const db = await getDB();
@@ -1014,6 +1088,8 @@ export function resetSyncState(): void {
  * Clean up resources.
  */
 async function cleanup(): Promise<void> {
+  if (_ackTimeoutTimer) clearTimeout(_ackTimeoutTimer);
+  _ackTimeoutTimer = null;
   if (_transport) {
     _transport.disconnect();
     _transport = null;

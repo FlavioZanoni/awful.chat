@@ -19,6 +19,7 @@
     ArrowDown,
     UserPlus,
     UserRoundMinus,
+    Trash2,
   } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
@@ -1391,13 +1392,16 @@
           <div
             class="group relative shrink-0 rounded-md border border-border/70 bg-background/80 p-1.5"
           >
+            <!-- Always visible: hover-gated made it invisible on touch, and
+                 a file staged by mistake needs an obvious way out (Esc works
+                 but nothing said so). -->
             <button
               type="button"
-              class="absolute right-2 top-1 z-10 hidden size-5 items-center justify-center rounded-full bg-black/70 text-white group-hover:inline-flex"
+              class="absolute -right-1.5 -top-1.5 z-10 inline-flex size-5 items-center justify-center rounded-full bg-red-500 text-white shadow-sm hover:bg-red-600"
               aria-label="Remove file"
               onclick={() => removeStagedFile(file)}
             >
-              <X class="size-3" />
+              <Trash2 class="size-3" />
             </button>
 
             {#if previewUrl && file.type.startsWith("image/")}

@@ -6,6 +6,7 @@
  * QR device sync depend on it round-tripping without silently dropping data.
  */
 
+import { base64ToBytes } from "../utils";
 import type { Message, Attachment, PendingMessage } from "../types/message";
 import type {
   Room,
@@ -24,7 +25,12 @@ export interface AttachmentExport {
   mimeType: string;
   size: number;
   infoHash: string;
-  data?: number[]; // ArrayBuffer converted to number[] for JSON serialization
+  /**
+   * Base64 (current) or number[] (older exports). number[] quadrupled the
+   * bytes as JSON text, which blew the 4MB sync frame cap on any real image
+   * batch - the "stuck at 90%/20%" device sync.
+   */
+  data?: string | number[];
   status: Attachment["status"];
   createdAt: number;
 }
@@ -59,7 +65,10 @@ export interface DatabaseExport {
 }
 
 export const BACKUP_FORMAT = "awful.chat/backup";
-export const BACKUP_VERSION = 1;
+// v2: attachment and saved-gif bytes are base64 strings, not number[]. An
+// old build restoring a v2 file would coerce the string to garbage bytes, so
+// it must refuse cleanly on the version instead.
+export const BACKUP_VERSION = 2;
 
 export interface BackupFile extends DatabaseExport {
   format: typeof BACKUP_FORMAT;
@@ -124,6 +133,21 @@ export function mergeImportedRoom<T extends Room>(local: Room, imported: T): T {
     name:
       !local.name || local.name === local.roomCode ? imported.name : local.name,
   };
+}
+
+/** Accept both encodings of exported bytes; undefined for anything else. */
+export function bytesFromExport(
+  data: string | number[] | undefined
+): ArrayBuffer | undefined {
+  if (typeof data === "string") {
+    try {
+      return base64ToBytes(data).buffer;
+    } catch {
+      return undefined;
+    }
+  }
+  if (Array.isArray(data)) return new Uint8Array(data).buffer;
+  return undefined;
 }
 
 export function pfpFromJson<T extends { pfpData?: unknown }>(rec: T): T {
