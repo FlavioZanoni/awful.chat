@@ -530,12 +530,15 @@ export async function getWebAuthnCapabilities(): Promise<WebAuthnCapabilities> {
     supported,
     platformAuthenticator,
     prfBrowserSupport,
-    // Optimistic on purpose. getClientCapabilities() is too new to demand
-    // (Chrome 133+/Safari 17.4+): requiring prf===true hid the enroll button
-    // on every browser without the probe, including ones whose PRF works
-    // fine. Only an EXPLICIT "prf: false" answer rules it out - anything
-    // less knowable is settled by attempting enrollment, which reports
-    // cleanly when the authenticator truly cannot do it.
-    canEnroll: platformAuthenticator && prfBrowserSupport !== false,
+    // Optimistic on purpose, twice over. getClientCapabilities() is too new
+    // to demand (Chrome 133+/Safari 17.4+): requiring prf===true hid the
+    // enroll button on every browser without the probe, including ones whose
+    // PRF works fine - only an EXPLICIT "prf: false" rules it out. And
+    // platformAuthenticator only says whether THIS machine has a fingerprint
+    // reader / Windows Hello; a YubiKey is invisible to every probe until
+    // the chooser opens, so requiring it hid the button on exactly the
+    // desktops where a security key is the whole plan. The enrollment
+    // attempt itself is the real probe; cancelling it costs nothing.
+    canEnroll: supported && prfBrowserSupport !== false,
   };
 }

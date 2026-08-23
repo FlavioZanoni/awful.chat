@@ -145,7 +145,8 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
         {/if}
       {:else}
         <p class="text-xs text-muted-foreground font-mono">
-          Use biometrics to unlock without your password.
+          Use a fingerprint or a security key (YubiKey) to unlock without
+          your password.
         </p>
         <Input
           type="password"
