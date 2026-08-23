@@ -1,6 +1,9 @@
 import {
+  attachmentEpoch,
   getAttachmentsByInfoHash,
   getAttachmentsWithData,
+  getRoomParticipants,
+  getSeedableFiles,
   putAttachment,
   updateAttachmentStatus,
   updateAttachmentData,
@@ -69,6 +72,19 @@ export function initFiles(fileTransport: WebTorrentFileTransport): void {
   if (_initialized) return;
   _initialized = true;
   _fileTransport = fileTransport;
+
+  // Anything whose bytes we still hold can be served, whether or not its
+  // conversation is the one currently open.
+  _fileTransport.setLocalFileLookup(async (infoHash) => {
+    const stored = (await getAttachmentsByInfoHash(infoHash)).find(
+      (attachment) => attachment.data
+    );
+    if (!stored?.data) return null;
+    return new File([stored.data], stored.filename, {
+      type: stored.mimeType,
+      lastModified: stored.createdAt,
+    });
+  });
 
   _fileTransport.on("signal", (peerId, envelope) => {
     _transport.send(
@@ -184,6 +200,52 @@ export function withFileTransfer(snapshot: FileTransferSnapshot): void {
   const next = new Map(transportState.fileTransfers);
   next.set(snapshot.infoHash, nextSnapshot);
   transportState.fileTransfers = next;
+}
+
+/**
+ * The seedable set, cached until the attachment store changes. Peers reconnect
+ * often enough that re-walking every stored blob on each one is not free.
+ */
+let _seedable: { epoch: number; entries: Awaited<ReturnType<typeof getSeedableFiles>> } | null =
+  null;
+
+async function _seedableEntries() {
+  if (_seedable?.epoch === attachmentEpoch()) return _seedable.entries;
+  const entries = await getSeedableFiles();
+  _seedable = { epoch: attachmentEpoch(), entries };
+  return entries;
+}
+
+/**
+ * Tell a peer about every file we hold that belongs to a room they are in.
+ *
+ * Seeding is resumed only for the conversation that is open, and a peer only
+ * ever dials a seeder it was told about - so a file in any other room was
+ * invisible even though its bytes were sitting right here. The room-membership
+ * filter is the point: an inventory of everything we hold is not a peer's
+ * business, and for a room they ARE in they already have this metadata from
+ * the message itself.
+ */
+export async function _announceStoredFilesTo(peerId: string): Promise<void> {
+  const did = _peerIdToDid.get(peerId);
+  if (!did) return;
+  const entries = await _seedableEntries();
+  const shared = new Map<string, boolean>();
+  for (const { roomCode, file } of entries) {
+    let isMember = shared.get(roomCode);
+    if (isMember === undefined) {
+      isMember = (await getRoomParticipants(roomCode)).includes(did);
+      shared.set(roomCode, isMember);
+    }
+    if (!isMember) continue;
+    _transport.send(
+      peerId,
+      encode({
+        type: "__file_signal",
+        payload: { kind: "file-seeder", file },
+      } satisfies FileSignalWireMessage)
+    );
+  }
 }
 
 export async function _hydrateFileTransfersFromStorage(

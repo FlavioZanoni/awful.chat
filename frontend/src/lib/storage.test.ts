@@ -25,6 +25,9 @@ import {
   updateOwnProfile,
   getAllMessages,
   getAttachmentsWithData,
+  getSeedableFiles,
+  attachmentEpoch,
+  putAttachment,
   getDB,
 } from "./storage";
 import { MessageType, type Message } from "./types/message";
@@ -338,5 +341,29 @@ describe("getAttachmentsWithData", () => {
     });
     const withData = await getAttachmentsWithData("room-att");
     expect(withData.map((a) => a.id)).toEqual(["att-stuck"]);
+  });
+});
+
+describe("getSeedableFiles", () => {
+  it("returns one descriptor per infoHash, only for rows that kept the bytes", async () => {
+    const before = attachmentEpoch();
+    const base = {
+      roomCode: "room-a",
+      messageId: "m1",
+      filename: "cat.png",
+      mimeType: "image/png",
+      size: 4,
+      status: "seeding" as const,
+      createdAt: 1,
+    };
+    // Same file quoted in two messages, plus one whose bytes were never kept.
+    await putAttachment({ ...base, id: "a1", infoHash: "h1", data: new ArrayBuffer(4) });
+    await putAttachment({ ...base, id: "a2", infoHash: "h1", messageId: "m2", data: new ArrayBuffer(4) });
+    await putAttachment({ ...base, id: "a3", infoHash: "h2", roomCode: "room-b" });
+
+    const seedable = await getSeedableFiles();
+    expect(seedable.map((s) => s.file.infoHash).sort()).toEqual(["h1"]);
+    expect(seedable[0].roomCode).toBe("room-a");
+    expect(attachmentEpoch()).toBeGreaterThan(before);
   });
 });

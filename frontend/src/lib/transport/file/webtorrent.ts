@@ -86,6 +86,14 @@ export class WebTorrentFileTransport implements FileTransferTransport {
   private attachedTorrents = new Set<string>();
   private seedingByHash = new Map<string, boolean>();
 
+  private localFileLookup: ((infoHash: string) => Promise<File | null>) | null =
+    null;
+
+  /** Storage lives a layer up; this is how it offers files we have not seeded. */
+  setLocalFileLookup(fn: (infoHash: string) => Promise<File | null>): void {
+    this.localFileLookup = fn;
+  }
+
   constructor(private readonly selfId: () => string) {
     if (typeof window !== "undefined") {
       this.wtReconcileTimer = setInterval(
@@ -180,6 +188,11 @@ export class WebTorrentFileTransport implements FileTransferTransport {
 
     if (existing?.status === "downloading") {
       this.createWTPeer(file.infoHash, seederPeerId, true);
+    } else if (existing?.status === "failed") {
+      // The last seeder leaving fails the transfer; without this a seeder
+      // coming back was recorded and then ignored, and the file stayed
+      // undownloadable until the user hit retry by hand.
+      this.ensureDownload(file);
     }
   }
 
@@ -265,7 +278,7 @@ export class WebTorrentFileTransport implements FileTransferTransport {
     // Their retry state goes with them, so a peer that reconnects is dialled
     // straight away rather than inheriting a wait from before it dropped.
     for (const key of [...this.wtNextTry.keys()]) {
-      if (key.endsWith(peerId)) {
+      if (key.endsWith(`:${peerId}`)) {
         this.wtNextTry.delete(key);
         this.wtBackoff.delete(key);
       }
@@ -422,6 +435,39 @@ export class WebTorrentFileTransport implements FileTransferTransport {
     });
   }
 
+  /**
+   * Hand a live wire to its torrent, seeding the file first if we hold the
+   * bytes but have no torrent for them.
+   *
+   * Seeding is only resumed for the conversation that is OPEN, so every file
+   * in every other room and DM had no torrent behind it: the peer asking for
+   * it connected fine and then found nothing to talk to. Doing it here covers
+   * every dial - first download, manual retry, and the reconcile tick.
+   */
+  private async attachToTorrent(
+    infoHash: string,
+    peer: SimplePeerInstance
+  ): Promise<void> {
+    const client = await this.client();
+    let torrent = client.get(infoHash) as unknown as TorrentLike | null;
+    if (!torrent && this.localFileLookup) {
+      const file = await this.localFileLookup(infoHash).catch(() => null);
+      if (file) {
+        await this.seedFiles([file]).catch(() => {});
+        torrent = client.get(infoHash) as unknown as TorrentLike | null;
+      }
+    }
+    // The wire can die during the seed above, and a torrent we neither hold
+    // nor can rebuild means dropping the link so the reconcile tick dials
+    // again instead of counting a useless one as connected.
+    if ((peer as unknown as { destroyed?: boolean }).destroyed) return;
+    if (!torrent?.addPeer) {
+      peer.destroy();
+      return;
+    }
+    torrent.addPeer(peer);
+  }
+
   private createWTPeer(
     infoHash: string,
     peerId: string,
@@ -436,7 +482,12 @@ export class WebTorrentFileTransport implements FileTransferTransport {
       channelName: `wt:${infoHash}`,
       streams: [],
       config: {
-        iceCandidatePoolSize: 10,
+        // No iceCandidatePoolSize: it pre-gathers N full candidate sets the
+        // moment the connection is constructed - a TURN allocation per pool
+        // per server - and it was set to 10. Pre-gathering only pays off when
+        // the connection is built well before the offer; here the offer
+        // follows immediately, so all it bought was ten times the allocations
+        // against a TURN server that rate-limits.
         iceServers: getIceServers(),
       },
     });
@@ -451,17 +502,17 @@ export class WebTorrentFileTransport implements FileTransferTransport {
       });
     });
 
+    // webtorrent keys torrent._peers by `peer.id` and a bare SimplePeer has
+    // none, so every WebRTC peer landed on the same `undefined` slot: the
+    // second one silently overwrote the first, and either one closing called
+    // removePeer(undefined) and tore down the survivor. One seeder/leecher
+    // pair per file was the most that could ever work.
+    (peer as unknown as { id: string }).id = peerId;
+
     peer.on("connect", () => {
       this.wtNextTry.delete(key);
       this.wtBackoff.delete(key);
-      void this.client().then((client) => {
-        const torrent = client.get(
-          infoHash
-        ) as unknown as TorrentLike | null;
-        if (torrent?.addPeer) {
-          torrent.addPeer(peer);
-        }
-      });
+      void this.attachToTorrent(infoHash, peer);
     });
 
     peer.on("error", () => {

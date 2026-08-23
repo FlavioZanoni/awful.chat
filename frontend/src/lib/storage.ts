@@ -3,6 +3,7 @@ import { deleteDB, openDB, type IDBPDatabase } from "idb";
 import type {
   Attachment,
   AttachmentStatus,
+  FileEntry,
   Message,
   MessageStatus,
   PendingMessage,
@@ -382,6 +383,7 @@ export async function deleteMessagesForRoom(roomCode: string): Promise<void> {
     const attachments = await attachmentsIndex.getAll(message.id);
     for (const attachment of attachments) {
       await tx.objectStore("attachments").delete(attachment.id);
+      _attachmentEpoch += 1;
     }
     await tx.objectStore("messages").delete(message.id);
   }
@@ -518,10 +520,51 @@ export async function getAttachmentsWithData(
   );
 }
 
+/**
+ * Bumped whenever the stored attachment set changes, so callers that cache a
+ * derived view of it can tell theirs is stale without re-reading the store.
+ */
+let _attachmentEpoch = 0;
+export function attachmentEpoch(): number {
+  return _attachmentEpoch;
+}
+
+/**
+ * Every file we still hold the bytes for, with the room it belongs to.
+ *
+ * Walked with a cursor rather than getAll(): the records carry the blobs, and
+ * materialising all of them at once to read four small fields is how you run a
+ * phone out of memory.
+ */
+export async function getSeedableFiles(): Promise<
+  Array<{ roomCode: string; file: FileEntry }>
+> {
+  const database = await getDB();
+  const byHash = new Map<string, { roomCode: string; file: FileEntry }>();
+  let cursor = await database.transaction("attachments").store.openCursor();
+  while (cursor) {
+    const attachment = cursor.value;
+    if (attachment.data && !byHash.has(attachment.infoHash)) {
+      byHash.set(attachment.infoHash, {
+        roomCode: attachment.roomCode,
+        file: {
+          infoHash: attachment.infoHash,
+          filename: attachment.filename,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+        },
+      });
+    }
+    cursor = await cursor.continue();
+  }
+  return [...byHash.values()];
+}
+
 export async function putAttachment(attachment: Attachment): Promise<void> {
   const database = await getDB();
   const { blobURL: _, ...record } = attachment;
   await database.put("attachments", record);
+  _attachmentEpoch += 1;
 }
 
 const ATTACHMENT_STATUS_RANK: Record<AttachmentStatus, number> = {
@@ -570,6 +613,7 @@ export async function updateAttachmentData(
       : ("complete" as AttachmentStatus);
   await tx.store.put({ ...attachment, data, status });
   await tx.done;
+  _attachmentEpoch += 1;
 }
 
 export async function getKeypairRecord(): Promise<KeypairRecord | undefined> {

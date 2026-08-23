@@ -20,7 +20,10 @@ import {
 import { MessageType, type Message } from "$lib/types/message";
 import { signMessage } from "$lib/messaging";
 import { leaveCall } from "./call.svelte";
-import { _hydrateFileTransfersFromStorage } from "./files.svelte";
+import {
+  _hydrateFileTransfersFromStorage,
+  _resumeAttachmentSeeding,
+} from "./files.svelte";
 import {
   appendSorted,
   beginConversationOpen,
@@ -182,6 +185,14 @@ export async function openDmConversation(
   // so an image saved last night rendered as a bare file card after a
   // reload even though its bytes sat in storage.
   await _hydrateFileTransfersFromStorage(roomCode).catch(() => {});
+  // Rebuilding the blob URL only makes the image visible to US. Without
+  // re-seeding it there is no torrent in the client and no "file-seeder"
+  // announcement, so the peer on the other side of the DM sees 0 seeders and
+  // cannot fetch a file we are plainly looking at. joinRoom() has always done
+  // this; DMs never did.
+  await _resumeAttachmentSeeding(roomCode).catch((err) =>
+    console.warn("[dm] attachment re-seed failed:", err)
+  );
   if (!stillCurrent()) return false;
   transportState.chatMode = "dm";
   transportState.activeDmPeerId = resolvedPeerId;

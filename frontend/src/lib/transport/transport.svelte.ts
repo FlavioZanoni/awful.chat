@@ -82,6 +82,7 @@ import {
   sendDirectMessage,
 } from "./dm.svelte";
 import {
+  _announceStoredFilesTo,
   _hydrateFileTransfersFromStorage,
   _resumeAttachmentSeeding,
   fileFingerprint,
@@ -300,6 +301,9 @@ function _setPeerDid(peerId: string, did: string): void {
   _peerIdToDid.set(peerId, did);
   _profileRepair.delete(peerId);
   transportState.peerDidVersion += 1;
+  // The announcement is scoped by room membership, so it needs the DID; on a
+  // first connection that only lands here, once the profile has arrived.
+  _announceStoredFilesTo(peerId).catch(() => {});
 }
 const _seededByFingerprint = new Map<string, FileDescriptor>();
 
@@ -1445,6 +1449,9 @@ _transport.on("connect", (peerId) => {
   // own libp2p keys); it arrives with the signed binding in the Profile.
   flushQueuedDmForPeer(peerId).catch(() => {});
   _fileTransport.onPeerConnect(peerId);
+  // Covers a reconnect, where the DID mapping already exists and _setPeerDid
+  // short-circuits.
+  _announceStoredFilesTo(peerId).catch(() => {});
   _sendProfile(peerId);
   _sendRoomName(peerId);
   if (transportState.inCall) _sendCallPresence(peerId);
