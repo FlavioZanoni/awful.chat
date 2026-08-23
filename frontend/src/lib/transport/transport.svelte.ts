@@ -16,6 +16,7 @@ import {
   putPeerProfile,
   getAllPeerProfiles,
   putAttachment,
+  getAttachmentsByInfoHash,
   getAttachmentsByMessage,
   updateMessageStatus,
   getMessage,
@@ -65,7 +66,7 @@ import {
   verifyPeerBinding,
   verifySignature,
 } from "../messaging";
-import { encode, decode, normalizeAvatarUrl, normalizeNicknameColor } from "../utils";
+import { bytesToBase64, encode, decode, normalizeAvatarUrl, normalizeNicknameColor } from "../utils";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
 import { _sendWatchPresence } from "./transmission.svelte";
 import {
@@ -85,6 +86,8 @@ import {
   _announceStoredFilesTo,
   _hydrateFileTransfersFromStorage,
   _resumeAttachmentSeeding,
+  INLINE_FILE_MAX_BYTES,
+  stripAndAdoptInlineFiles,
   fileFingerprint,
   initFiles,
   isFileSignalWireMessage,
@@ -778,10 +781,48 @@ async function _pushMissingTo(
 
   if (!missing.length) return;
 
+  // Re-attach inline bytes for small files we still hold: this is what lets
+  // a peer who was offline at send time get the image at all - attachment
+  // bytes have no other path through history sync.
+  const enriched: WireChatMessage[] = await Promise.all(
+    missing.map(async (m) => {
+      if (m.type !== MessageType.File || !m.meta?.files?.length) return m;
+      const files = await Promise.all(
+        m.meta.files.map(async (f) => {
+          if (f.size > INLINE_FILE_MAX_BYTES) return f;
+          const stored = (await getAttachmentsByInfoHash(f.infoHash)).find(
+            (a) => a.data
+          );
+          return stored?.data
+            ? { ...f, inline: bytesToBase64(new Uint8Array(stored.data)) }
+            : f;
+        })
+      );
+      return { ...m, meta: { files } };
+    })
+  );
+
+  // Size-aware batching: BATCH_SIZE messages that each carry inline bytes
+  // would blow the 4MB frame cap, so a batch closes early on bytes too.
+  const MAX_BATCH_BYTES = 1_500_000;
+  const sizeOf = (m: WireChatMessage) =>
+    (m.content?.length ?? 0) +
+    (m.meta?.files?.reduce((n, f) => n + (f.inline?.length ?? 0), 0) ?? 0) +
+    512;
   const batches: WireChatMessage[][] = [];
-  for (let i = 0; i < missing.length; i += BATCH_SIZE) {
-    batches.push(missing.slice(i, i + BATCH_SIZE));
+  let cur: WireChatMessage[] = [];
+  let curBytes = 0;
+  for (const m of enriched) {
+    const sz = sizeOf(m);
+    if (cur.length && (cur.length >= BATCH_SIZE || curBytes + sz > MAX_BATCH_BYTES)) {
+      batches.push(cur);
+      cur = [];
+      curBytes = 0;
+    }
+    cur.push(m);
+    curBytes += sz;
   }
+  if (cur.length) batches.push(cur);
 
   for (let i = 0; i < batches.length; i++) {
     _transport.send(
@@ -829,6 +870,11 @@ async function _handleSyncBatch(
   });
   if (!verified.length) return;
   const fullMessages = verified.map((w) => wireToMessage(w, roomCode));
+
+  // Same rule as the live path: inline bytes never reach storage. Adoption
+  // also gives synced file messages their attachment records, which the sync
+  // path otherwise never creates.
+  for (const m of fullMessages) stripAndAdoptInlineFiles(m);
 
   await bulkPutMessages(fullMessages);
 
@@ -1326,6 +1372,10 @@ async function _handleChatMessage(
       _lastSeenLamport.set(`${roomCode}|${msg.senderId}`, msg.lamport);
     }
   }
+
+  // Inline bytes are wire-only: out before the message is stored or shown,
+  // adopted (verify/persist/seed) in the background.
+  stripAndAdoptInlineFiles(msg);
 
   // The in-memory list holds only the open room's newest page; a replayed
   // message from a background room would always look "new" and re-notify.
@@ -2121,6 +2171,9 @@ export async function sendFiles(
 
   const seeded: FileDescriptor[] = [];
   const sourceByInfoHash = new Map<string, File>();
+  // Small files also travel inside the message (wire copy only, never the
+  // stored one): they render for everyone like a CDN gif, seeders or not.
+  const _inlineByHash = new Map<string, string>();
 
   for (const file of files) {
     const fingerprint = await fileFingerprint(file);
@@ -2146,6 +2199,12 @@ export async function sendFiles(
     const source = sourceByInfoHash.get(seededFile.infoHash);
     if (!source) continue;
     const canPersistData = source.size <= MAX_PERSISTED_ATTACHMENT_BYTES;
+    if (source.size <= INLINE_FILE_MAX_BYTES) {
+      _inlineByHash.set(
+        seededFile.infoHash,
+        bytesToBase64(new Uint8Array(await source.arrayBuffer()))
+      );
+    }
     const attachment: Attachment = {
       id: crypto.randomUUID(),
       roomCode: transportState.roomCode,
@@ -2198,7 +2257,16 @@ export async function sendFiles(
 
   msg = signMessage(msg);
 
-  _transport.broadcast(encode(messageToWire(msg)), transportState.roomCode);
+  const wire = messageToWire(msg);
+  if (_inlineByHash.size) {
+    wire.meta = {
+      files: seeded.map((f) => {
+        const b64 = _inlineByHash.get(f.infoHash);
+        return b64 ? { ...f, inline: b64 } : f;
+      }),
+    };
+  }
+  _transport.broadcast(encode(wire), transportState.roomCode);
   await putMessage(msg);
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
 

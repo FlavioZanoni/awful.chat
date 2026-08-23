@@ -78,6 +78,9 @@ export interface SavedGif {
   url: string;
   previewUrl: string;
   savedAt: number;
+  /** Uploaded (webtorrent) gifs have no CDN url; the bytes live here. */
+  data?: ArrayBuffer;
+  mimeType?: string;
 }
 
 export interface PhonebookEntry {

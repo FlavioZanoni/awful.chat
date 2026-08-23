@@ -324,6 +324,13 @@
     autoScroll = true;
   }
 
+  function handleGifFileSelect(file: File) {
+    // A saved uploaded gif re-enters as a fresh file send: re-seeded, and
+    // inlined into the message when small enough.
+    sendFiles([file]).catch(() => {});
+    autoScroll = true;
+  }
+
   async function handleLoadMore() {
     if (loadingMore || !hasMoreHistory || messages.length === 0) return;
     loadingMore = true;
@@ -1509,6 +1516,7 @@
   open={gifPickerOpen}
   onOpenChange={(v) => (gifPickerOpen = v)}
   onSelect={handleGifSelect}
+  onSelectFile={handleGifFileSelect}
 />
 
 <EmojiPickerPopup

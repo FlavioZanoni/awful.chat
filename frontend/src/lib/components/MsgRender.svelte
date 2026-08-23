@@ -19,7 +19,7 @@
   import AudioPlayer from "./AudioPlayer.svelte";
   import GifImage from "./GifImage.svelte";
   import { mediaPrefs } from "$lib/media-prefs.svelte";
-  import { putSavedGif, deleteSavedGif, isGifSaved } from "$lib/storage";
+  import { putSavedGif, deleteSavedGif, isGifSaved, getAttachmentsByInfoHash } from "$lib/storage";
 
   interface Props {
     msg: Message;
@@ -208,6 +208,56 @@
     });
   });
 
+  // Saved-state per uploaded gif in this message, keyed by infoHash.
+  let savedFileGifs = $state(new Set<string>());
+
+  $effect(() => {
+    savedFileGifs = new Set();
+    const gifs = (msg.meta?.files ?? []).filter(
+      (f) => f.mimeType === "image/gif"
+    );
+    if (!gifs.length) return;
+    Promise.all(gifs.map((f) => isGifSaved(f.infoHash))).then((results) => {
+      savedFileGifs = new Set(
+        gifs.filter((_, i) => results[i]).map((f) => f.infoHash)
+      );
+    });
+  });
+
+  async function toggleSaveFileGif(e: MouseEvent, file: FileEntry) {
+    e.preventDefault();
+    e.stopPropagation();
+    const existing = await isGifSaved(file.infoHash);
+    if (existing) {
+      await deleteSavedGif(existing.id);
+      const next = new Set(savedFileGifs);
+      next.delete(file.infoHash);
+      savedFileGifs = next;
+      return;
+    }
+    // Bytes from storage when the attachment persisted them, else from the
+    // blob already on screen - saving must not depend on seeders.
+    let data = (await getAttachmentsByInfoHash(file.infoHash)).find(
+      (a) => a.data
+    )?.data;
+    if (!data) {
+      const blobURL = fileTransfers.get(file.infoHash)?.blobURL;
+      if (!blobURL) return;
+      data = await (await fetch(blobURL)).arrayBuffer();
+    }
+    await putSavedGif({
+      id: file.infoHash,
+      gifId: file.infoHash,
+      title: file.filename,
+      url: "",
+      previewUrl: "",
+      mimeType: file.mimeType,
+      data,
+      savedAt: Date.now(),
+    });
+    savedFileGifs = new Set([...savedFileGifs, file.infoHash]);
+  }
+
   async function toggleSaveGif(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -315,20 +365,39 @@
           {/if}
 
           {#if transfer?.blobURL && file.mimeType.startsWith("image/")}
-            <button
-              type="button"
-              class="mt-2 block"
-              onclick={() => (lightboxUrl = transfer.blobURL!)}
-            >
-              <GifImage
-                src={transfer.blobURL}
-                alt={file.filename}
-                class="max-w-xs max-h-56 rounded-md object-contain"
-                loading="lazy"
-                animated={file.mimeType === "image/gif"}
-                animate={mediaPrefs.gifAutoplay ? true : "hover"}
-              />
-            </button>
+            <div class="group/gif relative mt-2 inline-block">
+              <button
+                type="button"
+                class="block"
+                onclick={() => (lightboxUrl = transfer.blobURL!)}
+              >
+                <GifImage
+                  src={transfer.blobURL}
+                  alt={file.filename}
+                  class="max-w-xs max-h-56 rounded-md object-contain"
+                  loading="lazy"
+                  animated={file.mimeType === "image/gif"}
+                  animate={mediaPrefs.gifAutoplay ? true : "hover"}
+                />
+              </button>
+              {#if file.mimeType === "image/gif"}
+                {@const isFileGifSaved = savedFileGifs.has(file.infoHash)}
+                <button
+                  type="button"
+                  class="absolute right-2 top-2 size-7 rounded-full text-white flex items-center justify-center transition-opacity cursor-pointer {isMobile
+                    ? 'opacity-100'
+                    : 'opacity-0 group-hover/gif:opacity-100'} {isFileGifSaved
+                    ? 'bg-primary'
+                    : 'bg-black/60 hover:bg-black/80'}"
+                  onclick={(e) => toggleSaveFileGif(e, file)}
+                  aria-label={isFileGifSaved ? "Unsave GIF" : "Save GIF"}
+                >
+                  <Bookmark
+                    class="size-4 {isFileGifSaved ? 'fill-current' : ''}"
+                  />
+                </button>
+              {/if}
+            </div>
           {:else if transfer?.blobURL && file.mimeType.startsWith("video/")}
             <!-- svelte-ignore a11y_media_has_caption -->
             <video

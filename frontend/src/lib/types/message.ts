@@ -104,6 +104,14 @@ export interface FileEntry {
   mimeType: string;
   size: number;
   infoHash: string;
+  /**
+   * Wire-only: base64 bytes of a small file, riding in the message so it
+   * renders like a CDN gif - instantly, for offline-synced peers, with no
+   * seeder needed. Never persisted (stripped on receive and before store)
+   * and never signed; the signed infoHash is recomputed from these bytes on
+   * receipt, so they cannot be forged.
+   */
+  inline?: string;
 }
 
 // ── Wire shapes ───────────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { Bookmark, Search, X, Loader } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -24,9 +25,11 @@
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onSelect: (url: string) => void;
+    /** Selection of a saved UPLOADED gif - bytes, not a url. */
+    onSelectFile?: (file: File) => void;
   }
 
-  let { open, onOpenChange, onSelect }: Props = $props();
+  let { open, onOpenChange, onSelect, onSelectFile }: Props = $props();
 
   type Tab = "saved" | "popular";
 
@@ -37,6 +40,8 @@
     url?: string;
     previewUrl?: string;
     urls?: KlipyGif["urls"];
+    /** Present on saved uploaded gifs: the bytes to re-send as a file. */
+    file?: File;
   }
 
   let tab = $state<Tab>("saved");
@@ -67,19 +72,46 @@
     nextPageRetryAfter = 0;
   }
 
+  /** Object URLs created for saved uploaded gifs; revoked on reload/close. */
+  let savedBlobUrls: string[] = [];
+
   async function loadSavedGifs() {
     const gifs = await getAllSavedGifs();
+    savedBlobUrls.forEach((u) => URL.revokeObjectURL(u));
+    savedBlobUrls = [];
     savedGifs = gifs
       .sort((a, b) => b.savedAt - a.savedAt)
-      .map((g) => ({
-        id: g.id,
-        gifId: g.gifId,
-        title: g.title,
-        url: g.url,
-        previewUrl: g.previewUrl,
-      }));
+      .map((g) => {
+        if (!g.data) {
+          return {
+            id: g.id,
+            gifId: g.gifId,
+            title: g.title,
+            url: g.url,
+            previewUrl: g.previewUrl,
+          };
+        }
+        // Uploaded gif: no CDN url anywhere, preview and re-send both come
+        // from the stored bytes.
+        const file = new File([g.data], g.title || "saved.gif", {
+          type: g.mimeType || "image/gif",
+        });
+        const blobUrl = URL.createObjectURL(file);
+        savedBlobUrls.push(blobUrl);
+        return {
+          id: g.id,
+          gifId: g.gifId,
+          title: g.title,
+          previewUrl: blobUrl,
+          file,
+        };
+      });
     savedIds = new Set(gifs.map((g) => g.gifId));
   }
+
+  onDestroy(() => {
+    savedBlobUrls.forEach((u) => URL.revokeObjectURL(u));
+  });
 
   async function loadTrending(pageNum: number, append = false) {
     loading = true;
@@ -223,8 +255,11 @@
     )
   );
 
-  function handleSelect(url: string) {
-    onSelect(url);
+  function handleSelect(gif: DisplayGif) {
+    const url = gif.urls?.gif || gif.url || "";
+    if (gif.file && onSelectFile) onSelectFile(gif.file);
+    else if (url) onSelect(url);
+    else return;
     onOpenChange(false);
     query = "";
     page = 1;
@@ -372,16 +407,16 @@
             <div
               role="button"
               tabindex="0"
-              onclick={() => gifUrl && handleSelect(gifUrl)}
+              onclick={() => handleSelect(gif)}
               onkeydown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  if (gifUrl) handleSelect(gifUrl);
+                  handleSelect(gif);
                 }
               }}
               class="relative group rounded-md overflow-hidden bg-muted cursor-pointer aspect-square
                 {isLarge ? 'col-span-2 row-span-2' : 'col-span-1 row-span-1'}
-                {!gifUrl ? 'opacity-50 cursor-not-allowed' : ''}"
+                {!gifUrl && !gif.file ? 'opacity-50 cursor-not-allowed' : ''}"
             >
               <img
                 src={previewUrl}

@@ -1,6 +1,7 @@
 import {
   attachmentEpoch,
   getAttachmentsByInfoHash,
+  getAttachmentsByMessage,
   getAttachmentsWithData,
   getRoomParticipants,
   getSeedableFiles,
@@ -19,7 +20,7 @@ import type {
   FileEntry,
   FileSignalWireMessage,
 } from "$lib/types/message";
-import { encode } from "$lib/utils";
+import { base64ToBytes, encode } from "$lib/utils";
 import type { FileTransferSnapshot } from "./types";
 import type { WebTorrentFileTransport } from "./file/webtorrent";
 
@@ -128,6 +129,103 @@ export function initFiles(fileTransport: WebTorrentFileTransport): void {
         await _persistAttachmentStatusForInfoHash(infoHash, "seeding");
       })
       .catch(() => {});
+  });
+}
+
+/**
+ * Ceiling for bytes that ride inline in the message itself. Kept well under
+ * the 4MB frame limit even inside a sync batch (batches are size-aware).
+ */
+export const INLINE_FILE_MAX_BYTES = 512 * 1024;
+
+/**
+ * Pull the wire-only inline bytes out of a file message - ALWAYS, before the
+ * message is stored anywhere - and adopt them in the background: verify
+ * against the signed infoHash, persist, seed, render.
+ */
+export function stripAndAdoptInlineFiles(msg: {
+  id: string;
+  roomCode: string;
+  meta?: { files: FileEntry[] };
+}): void {
+  for (const file of msg.meta?.files ?? []) {
+    const b64 = file.inline;
+    if (b64 === undefined) continue;
+    delete file.inline;
+    if (typeof b64 !== "string" || b64.length > INLINE_FILE_MAX_BYTES * 1.5) {
+      continue;
+    }
+    _adoptInline(msg.roomCode, msg.id, file, b64).catch(() => {});
+  }
+}
+
+async function _adoptInline(
+  roomCode: string,
+  messageId: string,
+  file: FileEntry,
+  b64: string
+): Promise<void> {
+  const existing = await getAttachmentsByInfoHash(file.infoHash);
+  if (existing.some((a) => a.data)) return; // already hold the bytes
+  let bytes: Uint8Array<ArrayBuffer>;
+  try {
+    bytes = base64ToBytes(b64);
+  } catch {
+    return;
+  }
+  if (bytes.byteLength !== file.size) return;
+
+  const f = new File([bytes], file.filename, { type: file.mimeType });
+  // The infoHash is inside the message signature and seeding recomputes it
+  // from the bytes, so a match proves these are the bytes the sender signed -
+  // inline data needs no trust in the peer that relayed it.
+  const [desc] = await getFileTransport().seedFiles([f]);
+  if (desc?.infoHash !== file.infoHash) {
+    console.warn(
+      "[files] inline bytes do not match the signed infoHash - ignored"
+    );
+    return;
+  }
+
+  // The live message handler creates the attachment records; give it a
+  // moment before concluding this message has none (the sync path never
+  // creates any, so after the wait we make our own).
+  let records = await getAttachmentsByMessage(messageId);
+  if (!records.length) {
+    await new Promise((r) => setTimeout(r, 2000));
+    records = await getAttachmentsByMessage(messageId);
+  }
+  const buf = bytes.buffer as ArrayBuffer;
+  if (records.length) {
+    await Promise.all(
+      records
+        .filter((r) => r.infoHash === file.infoHash && !r.data)
+        .map((r) => updateAttachmentData(r.id, buf))
+    );
+  } else {
+    await putAttachment({
+      id: crypto.randomUUID(),
+      roomCode,
+      messageId,
+      filename: file.filename,
+      mimeType: file.mimeType,
+      size: file.size,
+      infoHash: file.infoHash,
+      status: "seeding",
+      createdAt: Date.now(),
+      data: buf,
+    });
+  }
+
+  withFileTransfer({
+    ...file,
+    status: "seeding",
+    progress: 1,
+    done: true,
+    seeding: true,
+    peers: 0,
+    seeders: 1,
+    blobURL: URL.createObjectURL(f),
   });
 }
 
