@@ -73,6 +73,34 @@ services:
   #   TURN_TLS_DIR=/path/to/certs
   #   TURN_TLS_ARGS=--cert=/certs/fullchain.pem --pkey=/certs/privkey.pem
   # and uncomment the volumes line below.
+  #
+  # Relay port range: 51 ports. Production was returning "508 Cannot create
+  # socket" on every allocation (measured, five for five) with this same
+  # range, but the range was the ceiling, not the cause - the client was
+  # spending roughly 20 allocations per peer connection because
+  # iceCandidatePoolSize was 10 and four TURN urls were advertised. With the
+  # pool size gone and the dead urls removed that is ~2 per connection, and 51
+  # is comfortable for the current handful of users. Bumped to 100 for
+  # headroom anyway - with network_mode: host nothing is published per port,
+  # so the range size costs nothing at deploy time.
+  #
+  # Loopback and link-local are denied because host networking puts coturn on
+  # the host's stack: without them a relay peer reaches services bound to
+  # 127.0.0.1 and the cloud metadata endpoint at 169.254.169.254. That matters
+  # all the more while the credentials are a shared secret that ships in the
+  # client bundle.
+  #
+  # network_mode: host rather than published ports - docker publishes a range
+  # by starting a userland proxy per port, which does not scale to a usable
+  # relay range. coturn speaks raw UDP/TCP and Traefik does not route it, so
+  # it has no reason to be on the overlay network.
+  #
+  # NOTE: 5349 must ALSO be opened in the VPS firewall. tcp/5349 times out
+  # while an unused port like tcp/12345 refuses immediately, so packets are
+  # being dropped upstream of the host - not a missing listener.
+  #
+  # Keep every argument below a real flag: this is a folded block, so a "#"
+  # line here becomes a literal argument rather than a comment.
   coturn:
     image: coturn/coturn:latest
     restart: unless-stopped
@@ -93,20 +121,12 @@ services:
       --denied-peer-ip=10.0.0.0-10.255.255.255
       --denied-peer-ip=192.168.0.0-192.168.255.255
       --denied-peer-ip=172.16.0.0-172.31.255.255
+      --denied-peer-ip=127.0.0.0-127.255.255.255
+      --denied-peer-ip=169.254.0.0-169.254.255.255
       --min-port=49152
-      --max-port=49202
+      --max-port=49251
       ${TURN_TLS_ARGS:-}
-    ports:
-      - "3478:3478/tcp"
-      - "3478:3478/udp"
-      # 5349 was advertised to clients but never published - the tcp fallback
-      # URL was dead. With TURN_TLS_DIR mounted it also serves turns: (TLS),
-      # which is what mobile carriers that block plain UDP/TCP still allow.
-      - "5349:5349/tcp"
-      - "5349:5349/udp"
-      - "49152-49202:49152-49202/udp"
-    networks:
-      - dokploy-network
+    network_mode: host
 
   frontend:
     build:

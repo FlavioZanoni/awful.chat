@@ -4,8 +4,12 @@ services:
       context: ./relay
       dockerfile: Dockerfile.dev
     ports:
+      # 8080 is the libp2p WebSocket listener; 8081 is the API mux that serves
+      # /og, /klipy and /turn-credentials. In production Traefik splits those
+      # by path onto the right internal port - locally there is no router, so
+      # 8081 has to be published or none of those endpoints exist at all.
       - "8080:8080"
-      - "9000:9000"
+      - "8081:8081"
     volumes:
       - relay_data:/app/data
       - ./relay:/app
@@ -27,8 +31,14 @@ services:
       - /app/node_modules
     environment:
       VITE_SFU_URL: ${VITE_SFU_URL:-http://localhost:3000}
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
-      VITE_RELAY_MULTIADDR: ${VITE_RELAY_MULTIADDR:-/ip4/127.0.0.1/tcp/9000/ws/p2p/QmRelay}
+      # 8081, not 8080: every VITE_API_URL fetch (klipy, og/preview,
+      # turn-credentials) is served by the API mux, and 8080 is a libp2p
+      # WebSocket listener that answers none of them.
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8081}
+      # Port 8080 to match the listener above. Nothing has ever listened on
+      # 9000. QmRelay is still a placeholder - replace it with the peer id the
+      # relay prints on boot.
+      VITE_RELAY_MULTIADDR: ${VITE_RELAY_MULTIADDR:-/ip4/127.0.0.1/tcp/8080/ws/p2p/QmRelay}
     depends_on:
       - relay
     networks:
