@@ -30,6 +30,16 @@ const VOICE_DIAL_MAX_MS = 8_000;
  * the connection never comes back on its own.
  */
 const VOICE_LINK_GRACE_MS = 20_000;
+/**
+ * Hard deadline for a link that has NEVER connected. The grace above is
+ * measured from the last sign of progress - and ICE re-entering "checking"
+ * counts as progress, so a broken pair that flaps checking/disconnected
+ * refreshes it forever and the wedge timer never fires. A handshake that
+ * has not completed once in 30s is not slow, it is not going to happen.
+ */
+const VOICE_SETUP_DEADLINE_MS = 30_000;
+/** Age past which a never-connected link stops overriding the peer's redial ask. */
+const VOICE_ASK_TRUMPS_HANDSHAKE_MS = 10_000;
 /** Ceiling on signals buffered while a peer has no signalling stream. */
 const MAX_QUEUED_SIGNALS = 64;
 /** Rate limit on asking the other side to dial us. */
@@ -61,6 +71,10 @@ interface RemotePeer {
   peerId: string;
   sigStream: Stream | null;
   pendingCandidates: RTCIceCandidateInit[];
+  /** When this RTCPeerConnection was built; never-connected links age out. */
+  createdAt: number;
+  /** Whether the pc has reached "connected" at least once. */
+  everConnected: boolean;
   /**
    * Last moment this link made progress. Not just "when it connected": a slow
    * network (mobile, TURN) can take longer to set up than the wedge timeout,
@@ -326,8 +340,24 @@ export class LibP2PVoice implements VoiceTransport {
     //
     // A link that is still mid-handshake is the one exception: replacing it
     // hands the replacement the same budget and the pair never converges.
+    // But only a YOUNG handshake earns that protection - one that has not
+    // completed in 10s is not in progress, it is stuck, and refusing the ask
+    // on its behalf is what starved the third caller until a manual rejoin
+    // (every rebuild looked "mid-handshake" again).
     if (
       remote &&
+      remote.pc.connectionState !== "connected" &&
+      !remote.everConnected &&
+      now - remote.createdAt < VOICE_ASK_TRUMPS_HANDSHAKE_MS &&
+      this.linkIsHealthy(remote, now)
+    ) {
+      return;
+    }
+    // An ESTABLISHED link that has merely blipped keeps the old rule: their
+    // ask must beat our stale "connected", not a live link mid-recovery.
+    if (
+      remote &&
+      remote.everConnected &&
       remote.pc.connectionState !== "connected" &&
       this.linkIsHealthy(remote, now)
     ) {
@@ -358,12 +388,20 @@ export class LibP2PVoice implements VoiceTransport {
     const state = remote.pc.connectionState;
     if (state === "failed" || state === "closed") return false;
     if (state === "connected") {
+      remote.everConnected = true;
       remote.okAt = now;
       // A working link is the only proof worth resetting the backoff on:
       // opening a signalling stream says nothing about whether media flows.
       this.nextDialAt.delete(remote.peerId);
       this.dialBackoff.delete(remote.peerId);
       return true;
+    }
+    // A link that has never worked does not get the benefit of "progress":
+    // ICE flapping back into "checking" refreshes okAt forever on a pair
+    // that is simply broken, and that starvation held a wedged link - and
+    // with it the whole repair path - until a manual leave and rejoin.
+    if (!remote.everConnected && now - remote.createdAt > VOICE_SETUP_DEADLINE_MS) {
+      return false;
     }
     // "new" / "connecting" / "disconnected": legitimate for a moment, a wedge
     // once it outlasts a handshake and an ICE restart.
@@ -991,6 +1029,8 @@ export class LibP2PVoice implements VoiceTransport {
       gainNode: null,
       sigStream: null,
       pendingCandidates: [],
+      createdAt: Date.now(),
+      everConnected: false,
       okAt: Date.now(),
     };
     this.remotePeers.set(peerId, remote);

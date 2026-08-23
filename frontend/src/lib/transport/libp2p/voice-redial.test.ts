@@ -3,7 +3,7 @@ import { LibP2PVoice } from "./voice";
 
 // handleRedialRequest touches only the link bookkeeping, so the peer
 // connection can be a state holder and the audio graph never comes up.
-function fakeRemote(state: string) {
+function fakeRemote(state: string, ageMs = 0) {
   return {
     peerId: "aaa",
     pc: { connectionState: state, close: vi.fn() },
@@ -13,11 +13,13 @@ function fakeRemote(state: string) {
     gainNode: null,
     sigStream: null,
     pendingCandidates: [],
+    createdAt: Date.now() - ageMs,
+    everConnected: false,
     okAt: Date.now(),
   };
 }
 
-function makeVoice(remoteState: string | null) {
+function makeVoice(remoteState: string | null, ageMs = 0) {
   const transport = {
     selfId: () => "zzz", // higher than "aaa": we are the pair's dialer
     peers: () => ["aaa"],
@@ -33,7 +35,7 @@ function makeVoice(remoteState: string | null) {
   if (remoteState) {
     (internals.remotePeers as Map<string, unknown>).set(
       "aaa",
-      fakeRemote(remoteState)
+      fakeRemote(remoteState, ageMs)
     );
   }
   return { voice, internals };
@@ -61,6 +63,15 @@ describe("handleRedialRequest", () => {
     expect((internals.remotePeers as Map<string, unknown>).has("aaa")).toBe(
       false
     );
+  });
+
+  it("rebuilds a handshake that has been stuck longer than any real one takes", () => {
+    // Every rebuild used to look "mid-handshake" again, so the third
+    // caller's asks were refused forever and only a manual rejoin healed it.
+    const { voice, internals } = makeVoice("connecting", 15_000);
+    spyDial(internals);
+    voice.handleRedialRequest("aaa");
+    expect(dialed).toEqual(["aaa"]);
   });
 
   it("leaves a link that is still mid-handshake alone", () => {

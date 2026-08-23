@@ -55,6 +55,7 @@
     isSelf: boolean;
     isRelayed: boolean;
     inCall: boolean;
+    sharing: boolean;
   }
 
   const roomUsers = $derived(transportState.roomUsers);
@@ -123,6 +124,17 @@
               transportState.roomCode) ||
           transportState.callPeerRooms.get(did) === transportState.roomCode;
 
+      // A pending entry means they are sharing and we are not watching;
+      // watching moves them out of pending and into watchingTransmissionPeerId.
+      const sharing = isSelf
+        ? transportState.screenSharing
+        : [mappedPeerId, did].some(
+            (k) =>
+              !!k &&
+              (transportState.pendingTransmissions.has(k) ||
+                transportState.watchingTransmissionPeerId === k)
+          );
+
       allUsers.push({
         did,
         peerId: mappedPeerId,
@@ -133,6 +145,7 @@
         isSelf,
         isRelayed: userIsRelayed,
         inCall,
+        sharing: inCall && sharing,
       });
     }
 
@@ -331,7 +344,13 @@
       <div class="text-xs truncate {user.inCall
           ? 'text-primary'
           : 'text-muted-foreground'}">
-        {user.inCall ? "In call" : user.isOnline ? "Online" : "Offline"}
+        {user.sharing
+          ? "Sharing screen"
+          : user.inCall
+            ? "In call"
+            : user.isOnline
+              ? "Online"
+              : "Offline"}
       </div>
     </div>
   </div>
