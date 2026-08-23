@@ -1269,10 +1269,12 @@
                     ? 'opacity-100'
                     : ''} transition-opacity flex items-center gap-1 pr-1"
                 >
+                  <Tip text="React">
+                    {#snippet children(props)}
                   <button
+                    {...props}
                     type="button"
                     class="size-7 inline-flex items-center justify-center rounded bg-card border border-border/70 text-muted-foreground hover:text-foreground cursor-pointer"
-                    title="React"
                     aria-label="React"
                     onclick={(e) => {
                       e.stopPropagation();
@@ -1286,10 +1288,14 @@
                   >
                     <Smile class="size-3.5" />
                   </button>
+                    {/snippet}
+                  </Tip>
+                  <Tip text="Reply">
+                    {#snippet children(props)}
                   <button
+                    {...props}
                     type="button"
                     class="size-7 inline-flex items-center justify-center rounded bg-card border border-border/70 text-muted-foreground hover:text-foreground cursor-pointer"
-                    title="Reply"
                     aria-label="Reply"
                     onclick={(e) => {
                       e.stopPropagation();
@@ -1299,6 +1305,8 @@
                   >
                     <Reply class="size-3.5" />
                   </button>
+                    {/snippet}
+                  </Tip>
                 </div>
               </div>
             </div>
@@ -1351,15 +1359,19 @@
           <span class="mx-1">•</span>
           <span class="truncate">{replyTarget.content}</span>
         </div>
+        <Tip text="Cancel reply (Esc)">
+          {#snippet children(props)}
         <button
+          {...props}
           type="button"
           class="size-6 shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
           onclick={() => (replyTargetId = null)}
           aria-label="Cancel reply"
-          title="Cancel reply (Esc)"
         >
           <X class="size-4" />
         </button>
+          {/snippet}
+        </Tip>
       </div>
     </div>
   {/if}

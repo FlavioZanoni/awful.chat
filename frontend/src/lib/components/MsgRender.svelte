@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Tip } from "$lib/components/ui/tooltip";
   import {
     Download,
     FileText,
@@ -286,15 +287,19 @@
             </div>
 
             {#if !isOwn && (!transfer || transfer.status === "pending" || transfer.status === "failed")}
+              <Tip text="Download">
+                {#snippet children(props)}
               <button
+                {...props}
                 type="button"
                 class="inline-flex size-7 shrink-0 items-center justify-center rounded border border-border bg-card text-muted-foreground hover:text-foreground cursor-pointer"
                 onclick={() => onRequestFileDownload(file, msg.senderId)}
                 aria-label="Download file"
-                title="Download"
               >
                 <Download class="size-3.5" />
               </button>
+                {/snippet}
+              </Tip>
             {/if}
           </div>
 
@@ -538,23 +543,29 @@
   {/if}
 
   {#if isOwn && msg.status}
-    <span
-      class="ml-1.5 inline-flex items-center align-text-bottom"
-      title={msg.status === "sending"
+    <Tip
+      text={msg.status === "sending"
         ? "Queued - will send when the recipient is reachable"
         : msg.status.charAt(0).toUpperCase() + msg.status.slice(1)}
-      aria-label="Message {msg.status}"
     >
-      {#if msg.status === "sending"}
-        <Clock class="size-3 text-muted-foreground" />
-      {:else if msg.status === "sent"}
-        <Check class="size-3 text-muted-foreground" />
-      {:else if msg.status === "delivered"}
-        <CheckCheck class="size-3 text-muted-foreground" />
-      {:else}
-        <CheckCheck class="size-3 text-primary" />
-      {/if}
-    </span>
+      {#snippet children(props)}
+        <span
+          {...props}
+          class="ml-1.5 inline-flex items-center align-text-bottom"
+          aria-label="Message {msg.status}"
+        >
+          {#if msg.status === "sending"}
+            <Clock class="size-3 text-muted-foreground" />
+          {:else if msg.status === "sent"}
+            <Check class="size-3 text-muted-foreground" />
+          {:else if msg.status === "delivered"}
+            <CheckCheck class="size-3 text-muted-foreground" />
+          {:else}
+            <CheckCheck class="size-3 text-primary" />
+          {/if}
+        </span>
+      {/snippet}
+    </Tip>
   {/if}
 </div>
 

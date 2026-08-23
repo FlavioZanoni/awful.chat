@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Tip } from "$lib/components/ui/tooltip";
   import { QueryClient, QueryClientProvider } from "@tanstack/svelte-query";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { setBadge } from "$lib/notify.svelte";
@@ -857,21 +858,29 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
                       {entry.peerId.slice(0, 16)}
                     </div>
                   </button>
+                  <Tip text="Remove from favorites">
+                    {#snippet children(props)}
                   <button
+                    {...props}
                     class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                     onclick={() => toggleFavorite(entry.peerId)}
-                    title="Remove from favorites"
                   >
                     <Star class="size-4 text-yellow-500 fill-yellow-500" />
                   </button>
+                    {/snippet}
+                  </Tip>
+                  <Tip text="Remove contact">
+                    {#snippet children(props)}
                   <button
+                    {...props}
                     class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                     onclick={() => removePhonebookContact(entry.peerId)}
-                    title="Remove contact"
                     aria-label="Remove contact"
                   >
                     <Trash2 class="size-4 text-destructive" />
                   </button>
+                    {/snippet}
+                  </Tip>
                 </div>
               {/each}
             {/if}
@@ -922,21 +931,29 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
                       {entry.peerId.slice(0, 16)}
                     </div>
                   </button>
+                  <Tip text="Add to favorites">
+                    {#snippet children(props)}
                   <button
+                    {...props}
                     class="size-8 inline-flex items-center justify-center rounded hover:bg-accent opacity-0 group-hover:opacity-100 transition-opacity"
                     onclick={() => toggleFavorite(entry.peerId)}
-                    title="Add to favorites"
                   >
                     <Star class="size-4 text-gray-400" />
                   </button>
+                    {/snippet}
+                  </Tip>
+                  <Tip text="Remove contact">
+                    {#snippet children(props)}
                   <button
+                    {...props}
                     class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                     onclick={() => removePhonebookContact(entry.peerId)}
-                    title="Remove contact"
                     aria-label="Remove contact"
                   >
                     <Trash2 class="size-4 text-destructive" />
                   </button>
+                    {/snippet}
+                  </Tip>
                 </div>
               {/each}
             {/if}
@@ -1013,10 +1030,12 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
                         {entry.peerId.slice(0, 16)}
                       </div>
                     </button>
+                    <Tip text="Remove from favorites">
+                      {#snippet children(props)}
                     <button
+                      {...props}
                       class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                       onclick={() => toggleFavorite(entry.peerId)}
-                      title="Remove from favorites"
                     >
                       <Star
                         class="size-4 text-yellow-500 fill-yellow-500 group-hover:hidden"
@@ -1025,14 +1044,20 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
                         class="size-4 text-gray-400 hidden group-hover:block"
                       />
                     </button>
+                      {/snippet}
+                    </Tip>
+                    <Tip text="Remove contact">
+                      {#snippet children(props)}
                     <button
+                      {...props}
                       class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                       onclick={() => removePhonebookContact(entry.peerId)}
-                      title="Remove contact"
                       aria-label="Remove contact"
                     >
                       <Trash2 class="size-4 text-destructive" />
                     </button>
+                      {/snippet}
+                    </Tip>
                   </div>
                 {/each}
               {/if}
@@ -1083,21 +1108,29 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
                         {entry.peerId.slice(0, 16)}
                       </div>
                     </button>
+                    <Tip text="Add to favorites">
+                      {#snippet children(props)}
                     <button
+                      {...props}
                       class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
                       onclick={() => toggleFavorite(entry.peerId)}
-                      title="Add to favorites"
                     >
                       <Star class="size-4 text-gray-400" />
                     </button>
+                      {/snippet}
+                    </Tip>
+                    <Tip text="Remove contact">
+                      {#snippet children(props)}
                     <button
+                      {...props}
                       class="size-8 inline-flex items-center justify-center rounded hover:bg-accent cursor-pointer"
                       onclick={() => removePhonebookContact(entry.peerId)}
-                      title="Remove contact"
                       aria-label="Remove contact"
                     >
                       <Trash2 class="size-4 text-destructive" />
                     </button>
+                      {/snippet}
+                    </Tip>
                   </div>
                 {/each}
               {/if}

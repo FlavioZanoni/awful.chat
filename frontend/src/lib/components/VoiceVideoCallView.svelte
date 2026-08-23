@@ -383,11 +383,21 @@ import { cn } from "$lib/utils";
 
   // ── Video / Audio actions ─────────────────────────────────────────────────
 
+  // Both actions skip update when the track is unchanged. Svelte calls an
+  // action's update every time its effect re-runs, without comparing the
+  // value - and `tiles` rebuilds every tile object on ANY state change (your
+  // mute, anyone's mute/deafen, a track event, a profile update). Reattaching
+  // srcObject for the same track tears down and re-latches the media
+  // pipeline, which is the tile flicker (and the audio glitch) on every
+  // mute/deafen toggle.
   function videoAction(node: HTMLVideoElement, track: MediaStreamTrack) {
+    let current = track;
     node.srcObject = new MediaStream([track]);
     node.play().catch(() => {});
     return {
       update(t: MediaStreamTrack) {
+        if (t === current) return;
+        current = t;
         node.srcObject = new MediaStream([t]);
         node.play().catch(() => {});
       },
@@ -398,12 +408,16 @@ import { cn } from "$lib/utils";
   }
 
   function audioAction(node: HTMLAudioElement, track: MediaStreamTrack) {
+    let current = track;
     node.srcObject = new MediaStream([track]);
-    // Apply saved transmission volume to newly mounted audio element
+    // Volume on mount only: later changes reach mounted elements through
+    // setTransmissionOutputVolume's querySelectorAll("audio[data-remote]").
     node.volume = transmissionOutputVolume;
     node.play().catch(() => {});
     return {
       update(t: MediaStreamTrack) {
+        if (t === current) return;
+        current = t;
         node.srcObject = new MediaStream([t]);
         node.volume = transmissionOutputVolume;
         node.play().catch(() => {});
@@ -893,8 +907,10 @@ import { cn } from "$lib/utils";
           {@const avatar = getPeerAvatar(peerId)}
           {@const state = callPeerStates.get(peerId)}
           {@const relayed = isRelayed(peerId)}
+          <Tip text={label}>
+            {#snippet children(props)}
           <div
-            title={label}
+            {...props}
             class="relative flex size-16 sm:size-20 items-center justify-center rounded-full bg-secondary text-2xl font-semibold text-secondary-foreground ring-2 ring-background font-mono overflow-hidden"
           >
             {#if avatar}
@@ -935,6 +951,8 @@ import { cn } from "$lib/utils";
               </div>
             {/if}
           </div>
+            {/snippet}
+          </Tip>
         {/each}
       </div>
     </div>
@@ -1043,11 +1061,13 @@ import { cn } from "$lib/utils";
             <div
               class="flex gap-2 rounded-xl border border-white/10 bg-zinc-900/95 px-2.5 py-2"
             >
+              <Tip text={muted ? "Unmute microphone" : "Mute microphone"}>
+                {#snippet children(props)}
               <button
+                {...props}
                 type="button"
                 onclick={toggleMute}
                 aria-label={muted ? "Unmute microphone" : "Mute microphone"}
-                title={muted ? "Unmute microphone" : "Mute microphone"}
                 class="group relative flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                 {muted
                   ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1059,11 +1079,15 @@ import { cn } from "$lib/utils";
                   <Mic class="size-4" />
                 {/if}
               </button>
+                {/snippet}
+              </Tip>
+              <Tip text={cameraOff ? "Turn on camera" : "Turn off camera"}>
+                {#snippet children(props)}
               <button
+                {...props}
                 type="button"
                 onclick={toggleCamera}
                 aria-label={cameraOff ? "Turn on camera" : "Turn off camera"}
-                title={cameraOff ? "Turn on camera" : "Turn off camera"}
                 class="group relative flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                   {!cameraOff
                   ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1075,13 +1099,17 @@ import { cn } from "$lib/utils";
                   <CameraOff class="size-4" />
                 {/if}
               </button>
+                {/snippet}
+              </Tip>
+              <Tip text={screenSharing ? "Stop screen share" : "Share screen"}>
+                {#snippet children(props)}
               <button
+                {...props}
                 type="button"
                 onclick={screenSharing ? stopScreenShare : startScreenShare}
                 aria-label={screenSharing
                   ? "Stop screen share"
                   : "Share screen"}
-                title={screenSharing ? "Stop screen share" : "Share screen"}
                 class="flex group relative h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                   {screenSharing
                   ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1093,19 +1121,25 @@ import { cn } from "$lib/utils";
                   <Monitor class="size-4" />
                 {/if}
               </button>
+                {/snippet}
+              </Tip>
             </div>
           </div>
 
           <div class="flex justify-center">
+            <Tip text="Leave call">
+              {#snippet children(props)}
             <button
+              {...props}
               type="button"
               onclick={leaveCall}
               aria-label="Leave call"
-              title="Leave call"
               class="group relative flex h-8 w-14 items-center justify-center rounded-lg bg-linear-to-br from-red-500 to-red-600 text-white shadow-lg shadow-red-500/30 transition-all duration-200 hover:from-red-400 hover:to-red-500"
             >
               <PhoneOff class="size-4" />
             </button>
+              {/snippet}
+            </Tip>
           </div>
 
           <div class="flex justify-end">
@@ -1114,15 +1148,19 @@ import { cn } from "$lib/utils";
                 data-transmission-volume
                 class="relative flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/95 px-2 py-2"
               >
+                <Tip text="Stop watching">
+                  {#snippet children(props)}
                 <button
+                  {...props}
                   type="button"
                   onclick={stopWatchingTransmission}
                   aria-label="Stop watching"
-                  title="Stop watching"
                   class="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/20 text-red-400 transition-all duration-200 hover:bg-red-500/30 ring-1 ring-red-500/50"
                 >
                   <Radio class="size-4" />
                 </button>
+                  {/snippet}
+                </Tip>
                 <button
                   type="button"
                   onclick={() => {
@@ -1169,11 +1207,13 @@ import { cn } from "$lib/utils";
                 "bg-zinc-900/95 border border-white/10 rounded-xl p-3 py-2"
             )}
           >
+            <Tip text={muted ? "Unmute microphone" : "Mute microphone"}>
+              {#snippet children(props)}
             <button
+              {...props}
               type="button"
               onclick={toggleMute}
               aria-label={muted ? "Unmute microphone" : "Mute microphone"}
-              title={muted ? "Unmute microphone" : "Mute microphone"}
               class="group relative flex h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg transition-all duration-200 shrink-0
               {muted
                 ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1185,11 +1225,15 @@ import { cn } from "$lib/utils";
                 <Mic class="size-4" />
               {/if}
             </button>
+              {/snippet}
+            </Tip>
+            <Tip text={cameraOff ? "Turn on camera" : "Turn off camera"}>
+              {#snippet children(props)}
             <button
+              {...props}
               type="button"
               onclick={toggleCamera}
               aria-label={cameraOff ? "Turn on camera" : "Turn off camera"}
-              title={cameraOff ? "Turn on camera" : "Turn off camera"}
               class="group relative flex h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                 {!cameraOff
                 ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1201,14 +1245,18 @@ import { cn } from "$lib/utils";
                 <CameraOff class="size-4" />
               {/if}
             </button>
+              {/snippet}
+            </Tip>
 
+            <Tip text={screenSharing ? "Stop screen share" : "Share screen"}>
+              {#snippet children(props)}
             <button
+              {...props}
               type="button"
               onclick={screenSharing ? stopScreenShare : startScreenShare}
               aria-label={screenSharing
                 ? "Stop screen share"
                 : "Share screen"}
-              title={screenSharing ? "Stop screen share" : "Share screen"}
               class="flex group relative h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                 {screenSharing
                 ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
@@ -1220,13 +1268,17 @@ import { cn } from "$lib/utils";
                 <Monitor class="size-4" />
               {/if}
             </button>
+              {/snippet}
+            </Tip>
           </div>
 
+          <Tip text="Leave call">
+            {#snippet children(props)}
           <button
+            {...props}
             type="button"
             onclick={leaveCall}
             aria-label="Leave call"
-            title="Leave call"
             class={cn(
               "group relative flex items-center justify-center rounded-lg bg-linear-to-br from-red-500 to-red-600 text-white shadow-lg shadow-red-500/30 transition-all duration-200 hover:from-red-400 hover:to-red-500 hover:scale-105 hover:shadow-red-500/50 shrink-0",
               "h-8 w-16 md:h-10 md:w-16"
@@ -1234,20 +1286,26 @@ import { cn } from "$lib/utils";
           >
             <PhoneOff class="md:size-5 size-4" />
           </button>
+            {/snippet}
+          </Tip>
 
           {#if isWatchingTransmission}
             <div
               class="relative flex items-center gap-2 rounded-xl bg-zinc-900/95 border border-white/10 p-3 py-2"
             >
+              <Tip text="Stop watching">
+                {#snippet children(props)}
               <button
+                {...props}
                 type="button"
                 onclick={stopWatchingTransmission}
                 aria-label="Stop watching"
-                title="Stop watching"
                 class="flex h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg bg-red-500/20 text-red-400 transition-all duration-200 hover:bg-red-500/30 ring-1 ring-red-500/50"
               >
                 <Radio class="size-4" />
               </button>
+                {/snippet}
+              </Tip>
               <div class="flex items-center gap-2 px-1">
                 <button
                   type="button"
@@ -1301,11 +1359,13 @@ import { cn } from "$lib/utils";
       </Tip>
     {/if}
 
+    <Tip text={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
+      {#snippet children(props)}
     <button
+      {...props}
       type="button"
       onclick={toggleFullscreen}
       aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-      title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
       class="absolute top-3 right-3 sm:top-4 sm:right-4 flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-zinc-900 text-zinc-300 transition-all duration-200 hover:bg-zinc-900 hover:scale-105 z-20"
     >
       {#if isFullscreen}
@@ -1314,6 +1374,8 @@ import { cn } from "$lib/utils";
         <Maximize class="size-4" />
       {/if}
     </button>
+      {/snippet}
+    </Tip>
   </div>
 {/if}
 

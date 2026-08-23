@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Tip } from "$lib/components/ui/tooltip";
   import {
     transportState,
     _transport,
@@ -193,17 +194,22 @@
 
     <div class="flex items-center gap-1">
       {#if quality === "relayed"}
-        <div
-          class="p-1.5 rounded bg-yellow-500/10 text-yellow-400"
-          title="Connected via TURN relay"
-        >
-          <Radio class="size-4" />
-        </div>
+        <Tip text="Connected via TURN relay">
+          {#snippet children(props)}
+            <div {...props} class="p-1.5 rounded bg-yellow-500/10 text-yellow-400">
+              <Radio class="size-4" />
+            </div>
+          {/snippet}
+        </Tip>
       {/if}
       {#if deafened}
-        <div class="p-1.5 rounded bg-red-500/20 text-red-400" title="Deafened">
-          <Headphones class="size-4" />
-        </div>
+        <Tip text="Deafened">
+          {#snippet children(props)}
+            <div {...props} class="p-1.5 rounded bg-red-500/20 text-red-400">
+              <Headphones class="size-4" />
+            </div>
+          {/snippet}
+        </Tip>
       {/if}
     </div>
   </div>
