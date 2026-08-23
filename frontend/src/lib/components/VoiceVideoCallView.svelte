@@ -556,6 +556,14 @@ import { cn } from "$lib/utils";
   });
 
   const rowClass = $derived.by(() => {
+    // A focused screen/transmission is being watched, not glanced at - give
+    // it ~20% more height without going fullscreen.
+    if (
+      focusedTile &&
+      (focusedTile.kind === "screen" || focusedTile.kind === "transmission")
+    ) {
+      return "h-[54vh]";
+    }
     const n = tiles.length;
     const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
     const rows = Math.ceil(n / cols);
