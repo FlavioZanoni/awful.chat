@@ -1,12 +1,18 @@
 // STUN servers - safe to ship, no credentials.
+//
+// Two, not seven. Gathering does not finish until every entry has answered or
+// timed out, and the extras bought nothing: stun2/3/4.l.google.com are the
+// same anycast service as these and return the same reflexive candidate, while
+// stun:openrelay.metered.ca and stun:stun.twilio.com have no DNS record at all
+// (checked against 8.8.8.8) - every peer connection was waiting on two lookups
+// that can only fail.
 const STUN_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun2.l.google.com:19302" },
-  { urls: "stun:stun3.l.google.com:19302" },
-  { urls: "stun:stun4.l.google.com:19302" },
-  { urls: "stun:openrelay.metered.ca:80" },
-  { urls: "stun:stun.twilio.com:3478" },
+  // Not stun1.l.google.com: it resolves to the SAME address as the line above
+  // (74.125.250.129 when checked), so the pair was one server wearing two
+  // names. Cloudflare is a second anycast provider at the same latency, which
+  // is what redundancy was supposed to mean.
+  { urls: "stun:stun.cloudflare.com:3478" },
 ];
 
 // Static TURN for awful.frav.in - only a FALLBACK, used until the relay hands
@@ -18,36 +24,24 @@ const STATIC_TURN: RTCIceServer = {
   urls: [
     "turn:awful.frav.in:3478?transport=udp",
     "turn:awful.frav.in:3478?transport=tcp",
-    "turn:awful.frav.in:5349?transport=tcp",
-    // TLS is what restrictive mobile carriers still allow; skipped harmlessly
-    // until coturn is given a certificate.
-    "turns:awful.frav.in:5349?transport=tcp",
+    // Port 5349 (both turn: and turns:) is dropped, not refused - a TCP
+    // connect there times out rather than failing fast, so the two entries
+    // that used to live here cost every peer connection a full connect
+    // timeout before ICE could give up on them. Put them back the moment
+    // coturn is actually listening on 5349 with a certificate: TLS TURN is
+    // what restrictive mobile carriers still let through.
   ],
   username: "awful",
   credential: "awful",
 };
 
-// Free public TURN fallback (rate-limited) - kept in all cases as a last resort.
-const FALLBACK_TURN: RTCIceServer[] = [
-  {
-    urls: "turn:openrelay.metered.ca:80",
-    username: "openrelayproject",
-    credential: "openrelayproject",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443",
-    username: "openrelayproject",
-    credential: "openrelayproject",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443?transport=tcp",
-    username: "openrelayproject",
-    credential: "openrelayproject",
-  },
-];
-
+// ponytail: openrelay.metered.ca was the "last resort" TURN and its domain no
+// longer resolves, so all three entries were dead weight on every connection -
+// a relay candidate that can never gather, three allocations that can only
+// time out. Removed rather than replaced: awful.frav.in is the only TURN we
+// control. If a real fallback is wanted, add one host that resolves.
 function withTurn(turn: RTCIceServer): RTCIceServer[] {
-  return [...STUN_SERVERS, turn, ...FALLBACK_TURN];
+  return [...STUN_SERVERS, turn];
 }
 
 // Current ICE server list. Starts with the static TURN fallback and is upgraded
@@ -71,7 +65,21 @@ export async function refreshTurnCredentials(): Promise<void> {
       (import.meta.env.VITE_API_URL as string | undefined) ||
       "https://awful.frav.in";
     const res = await fetch(`${base}/turn-credentials`);
-    if (!res.ok) return; // 204 (not configured) or error → keep fallback
+    if (!res.ok) return; // error → keep fallback
+    // 204 is the relay saying TURN_SECRET is unset. It is a documented,
+    // supported state, not a fault - and it is `ok`, so it has to be caught
+    // here or it falls through to a JSON parse of an empty body.
+    if (res.status === 204) return;
+    // A host that answers an unrouted path with index.html returns 200 too, so
+    // res.ok is not enough on its own: the JSON parse below would throw into
+    // the silent catch and leave the static credentials in place with nothing
+    // logged. That is what a deploy without VITE_API_URL looks like.
+    if (!res.headers.get("content-type")?.includes("application/json")) {
+      console.warn(
+        "[ice] /turn-credentials did not return JSON - still using the static TURN credentials"
+      );
+      return;
+    }
     const d = (await res.json()) as {
       username?: unknown;
       credential?: unknown;

@@ -14,8 +14,16 @@ export const MAX_PEER_VOLUME = 2.5;
 const MAX_FRAME_BYTES = 256 * 1024; // 256 KB max frame size; signaling payloads are tiny
 /** How often the roster and the actual voice links are compared. */
 const VOICE_RECONCILE_MS = 4_000;
-/** Ceiling on the per-peer redial backoff after repeated failures. */
-const VOICE_DIAL_MAX_MS = 30_000;
+/**
+ * Per-peer redial backoff: a flat step up to a low ceiling, not doubling.
+ * It exists only to stop a hot loop (an RTCPeerConnection with no working ICE
+ * fails instantly, tears itself down and redials, at ~20 dials a second) - and
+ * a flat 2s step does that just as well as doubling. Doubling to 30s meant
+ * four benign failures, of the "peer not in the peerstore yet" sort, bought a
+ * half-minute of silence.
+ */
+const VOICE_DIAL_STEP_MS = 2_000;
+const VOICE_DIAL_MAX_MS = 8_000;
 /**
  * How long a link may sit in a non-connected state before we call it wedged
  * and rebuild it. Covers a handshake in flight and an ICE restart; past this
@@ -308,11 +316,28 @@ export class LibP2PVoice implements VoiceTransport {
     if (now - (this.lastRedialServed.get(peerId) ?? 0) < VOICE_REDIAL_ASK_MS) {
       return;
     }
+    const remote = this.remotePeers.get(peerId);
+    // Our own "connected" says nothing about THEIR end. An RTCPeerConnection
+    // sits at "connected" until ICE consent expires, tens of seconds after the
+    // far side closed, and the passive side only asks once its own link is
+    // gone entirely - so it is the better witness and we rebuild on its word.
+    // Refusing while ours read "connected" is what left one side deaf with
+    // nothing able to repair it.
+    //
+    // A link that is still mid-handshake is the one exception: replacing it
+    // hands the replacement the same budget and the pair never converges.
+    if (
+      remote &&
+      remote.pc.connectionState !== "connected" &&
+      this.linkIsHealthy(remote, now)
+    ) {
+      return;
+    }
+    // Stamped only once we act, so a refused ask does not spend the slot the
+    // next real one needs. What the limit has to bound is the teardown below,
+    // and that is still one per interval however often they ask.
     this.lastRedialServed.set(peerId, now);
     this.debugStats.redialsServed++;
-    const remote = this.remotePeers.get(peerId);
-    // A connected link is not what they are complaining about; leave it alone.
-    if (remote && this.linkIsHealthy(remote, now)) return;
     if (remote) {
       this.teardownRemotePeer(peerId);
       this.emit("peerLeft", peerId);
@@ -626,7 +651,7 @@ export class LibP2PVoice implements VoiceTransport {
     const now = Date.now();
     if (now < (this.nextDialAt.get(peerId) ?? 0)) return;
     const wait = Math.min(
-      Math.max((this.dialBackoff.get(peerId) ?? 0) * 2, VOICE_RECONCILE_MS),
+      (this.dialBackoff.get(peerId) ?? 0) + VOICE_DIAL_STEP_MS,
       VOICE_DIAL_MAX_MS
     );
     this.dialBackoff.set(peerId, wait);
@@ -686,7 +711,14 @@ export class LibP2PVoice implements VoiceTransport {
           attempt: attempt + 1,
           message: `Retrying voice connection (${attempt + 1}/5)...`,
         });
-        await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        // ~5s across all five waits, not 9s, and front-loaded: what this
+        // loop is usually waiting out is a connection that is not proven yet
+        // or a peer not in the peerstore yet, and both settle in well under a
+        // second. The whole time is spent holding `dialing`, which blocks the
+        // reconcile tick from tearing the link down or redialing it.
+        await new Promise((r) =>
+          setTimeout(r, Math.min(300 * 2 ** attempt, 1_500))
+        );
       }
     }
 
@@ -819,8 +851,11 @@ export class LibP2PVoice implements VoiceTransport {
   private ensureRemotePeer(peerId: string): RemotePeer {
     if (this.remotePeers.has(peerId)) return this.remotePeers.get(peerId)!;
 
+    // See the note in file/webtorrent.ts: iceCandidatePoolSize pre-gathers a
+    // full candidate set per pool, which is a TURN allocation per pool per
+    // server, and pays for itself only when the connection is built well
+    // before the offer. Here the offer follows immediately.
     const pc = new RTCPeerConnection({
-      iceCandidatePoolSize: 10,
       iceServers: getIceServers(),
     });
 

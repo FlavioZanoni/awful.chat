@@ -16,10 +16,13 @@ import (
 var defaultTurnURLs = []string{
 	"turn:awful.frav.in:3478?transport=udp",
 	"turn:awful.frav.in:3478?transport=tcp",
-	"turn:awful.frav.in:5349?transport=tcp",
-	// TLS: the only thing some mobile carriers and corporate networks let
-	// through. Harmless when coturn has no cert - gathering just skips it.
-	"turns:awful.frav.in:5349?transport=tcp",
+	// No 5349 entries. Nothing answers there - a probe of tcp/5349 and
+	// udp/5349 both time out - and a dropped port is worse than a closed one:
+	// ICE waits out a full connect timeout per URL instead of failing fast.
+	// They are not "harmless when coturn has no cert"; they are a stall on
+	// every peer connection. Restore them, or better a turns: URL on 443, once
+	// coturn is actually reachable there. TLS TURN is the only transport some
+	// mobile carriers allow, so it is worth doing properly.
 }
 
 // handleTurnCredentials issues short-lived TURN credentials using coturn's
