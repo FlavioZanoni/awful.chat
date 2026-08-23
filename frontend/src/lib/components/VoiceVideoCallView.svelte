@@ -835,7 +835,7 @@ import { cn } from "$lib/utils";
           {#snippet children(props)}
             <div
               {...props}
-              class="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-mono text-white"
+              class="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-mono text-white"
             >
               <Eye class="size-3" />
               {audience.count}
@@ -847,7 +847,11 @@ import { cn } from "$lib/utils";
 
     <!-- Pending transmission overlay - "Click to watch" -->
     {#if isPendingTx}
-      <div class="absolute inset-0 grid place-items-center bg-muted/30">
+      <!-- pointer-events-none: the click target is the tile button itself,
+           and this overlay was eating the audience badge's hover tooltip. -->
+      <div
+        class="pointer-events-none absolute inset-0 grid place-items-center bg-muted/30"
+      >
         <div
           class="rounded-full border border-border bg-background/95 px-3 py-1.5 text-xs font-mono text-foreground shadow-sm transition-all group-hover:border-primary/50 group-hover:shadow-md"
         >
