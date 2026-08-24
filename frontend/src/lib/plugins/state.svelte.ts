@@ -18,6 +18,19 @@ export interface CardStateEntry {
 // Reactivity is handled through component re-renders when state changes.
 export const cardStates = new Map<string, CardStateEntry>();
 
+// Change notification WITHOUT runes: this module is imported by node-run
+// tests that have no Svelte compiler, which is why cardStates is a plain
+// Map. Components subscribe a callback; MsgRender bridges it into its own
+// $state. Without this, a card rendered once and live votes never appeared.
+const _subscribers = new Set<() => void>();
+export function onCardStateChange(cb: () => void): () => void {
+  _subscribers.add(cb);
+  return () => _subscribers.delete(cb);
+}
+function bumpTick(): void {
+  for (const cb of _subscribers) cb();
+}
+
 /**
  * Comparator for deterministic update ordering: lamport, then senderId, then id.
  * This is MSG_ORDER extended with id as tiebreaker for DM rooms.
@@ -130,6 +143,7 @@ export function foldUpdate(
 
   try {
     entry.state = definition.reduce(entry.state, { data: update.data }, ctx);
+    bumpTick();
     entry.lastUpdate = update.lamport;
   } catch (err) {
     console.warn(`[plugins] failed to fold update ${update.id}:`, err);
@@ -152,6 +166,7 @@ export async function getCardState(
 
   const state = await buildCardState(cardId, roomCode, definition);
   cardStates.set(cardId, { state, lastUpdate: 0 });
+  bumpTick();
   return state;
 }
 

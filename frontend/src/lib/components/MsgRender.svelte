@@ -24,6 +24,7 @@
   import { makeHostApi } from "$lib/plugins/host";
   import { peerIdToDid, transportState, resolveMentionDisplayName } from "$lib/transport/transport.svelte";
   import { getPlugin, getManifest } from "$lib/plugins/registry";
+  import { getCardState, onCardStateChange } from "$lib/plugins/state.svelte";
   import { isPluginEnabled } from "$lib/plugins/prefs.svelte";
   import type { ComponentType } from "svelte";
 
@@ -73,31 +74,41 @@
     videoNaturalHeight = 0;
   });
 
-  // Load plugin card component on mount
-  $effect(async () => {
+  // Load plugin card component AND its state. Subscribing to the tick is
+  // what makes live votes re-render; getCardState is a cache hit after the
+  // first build. ($effect callbacks must be sync - an async fn's returned
+  // promise is a meaningless cleanup - so the async work is an inner IIFE.)
+  // Bridge the store's plain-callback notifications into local reactivity.
+  let cardStateTickLocal = $state(0);
+  $effect(() => onCardStateChange(() => (cardStateTickLocal += 1)));
+
+  $effect(() => {
+    void cardStateTickLocal;
     if (msg.type !== MessageType.PluginCard) {
       pluginCardComponent = null;
       pluginCardError = null;
       return;
     }
-
-    try {
-      const payload = JSON.parse(msg.content);
-      const { pluginId } = payload;
-      pluginCardPluginId = pluginId;
-      const plugin = await getPlugin(pluginId);
-      if (!plugin) {
-        pluginCardError = `Plugin ${pluginId} not found`;
-        return;
+    void (async () => {
+      try {
+        const payload = JSON.parse(msg.content);
+        const { pluginId } = payload;
+        pluginCardPluginId = pluginId;
+        const plugin = await getPlugin(pluginId);
+        if (!plugin) {
+          pluginCardError = `Plugin ${pluginId} not found`;
+          return;
+        }
+        if (!plugin.card) {
+          pluginCardError = `Plugin ${pluginId} has no card component`;
+          return;
+        }
+        pluginCardState = await getCardState(msg.id, msg.roomCode, plugin);
+        pluginCardComponent = plugin.card;
+      } catch (err) {
+        pluginCardError = `Failed to load plugin card: ${err}`;
       }
-      if (!plugin.card) {
-        pluginCardError = `Plugin ${pluginId} has no card component`;
-        return;
-      }
-      pluginCardComponent = plugin.card;
-    } catch (err) {
-      pluginCardError = `Failed to load plugin card: ${err}`;
-    }
+    })();
   });
 
   function formatSize(size: number): string {
@@ -529,14 +540,15 @@
         Loading plugin...
       </div>
     {:else}
-      <!-- In Svelte 5, components can be rendered directly from variables -->
-      {#if pluginCardComponent}
-        <pluginCardComponent
-          card={msg}
-          state={pluginCardState}
-          host={makeHostApi(pluginCardPluginId, msg.roomCode)}
-        ></pluginCardComponent>
-      {/if}
+      <!-- Capitalized alias: a lowercase tag is an HTML element to Svelte,
+           so <pluginCardComponent> mounted NOTHING - an empty unknown
+           element where the poll should be. -->
+      {@const PluginCardUi = pluginCardComponent}
+      <PluginCardUi
+        card={msg}
+        state={pluginCardState}
+        host={makeHostApi(pluginCardPluginId, msg.roomCode)}
+      />
     {/if}
   {:else}
     <p class="whitespace-pre-wrap">{@html linkifyText(msg.content)}</p>
