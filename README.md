@@ -125,7 +125,8 @@ frontend build is memory-hungry.
 | `PLUGIN_SOURCES` | no | plugins fetched at build time, see the [plugin guide](frontend/plugins/README.md) |
 | `TURN_SECRET` | no | switches TURN to short-lived credentials (below) |
 | `TURN_URLS` | no | override the TURN URL list served to clients |
-| `STEAM_API_KEY` | no | enables the relay's `/steam` proxy for the steam-roulette plugin ([get one](https://steamcommunity.com/dev/apikey)) |
+| `PLUGIN_PROXY_HOSTS` | no | hostnames plugins may reach through the relay's `/plugin-proxy` |
+| `PLUGIN_PROXY_SECRETS` | no | `NAME=value` list; plugins reference `{{secret:NAME}}`, substituted server-side |
 
 Firewall: open 80/443 (web), 3478 tcp+udp (TURN), 5349 tcp+udp (TURN TLS,
 when configured), the SFU port range (40000-40499 by default) and coturn's

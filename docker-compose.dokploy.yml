@@ -16,8 +16,11 @@ services:
       # clients fall back to the bundled static creds. See README.
       - TURN_SECRET=${TURN_SECRET:-}
       - TURN_URLS=${TURN_URLS:-}
-      # Enables the /steam proxy used by the steam-roulette plugin.
-      - STEAM_API_KEY=${STEAM_API_KEY:-}
+      # Generic plugin proxy: allowlisted upstream hosts and named secrets
+      # substituted server-side ({{secret:NAME}}). What keeps API-using
+      # plugins "env + redeploy" instead of relay code changes.
+      - PLUGIN_PROXY_HOSTS=${PLUGIN_PROXY_HOSTS:-}
+      - PLUGIN_PROXY_SECRETS=${PLUGIN_PROXY_SECRETS:-}
     volumes:
       - relay_data:/app/data
     networks:
@@ -51,7 +54,7 @@ services:
       - traefik.http.routers.turn.tls=true
       - traefik.http.routers.turn.tls.certresolver=letsencrypt
       - traefik.http.routers.turn.service=relay-api-service
-      - traefik.http.routers.steam.rule=Host(`relay.${DOMAIN}`) && PathPrefix(`/steam`)
+      - traefik.http.routers.steam.rule=Host(`relay.${DOMAIN}`) && PathPrefix(`/plugin-proxy`)
       - traefik.http.routers.steam.entrypoints=websecure
       - traefik.http.routers.steam.tls=true
       - traefik.http.routers.steam.tls.certresolver=letsencrypt

@@ -104,6 +104,22 @@ other users are unaffected.
 rendered on an instance lazy-loads a chunk containing the full icon set, paid
 once and only by instances whose plugins use lucide names.
 
+## Calling external APIs
+
+Browsers cannot reach most APIs directly (CORS), and API keys must never
+ship in the bundle. The instance relay exposes a generic proxy for both:
+
+```
+GET  <VITE_API_URL>/plugin-proxy?url=<https upstream url>
+```
+
+The upstream host must be in the instance's `PLUGIN_PROXY_HOSTS` allowlist,
+and the url may carry `{{secret:NAME}}` placeholders that the relay fills
+from `PLUGIN_PROXY_SECRETS` server-side. A 204 means the instance is not
+configured for your plugin: say so in the card. Document the hosts and
+secrets your plugin needs in its README. GET only, https only, 2 MB
+response cap, responses cached ~5 minutes.
+
 ## Rules
 
 - Do not import from `$lib/transport` internals. The host API is the surface;
