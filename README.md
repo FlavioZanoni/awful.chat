@@ -87,6 +87,13 @@ credentials (coturn REST convention) that expire after 12h. With `TURN_SECRET`
 unset the endpoint returns 204 and the client keeps using the static fallback,
 so this is safe to leave off until both sides are configured.
 
+## Plugins
+
+The app has an instance-level plugin system: drop a folder in
+`frontend/plugins/` or list sources in `PLUGIN_SOURCES` and redeploy. The
+full author and operator guide lives in
+[frontend/plugins/README.md](frontend/plugins/README.md).
+
 ## Docs
 
 `docs/spec.md` - data model, sync protocol, wire formats, crypto details.

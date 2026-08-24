@@ -26,8 +26,11 @@ export const manifest: PluginManifest = {
   id: "wheel",            // ^[a-z0-9-]{2,32}$, must match the folder name
   name: "Wheel decide",
   description: "Spin a wheel to settle what to play.",
-  icon: "🎡",             // emoji, shown in settings and fallbacks
+  icon: "🎡",             // an emoji, or "lucide:<kebab-name>" (e.g. "lucide:dices")
+  author: "you",          // optional, shown in the plugins settings list
+  license: "MIT",         // optional, shown next to the author
   apiVersion: 1,
+  commands: [{ name: "wheel", usage: "/wheel option1, option2, ..." }],
 };
 ```
 
@@ -93,6 +96,13 @@ not autocomplete and do not fire.
 **Disabling**: users can toggle any plugin off in settings. Your cards then
 render as a neutral fallback naming the plugin; nothing else breaks, and
 other users are unaffected.
+
+## Icons
+
+`icon` accepts an emoji or any lucide icon as `lucide:<kebab-name>`
+(https://lucide.dev/icons). Cost note: emoji are free; the first lucide icon
+rendered on an instance lazy-loads a chunk containing the full icon set, paid
+once and only by instances whose plugins use lucide names.
 
 ## Rules
 

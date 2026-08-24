@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch";
   import { getRegistry } from "$lib/plugins/registry";
@@ -23,7 +24,7 @@
           class="flex items-center justify-between gap-3 p-4 bg-muted/30 rounded-lg border border-border/50"
         >
           <div class="flex items-center gap-3 min-w-0">
-            <span class="text-lg">{registered.manifest.icon}</span>
+            <span class="text-lg"><PluginIcon icon={registered.manifest.icon} class="size-5" /></span>
             <div class="min-w-0">
               <div class="flex items-center gap-2 mb-1">
                 <span class="text-xs font-mono font-semibold"
@@ -36,6 +37,13 @@
               <p class="text-xs font-mono text-muted-foreground truncate">
                 {registered.manifest.description}
               </p>
+              {#if registered.manifest.author || registered.manifest.license}
+                <p class="text-[10px] font-mono text-muted-foreground/70">
+                  {[registered.manifest.author, registered.manifest.license]
+                    .filter(Boolean)
+                    .join(" - ")}
+                </p>
+              {/if}
             </div>
           </div>
           <Switch

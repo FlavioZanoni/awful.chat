@@ -3,8 +3,13 @@ import type { ComponentType } from "svelte";
 export interface PluginManifest {
   id: string; // ^[a-z0-9-]{2,32}$, folder name must match
   name: string;
-  description: string; // one line, shown in settings
-  icon: string; // emoji, keeps v1 free of asset plumbing
+  description: string;
+  /** Shown in the plugins settings list. */
+  author?: string;
+  /** SPDX-ish string, e.g. "MIT". Shown next to the author. */
+  license?: string; // one line, shown in settings
+  /** An emoji, or a lucide icon as "lucide:<kebab-name>" (e.g. "lucide:dices"). */
+  icon: string;
   apiVersion: 1;
   /**
    * Slash commands this plugin offers, for the composer's "/" popup. Lives

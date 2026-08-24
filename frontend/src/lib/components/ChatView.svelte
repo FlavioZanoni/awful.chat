@@ -60,6 +60,7 @@
   import { joinCall } from "$lib/transport/call.svelte";
   import { serialize, mentionsMe } from "$lib/mentions";
   import { makeHostApi } from "$lib/plugins/host";
+  import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { getRegistry, getPlugin } from "$lib/plugins/registry";
   import { isPluginEnabled } from "$lib/plugins/prefs.svelte";
@@ -1754,7 +1755,7 @@
                   : ''}"
                 onclick={() => selectCommand(cmd)}
               >
-                <span>{cmd.icon}</span>
+                <PluginIcon icon={cmd.icon} class="size-4" />
                 <span class="text-foreground">/{cmd.name}</span>
                 <span class="truncate text-xs text-muted-foreground">{cmd.usage}</span>
               </button>

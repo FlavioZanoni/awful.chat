@@ -5,6 +5,8 @@ export const manifest: PluginManifest = {
   name: "Wheel decide",
   description: "Spin a wheel to settle what to play.",
   icon: "🎡",
+  author: "awful.chat",
+  license: "MIT",
   apiVersion: 1,
   commands: [{ name: "wheel", usage: "/wheel option1, option2, ..." }],
 };
