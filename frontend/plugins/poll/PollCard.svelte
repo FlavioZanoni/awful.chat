@@ -5,13 +5,13 @@
 
   interface Props {
     card: Message;
-    state: unknown;
+    cardState: unknown;
     host: HostApi;
   }
 
-  let { card, state, host }: Props = $props();
+  let { card, cardState, host }: Props = $props();
 
-  const pollState = state as {
+  const pollState = cardState as {
     question: string;
     options: string[];
     votes: Map<string, { did: string; name: string; vote: number }>;

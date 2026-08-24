@@ -5,13 +5,13 @@
 
   interface Props {
     card: Message;
-    state: unknown;
+    cardState: unknown;
     host: HostApi;
   }
 
-  let { card, state, host }: Props = $props();
+  let { card, cardState, host }: Props = $props();
 
-  const wheelState = state as {
+  const wheelState = cardState as {
     options: string[];
     spun: boolean;
     winner: number | null;

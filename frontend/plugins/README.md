@@ -60,8 +60,10 @@ export default definePlugin({
 
 **Cards** are chat messages your component renders. They persist, sync to
 peers who were offline, and survive reloads. Your card component receives
-`{ card, state, host }`: the card's payload and sender, your reduced state,
-and the host API.
+`{ card, cardState, host }`: the card message, your reduced state, and the
+host API. The prop is `cardState`, never `state`: in Svelte 5 a binding
+named `state` makes the compiler treat your own `$state(...)` runes as store
+subscriptions to that prop, and the component crashes on mount.
 
 **Updates** attach to a card. `host.sendUpdate(cardId, data)` persists and
 replays; `{ ephemeral: true }` sends live-only (cursors, ticks) and is capped
