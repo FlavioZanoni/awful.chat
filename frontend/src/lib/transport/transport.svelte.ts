@@ -76,6 +76,7 @@ import {
 } from "../plugins/validate";
 import { clearCardStates, foldUpdate } from "../plugins/state.svelte";
 import { humanizeMentions, mentionsMe } from "../mentions";
+import { profileStore } from "../profile.svelte";
 import { getPlugin } from "../plugins/registry";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
 import { _sendWatchPresence } from "./transmission.svelte";
@@ -344,8 +345,16 @@ function _replayPendingDm(peerId: string, senderDid: string): void {
   for (const envelope of pending) _handleDmChat(peerId, senderDid, envelope);
 }
 
-/** Display name for a mentioned did - notifications and previews only. */
-function _mentionName(did: string): string {
+/**
+ * Display name for a mentioned did, self included. peerNames only holds
+ * OTHER people's names - your own lives in the profile store - so the
+ * mentioned user's own client resolved their did to nothing and rendered
+ * the raw did:key prefix.
+ */
+export function resolveMentionDisplayName(did: string): string {
+  if (did === (identityStore.did ?? "") || did === _transport.selfId()) {
+    return profileStore.nickname || "You";
+  }
   return (
     transportState.peerNames.get(_peerIdToDid.get(did) ?? did) ??
     transportState.peerNames.get(did) ??
@@ -1548,7 +1557,7 @@ async function _handleChatMessage(
         body = "posted a plugin card";
       }
     } else {
-      body = humanizeMentions(body, _mentionName);
+      body = humanizeMentions(body, resolveMentionDisplayName);
     }
     const mentioned = mentionsMe(msg.content ?? "", [
       identityStore.did ?? "",
@@ -1785,7 +1794,7 @@ function _handleDmChat(
       if (!reaction) {
         notifyMessage({
           title: msg.senderName,
-          body: humanizeMentions(msg.content, _mentionName),
+          body: humanizeMentions(msg.content, resolveMentionDisplayName),
           tag: `dm:${roomCode}`,
           viewingConversation: transportState.uiRoomCode === roomCode,
         });

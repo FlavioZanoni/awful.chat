@@ -18,8 +18,7 @@
     setRoomName,
     removeRoomCompletely,
     connect,
-    peerIdToDid,
-  } from "$lib/transport/transport.svelte";
+    peerIdToDid, resolveMentionDisplayName} from "$lib/transport/transport.svelte";
   import {
     roomsStore,
     loadRooms,
@@ -82,16 +81,10 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
         return "[plugin]";
       }
     }
-    return humanizeMentions(msg.content, _previewName) || "(message)";
+    return humanizeMentions(msg.content, resolveMentionDisplayName) || "(message)";
   }
 
-  function _previewName(did: string): string {
-    return (
-      transportState.peerNames.get(peerIdToDid(did)) ??
-      transportState.peerNames.get(did) ??
-      did.slice(0, 12)
-    );
-  }
+
 
   let pendingRoomCode = $state<string | null>(
     parseRoomCode(window.location.pathname)

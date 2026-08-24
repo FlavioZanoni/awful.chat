@@ -22,7 +22,7 @@
   import { putSavedGif, deleteSavedGif, isGifSaved, getAttachmentsByInfoHash } from "$lib/storage";
   import { humanize } from "$lib/mentions";
   import { makeHostApi } from "$lib/plugins/host";
-  import { peerIdToDid, transportState } from "$lib/transport/transport.svelte";
+  import { peerIdToDid, transportState, resolveMentionDisplayName } from "$lib/transport/transport.svelte";
   import { getPlugin, getManifest } from "$lib/plugins/registry";
   import { isPluginEnabled } from "$lib/plugins/prefs.svelte";
   import type { ComponentType } from "svelte";
@@ -341,7 +341,7 @@
     // survive escaping, and humanize() escapes the resolved display name
     // itself before emitting the chip.
     const escaped = escapeHtml(text);
-    const mentionized = humanize(escaped, resolveMentionName);
+    const mentionized = humanize(escaped, resolveMentionDisplayName);
     const urlRegex = /(https?:\/\/[^\s<]+)/gi;
     return mentionized.replace(
       urlRegex,
@@ -350,14 +350,7 @@
     );
   }
 
-  function resolveMentionName(did: string): string {
-    const mapped = peerIdToDid(did);
-    return (
-      transportState.peerNames.get(mapped) ||
-      transportState.peerNames.get(did) ||
-      did.slice(0, 12)
-    );
-  }
+
 
   function onVideoMeta() {
     if (!videoEl) return;
