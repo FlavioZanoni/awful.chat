@@ -74,7 +74,7 @@ import {
   validateCardPayload,
   validateUpdatePayload,
 } from "../plugins/validate";
-import { clearCardStates, foldUpdate } from "../plugins/state.svelte";
+import { clearCardStates, foldUpdate, touchCardStates } from "../plugins/state.svelte";
 import { humanizeMentions, mentionsMe } from "../mentions";
 import { profileStore } from "../profile.svelte";
 import { getPlugin } from "../plugins/registry";
@@ -2613,6 +2613,27 @@ export async function sendUpdate(
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
   transportState.messages = appendSorted(transportState.messages, msg);
   markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
+
+  // Fold our OWN update into the card state - the dispatcher only folds
+  // INCOMING messages, so the sender's card never saw their own vote or spin
+  // until a reload rebuilt it from storage.
+  try {
+    const { getPlugin } = await import("../plugins/registry");
+    const plugin = await getPlugin(pluginId);
+    if (plugin) {
+      foldUpdate(cardId, plugin, {
+        id: msg.id,
+        senderId: msg.senderId,
+        senderDid: msg.senderDid,
+        senderName: msg.senderName,
+        lamport: msg.lamport,
+        data: payload,
+      });
+    }
+    touchCardStates();
+  } catch (err) {
+    console.warn("[plugins] failed to fold own update:", err);
+  }
 
   noteRoomActivity(msg.roomCode, msg.timestamp);
 }

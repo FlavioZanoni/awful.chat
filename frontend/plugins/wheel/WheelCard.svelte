@@ -11,126 +11,147 @@
 
   let { card, cardState, host }: Props = $props();
 
-  const wheelState = cardState as {
-    options: string[];
-    spun: boolean;
-    winner: number | null;
-    spinnerName: string;
-  };
+  const wheelState = $derived(
+    cardState as {
+      options: string[];
+      spun: boolean;
+      winner: number | null;
+      spinnerName: string;
+    }
+  );
 
-  let spinning = $state(false);
+  const seg = $derived(360 / Math.max(wheelState.options.length, 1));
+
+  let sending = $state(false);
   let rotation = $state(0);
+  let animating = $state(false);
+  /** Whether this card has ever been seen un-spun by this component - a
+   *  card that loads already decided snaps into place instead of replaying
+   *  the animation on every scroll-by. */
+  let sawUnspun = false;
+
+  const SPIN_MS = 3800;
+  const reducedMotion =
+    typeof matchMedia !== "undefined" &&
+    matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // The pointer sits at 12 o'clock. Landing the winner's segment center
+  // under it after a few full turns; every client computes the same target
+  // because the winner itself is deterministic.
+  $effect(() => {
+    if (!wheelState.spun || wheelState.winner === null) {
+      sawUnspun = true;
+      return;
+    }
+    const target = 5 * 360 - (wheelState.winner + 0.5) * seg;
+    if (rotation === target) return;
+    if (!sawUnspun || reducedMotion) {
+      rotation = target; // historical card or reduced motion: no theater
+      return;
+    }
+    animating = true;
+    rotation = target;
+    setTimeout(() => (animating = false), SPIN_MS + 100);
+  });
 
   async function handleSpin() {
-    if (spinning || wheelState.spun) return;
-    spinning = true;
-
+    if (sending || wheelState.spun) return;
+    sending = true;
     try {
-      // Parse the card payload
-      const payload = JSON.parse(card.content) as Record<string, unknown>;
-      const { data } = payload;
-
-      // Animate the wheel
-      let targetRotation = Math.random() * 360 * 5 + 360;
-      const startTime = Date.now();
-      const duration = 2000;
-
-      const animate = () => {
-        const elapsed = Date.now() - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        rotation = targetRotation * progress;
-
-        if (progress < 1) {
-          requestAnimationFrame(animate);
-        }
-      };
-
-      animate();
-
-      // Send the spin update after a moment
-      setTimeout(async () => {
-        try {
-          await host.sendUpdate(card.id, { action: "spin" });
-        } catch (err) {
-          console.error("[wheel] failed to send spin:", err);
-        } finally {
-          spinning = false;
-        }
-      }, duration);
+      await host.sendUpdate(card.id, { action: "spin" });
     } catch (err) {
-      console.error("[wheel] spin error:", err);
-      spinning = false;
+      console.error("[wheel] failed to send spin:", err);
+    } finally {
+      sending = false;
     }
+  }
+
+  function sliceColor(i: number): string {
+    return `hsl(${(i * 137.5) % 360} 62% 52%)`;
+  }
+
+  /** SVG arc path for slice i on a circle of radius r around (100,100). */
+  function slicePath(i: number): string {
+    const a0 = ((i * seg - 90) * Math.PI) / 180;
+    const a1 = (((i + 1) * seg - 90) * Math.PI) / 180;
+    const r = 96;
+    const x0 = 100 + r * Math.cos(a0);
+    const y0 = 100 + r * Math.sin(a0);
+    const x1 = 100 + r * Math.cos(a1);
+    const y1 = 100 + r * Math.sin(a1);
+    const large = seg > 180 ? 1 : 0;
+    return `M 100 100 L ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} Z`;
+  }
+
+  function labelTransform(i: number): string {
+    const mid = i * seg + seg / 2;
+    // Flip labels on the left half so they read outward, not upside down.
+    const flip = mid > 90 && mid < 270 ? 180 : 0;
+    return `rotate(${mid - 90} 100 100) translate(160 100) rotate(${flip + 90} 0 0)`;
+  }
+
+  function labelFor(option: string): string {
+    return option.length > 12 ? `${option.slice(0, 11)}…` : option;
   }
 </script>
 
-<div class="flex flex-col gap-4 max-w-sm">
+<div class="flex max-w-sm flex-col items-center gap-3">
   {#if wheelState.options.length === 0}
     <div class="text-xs text-muted-foreground">No options configured</div>
   {:else}
-    <div class="flex flex-col items-center gap-4">
+    <div class="relative">
+      <!-- Pointer -->
       <div
-        class="w-48 h-48 rounded-full border-4 border-primary flex items-center justify-center relative overflow-hidden bg-gradient-to-r from-primary/20 to-primary/10"
-        style="transform: rotate({rotation}deg);"
+        class="absolute -top-1 left-1/2 z-10 -translate-x-1/2"
+        style="width: 0; height: 0; border-left: 9px solid transparent; border-right: 9px solid transparent; border-top: 14px solid var(--primary, #00ff88); filter: drop-shadow(0 1px 2px rgba(0,0,0,.5));"
+      ></div>
+      <svg
+        viewBox="0 0 200 200"
+        class="size-52"
+        style={`transform: rotate(${rotation}deg); transition: ${animating ? `transform ${SPIN_MS}ms cubic-bezier(0.12, 0.8, 0.18, 1)` : "none"};`}
       >
-        <div class="absolute inset-0 flex items-center justify-center">
-          <div class="text-sm font-mono text-center">
-            {#if wheelState.spun && wheelState.winner !== null}
-              <div class="text-primary font-bold">
-                {wheelState.options[wheelState.winner]}
-              </div>
-            {:else}
-              <div class="text-muted-foreground">Spin the wheel</div>
-            {/if}
-          </div>
-        </div>
-        <div
-          class="absolute inset-0 pointer-events-none"
-          style="background: conic-gradient({wheelState.options
-            .map((_, i) => {
-              const angle = (360 / wheelState.options.length) * i;
-              const color =
-                i % 2 === 0 ? 'rgba(59, 130, 246, 0.1)' : 'transparent';
-              return `${color} ${angle}deg ${angle + 360 / wheelState.options.length}deg`;
-            })
-            .join(', ')})"
-        />
-      </div>
-
-      {#if !wheelState.spun}
-        <Button onclick={handleSpin} disabled={spinning}>
-          {#if spinning}
-            Spinning...
-          {:else}
-            Spin
-          {/if}
-        </Button>
-      {:else}
-        <div class="text-center">
-          <div class="text-sm font-mono text-primary font-bold mb-1">
-            Winner: {wheelState.options[wheelState.winner ?? 0]}
-          </div>
-          <div class="text-xs text-muted-foreground">
-            Spun by {wheelState.spinnerName}
-          </div>
-        </div>
-      {/if}
-    </div>
-
-    <div class="text-xs text-muted-foreground space-y-1">
-      <div class="font-mono font-semibold mb-2">Options:</div>
-      <div class="space-y-1">
         {#each wheelState.options as option, i (i)}
-          <div
-            class="px-2 py-1 rounded bg-muted/50 {wheelState.spun &&
-            wheelState.winner === i
-              ? 'ring-1 ring-primary'
-              : ''}"
+          <path
+            d={slicePath(i)}
+            fill={sliceColor(i)}
+            stroke="rgba(0,0,0,0.35)"
+            stroke-width="1"
+            opacity={wheelState.spun && wheelState.winner !== i ? 0.45 : 1}
+            style="transition: opacity 400ms ease {SPIN_MS}ms;"
+          />
+          <text
+            transform={labelTransform(i)}
+            text-anchor="middle"
+            dominant-baseline="middle"
+            font-size="11"
+            font-family="ui-monospace, monospace"
+            font-weight="600"
+            fill="white"
+            style="paint-order: stroke; stroke: rgba(0,0,0,0.55); stroke-width: 2px;"
           >
-            {option}
-          </div>
+            {labelFor(option)}
+          </text>
         {/each}
-      </div>
+        <circle cx="100" cy="100" r="14" fill="#18181b" stroke="rgba(255,255,255,0.25)" />
+      </svg>
     </div>
+
+    {#if !wheelState.spun}
+      <Button onclick={handleSpin} disabled={sending} class="font-mono">
+        {sending ? "Spinning..." : "Spin"}
+      </Button>
+      <p class="text-[11px] font-mono text-muted-foreground">
+        One spin decides it - first spin wins.
+      </p>
+    {:else if wheelState.winner !== null}
+      <div class="text-center">
+        <div class="font-mono text-sm font-bold text-primary">
+          {wheelState.options[wheelState.winner]}
+        </div>
+        <div class="font-mono text-xs text-muted-foreground">
+          Spun by {wheelState.spinnerName}
+        </div>
+      </div>
+    {/if}
   {/if}
 </div>

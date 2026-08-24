@@ -31,6 +31,11 @@ function bumpTick(): void {
   for (const cb of _subscribers) cb();
 }
 
+/** Re-render cards after a locally-sent update that had no cached entry. */
+export function touchCardStates(): void {
+  bumpTick();
+}
+
 /**
  * Comparator for deterministic update ordering: lamport, then senderId, then id.
  * This is MSG_ORDER extended with id as tiebreaker for DM rooms.
