@@ -22,7 +22,9 @@ export function validateProfileMeta(meta: Partial<ValidatedProfileMeta>): Valida
 
   // Tag: 2-5 chars, trimmed
   if (typeof meta.tagText === "string") {
-    const trimmed = meta.tagText.trim().slice(0, 5);
+    // Tags are always uppercase - normalized here so it holds no matter
+    // what a sender's client stored.
+    const trimmed = meta.tagText.trim().slice(0, 5).toUpperCase();
     if (trimmed.length >= 2) {
       result.tagText = trimmed;
     }

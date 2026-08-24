@@ -173,8 +173,18 @@
     return () => media.removeEventListener("change", update);
   });
 
+  // Allowlist, not a blocklist: history sync stores any verified message
+  // regardless of type, so a build that predates a future message type (the
+  // plugin surface is the planned case) would otherwise render its raw
+  // content as a chat line. Shipping this ahead of that surface means stale
+  // tabs hide unknown types instead of showing JSON.
+  const RENDERABLE_TYPES = new Set<string>([
+    MessageType.Text,
+    MessageType.Reply,
+    MessageType.File,
+  ]);
   const visibleMessages = $derived(
-    messages.filter((m) => m.type !== MessageType.Reaction)
+    messages.filter((m) => RENDERABLE_TYPES.has(m.type))
   );
 
   const messageById = $derived(new Map(visibleMessages.map((m) => [m.id, m])));
@@ -757,6 +767,22 @@
     return peerProfileMeta.get(did)?.nameEffect ?? peerProfileMeta.get(senderId)?.nameEffect;
   }
 
+  /** Tag chip, keyed like names. Deliberately NOT behind
+   *  showPeerNicknameColors: the tag is content, like the name; the colors
+   *  pref governs decoration of the name itself. */
+  function senderTag(
+    senderId: string
+  ): { text: string; textColor: string; chipColor: string } | null {
+    const did = senderDid(senderId);
+    const meta = peerProfileMeta.get(did) ?? peerProfileMeta.get(senderId);
+    if (!meta?.tagText) return null;
+    return {
+      text: meta.tagText,
+      textColor: meta.tagTextColor ?? "#000000",
+      chipColor: meta.tagChipColor ?? "#e5e7eb",
+    };
+  }
+
   /** Live name wins over the one stored with the message, so a rename shows up
    *  on everything that person ever said, not just what they say next. */
   function displayNameFor(senderId: string, stored?: string): string {
@@ -1214,6 +1240,13 @@
                         >
                           {profileStore.nickname || "You"}
                         </span>
+                        {#if profileStore.tagText}
+                          <span
+                            class="rounded px-1 py-px font-mono text-[10px] font-semibold uppercase leading-4"
+                            style={`background-color: ${profileStore.tagChipColor ?? "#e5e7eb"}; color: ${profileStore.tagTextColor ?? "#000000"}`}
+                            >{profileStore.tagText}</span
+                          >
+                        {/if}
                       {:else}
                         {@const color = senderColor(msg.senderId)}
                         {@const effect = senderEffect(msg.senderId)}
@@ -1224,6 +1257,14 @@
                         >
                           {displayName(msg)}
                         </span>
+                        {@const tag = senderTag(msg.senderId)}
+                        {#if tag}
+                          <span
+                            class="rounded px-1 py-px font-mono text-[10px] font-semibold uppercase leading-4"
+                            style={`background-color: ${tag.chipColor}; color: ${tag.textColor}`}
+                            >{tag.text}</span
+                          >
+                        {/if}
                       {/if}
                       <span class="text-xs text-muted-foreground"
                         >{formatTime(msg.timestamp)}</span

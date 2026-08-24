@@ -133,6 +133,7 @@ export async function saveBanner(url: string | undefined): Promise<void> {
 }
 
 export async function saveTag(tagText: string | undefined): Promise<void> {
+  tagText = tagText?.toUpperCase();
   profileStore.tagText = tagText;
   await chained(async () => {
     await ensureProfile();

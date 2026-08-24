@@ -120,7 +120,7 @@
         </span>
         {#if tagText}
           <div
-            class="px-2 py-1 rounded text-xs font-mono font-semibold"
+            class="px-2 py-1 rounded text-xs font-mono font-semibold uppercase"
             style={`background-color: ${tagChipColor}; color: ${tagTextColor}`}
           >
             {tagText}

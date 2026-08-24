@@ -65,6 +65,11 @@ interface UpdateCtx {
 }
 
 interface HostApi {
+  // Built by GENERALIZING sendMessage, never as a parallel path: signing
+  // (sigV2), lamport assignment (room counter vs wall-clock nextDmLamport
+  // for dm- rooms), putMessage, setWatermark, appendSorted, markRoomSeen,
+  // noteRoomActivity all live there, and parallel send paths are where this
+  // codebase's historical bugs came from.
   sendCard(payload: unknown): Promise<string>;          // returns cardId
   sendUpdate(cardId: string, payload: unknown, opts?: { ephemeral?: boolean }): Promise<void>;
   roomCode(): string;
@@ -83,13 +88,18 @@ interface HostApi {
 ## 2. Wire protocol
 
 Two new chat-class message types plus one ephemeral type in
-`src/lib/types/message.ts` (enum at line 3, `isChatMessage` at 314):
+`src/lib/types/message.ts` (enum at line 3):
 
-- `PluginCard = "plugin_card"`: persisted, added to `isChatMessage`, so it
-  syncs through digests/batches and appears in history automatically.
-- `PluginUpdate = "plugin_update"`: persisted chat-class, same treatment.
-- `PluginEphemeral = "plugin_ephemeral"`: wire only, routed in the presence
-  switch of `_handleChatMessage`'s dispatcher, never stored.
+- `PluginCard = "plugin_card"`: persisted, syncs through digests/batches.
+- `PluginUpdate = "plugin_update"`: persisted, same treatment.
+- `PluginEphemeral = "plugin_ephemeral"`: wire only, never stored.
+
+Review finding (blocker, fixed here): `isChatMessage` is dead code with zero
+callers. The REAL persistence gate is the dispatcher's explicit case list in
+`transport.svelte.ts` (the `case Text/Reply/Reaction/File` block, which also
+carries the chat-over-pubsub forgery guard and `_verifyIncoming`). The work
+list is therefore: the dispatcher case list, `wireToMessage`, the send side,
+and `isChatMessage` updated only for hygiene.
 
 Payload placement: the JSON payload is stringified into `msg.content`, as
 `{ pluginId, cardId?, data }`. This is deliberate: `canonicalContentV2`
@@ -106,10 +116,25 @@ Host-side validation on receive (mirror of profile-meta: pure function
   and the peerId-DID binding), NEVER from the payload. Same rule the DM layer
   enforces.
 - Unknown or disabled pluginId: card renders the fallback ("uses the X
-  plugin"); updates and ephemerals are dropped. Old builds ignore unknown
-  message types entirely (dispatcher default), so mixed-version rooms degrade
-  to "plugin cards invisible on old clients", acceptable for a same-instance
-  user base.
+  plugin"); updates and ephemerals are dropped.
+- Old clients: live messages of unknown type are ignored, but HISTORY SYNC
+  stores any verified message type-agnostically and old MsgRender's default
+  branch renders raw content - old builds would show plugin JSON as chat
+  lines. Mitigation already shipped ahead of this surface: visibleMessages in
+  ChatView is an allowlist of renderable types, so any build carrying that
+  filter hides unknown types instead. Clients older than the filter remain
+  exposed until they reload (the vite:preloadError auto-reload shortens
+  this); accepted as a transient rollout artifact on a same-instance user
+  base.
+- Side-channel leaks (review findings, all in scope for v1):
+  - `getUnreadCount` must exclude `PluginUpdate` (renders nothing, must not
+    light the badge) alongside `Reaction`.
+  - `notifyMessage` must exclude `PluginUpdate`, and `PluginCard`
+    notifications use a friendly body from the manifest ("posted a wheel"),
+    never raw content.
+  - The room/DM list last-message preview uses `last.content` verbatim: add
+    a per-type preview mapper ("[wheel]" for cards, walk back past
+    non-renderable types for updates).
 
 ## 3. Card state
 
@@ -118,8 +143,15 @@ New: `src/lib/plugins/state.svelte.ts`.
 - Per-card state store: `cardStates: Map<cardId, unknown>` in a $state map.
 - On first render of a card, the host queries storage for all PluginUpdate
   messages in that room referencing the cardId (the reaction pattern:
-  `getAllMessages(roomCode)` filter), sorts by lamport (ties: message id),
-  folds through the plugin's `reduce`, caches the result.
+  `getAllMessages(roomCode)` filter), sorts by `(lamport, senderId, id)` -
+  the codebase's own MSG_ORDER comparator (lamport, senderId) extended with
+  the id as cheap insurance for DM rooms whose lamports are wall-clock ms.
+  One comparator, shared with MSG_ORDER, not a second ordering. Folds through
+  the plugin's `reduce`, caches the result.
+- Eviction: cardStates clears on room switch and disconnect, mirroring the
+  cleanup discipline _disconnectWithoutBroadcasting applies to the other
+  session maps - unbounded per-card state is the exact leak shape
+  fileTransfers needed fixing for.
 - Live updates (own sends included) fold incrementally. Ephemeral updates
   fold but are marked so a rebuild from storage does not expect them.
 - Determinism rule for reference plugins: any randomness derives from
@@ -164,10 +196,16 @@ counts: they are excluded from the unread badge the same way reactions are
 `frontend/plugins/wheel/`:
 - `/wheel Valorant, CS2, Deep Rock` posts a card with the options.
 - Card shows the wheel; any participant can hit "Spin" once per card: the
-  FIRST spin update in lamport order wins, later spins are no-ops in the
-  reducer. Winner index = `Math.floor(seededRandom(spinUpdateId)() * options.length)`.
+  FIRST spin update in the fold order wins, later spins are no-ops in the
+  reducer. Winner index derives from
+  `seededRandom(hash(cardId + spinUpdateId + senderDid))`.
   The animation eases onto the predetermined winner. Result line names the
   winner and who spun.
+- Fairness, stated honestly: the outcome is VERIFIABLE and CONSISTENT for
+  everyone, not adversarially fair - the spinner generates the update id and
+  could grind ids until the seed favors them. The composite seed raises the
+  cost, commit-reveal would eliminate it and is deliberately punted;
+  friends-scale trust is the operating assumption.
 
 `frontend/plugins/poll/`:
 - `/poll Question? A, B, C` posts a card.
@@ -190,10 +228,29 @@ counts: they are excluded from the unread badge the same way reactions are
 - PluginUpdate as chat-class messages inflate room history (a busy poll =
   dozens of stored rows). Accepted for v1: reactions already behave this way.
   If it hurts, compaction is a later, isolated change.
-- Ephemeral routing adds a message type to the presence switch: verify it is
-  excluded from every chat-side effect (unread, digests, notify rules).
+- Ephemeral routing adds a message type to the presence switch: verified
+  safe by review (participant lastSeen runs before the switch for all types,
+  no default-case assumptions). Host-side flood cap: at most ~4 ephemerals
+  per second per plugin per sender, excess dropped - a buggy plugin ticking
+  every frame must not become a gossipsub flood.
 - `content` holding JSON means old clients that DID know the type would show
   raw JSON: not a case that exists (new types), noted for future type reuse.
 - Lamport tie-break must be deterministic (lamport, then message id) or two
   clients can fold updates in different orders. The fold sort is the single
   most correctness-critical line in the plan.
+
+## 10. Review status
+
+Reviewed adversarially against the codebase (fork with full session context).
+Verdict: buildable with the fixes above, no redesign. Verified true: payload
+in `content` inherits the v2 signature (messaging.ts canonicalContentV2);
+glob paths resolve within the Vite root; no existing composer slash handling
+to conflict with. The visibleMessages allowlist shipped ahead of this
+surface.
+
+## 11. Author documentation
+
+The plugin author guide lives at `frontend/plugins/README.md`, next to the
+plugins themselves. The plan (this file) is for the app's implementers; the
+README is the contract plugin authors write against. Keep them in sync when
+the API changes.

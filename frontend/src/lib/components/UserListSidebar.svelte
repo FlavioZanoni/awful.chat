@@ -54,6 +54,9 @@
     avatarUrl: string | null;
     color: string | null;
     nameEffect: string | null;
+    tagText: string | null;
+    tagTextColor: string | null;
+    tagChipColor: string | null;
     isOnline: boolean;
     isSelf: boolean;
     isRelayed: boolean;
@@ -103,12 +106,18 @@
       let avatarUrl: string | null = null;
       let color: string | null = null;
       let nameEffect: string | null = null;
+      let tagText: string | null = null;
+      let tagTextColor: string | null = null;
+      let tagChipColor: string | null = null;
 
       if (isSelf) {
         name = profileStore.nickname || "You";
         avatarUrl = profileStore.avatarUrl || null;
         color = profileStore.color || null;
         nameEffect = profileStore.nameEffect || null;
+        tagText = profileStore.tagText || null;
+        tagTextColor = profileStore.tagTextColor || null;
+        tagChipColor = profileStore.tagChipColor || null;
       } else {
         // roomUsers can carry a raw peerId while these maps are DID-keyed.
         const nameKey = peerIdToDid(did) || did;
@@ -122,6 +131,12 @@
         nameEffect = displayPrefs.showPeerNicknameColors
           ? peerProfileMeta.get(nameKey)?.nameEffect || peerProfileMeta.get(did)?.nameEffect || null
           : null;
+        // The tag is content like the name, not decoration - it ignores the
+        // colors pref.
+        const meta = peerProfileMeta.get(nameKey) ?? peerProfileMeta.get(did);
+        tagText = meta?.tagText || null;
+        tagTextColor = meta?.tagTextColor || null;
+        tagChipColor = meta?.tagChipColor || null;
       }
 
       // In a call in THIS room: presence is announced per peer, self via
@@ -157,6 +172,9 @@
         isRelayed: userIsRelayed,
         inCall,
         sharing: inCall && sharing,
+        tagText,
+        tagTextColor,
+        tagChipColor,
       });
     }
 
@@ -319,6 +337,15 @@
           style={effectStyle.style || (user.color ? `color: ${user.color}` : "")}
         >
           {user.isSelf ? `${user.name} (You)` : user.name}
+          {#if user.tagText}
+            <!-- -webkit-text-fill-color reset: the effect classes on this
+                 container clip a gradient to the text and make fills
+                 transparent, which the chip would inherit. -->
+            <span
+              class="shrink-0 rounded px-1 py-px font-mono text-[10px] font-semibold uppercase leading-4"
+              style={`background-color: ${user.tagChipColor ?? "#e5e7eb"}; color: ${user.tagTextColor ?? "#000000"}; -webkit-text-fill-color: ${user.tagTextColor ?? "#000000"}; animation: none;`}
+            >{user.tagText}</span>
+          {/if}
           {#if user.isRelayed}
             <Tip text={RELAY_TIP}>
               {#snippet children(props)}

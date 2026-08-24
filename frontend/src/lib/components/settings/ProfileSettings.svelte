@@ -284,7 +284,7 @@
                 type="button"
                 onclick={() => (editing = "tag")}
                 aria-label="Edit tag"
-                class="cursor-pointer rounded px-2 py-0.5 font-mono text-xs font-semibold hover:opacity-80"
+                class="cursor-pointer rounded px-2 py-0.5 font-mono text-xs font-semibold uppercase hover:opacity-80"
                 style={`background-color: ${profileStore.tagChipColor ?? "#e5e7eb"}; color: ${profileStore.tagTextColor ?? "#000000"}`}
               >
                 {profileStore.tagText}
@@ -334,7 +334,7 @@
             class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
           />
           <span
-            class="rounded px-2 py-0.5 font-mono text-xs font-semibold"
+            class="rounded px-2 py-0.5 font-mono text-xs font-semibold uppercase"
             style={`background-color: ${tagChipColor}; color: ${tagTextColor}`}
           >
             {tagText || "TAG"}
