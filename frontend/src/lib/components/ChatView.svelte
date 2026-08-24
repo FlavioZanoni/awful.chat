@@ -61,6 +61,8 @@
   import { serialize, mentionsMe } from "$lib/mentions";
   import { makeHostApi } from "$lib/plugins/host";
   import PluginIcon from "$lib/plugins/PluginIcon.svelte";
+  import UserProfileCard from "./UserProfileCard.svelte";
+  import { openSettings } from "$lib/ui-state.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { getRegistry, getPlugin } from "$lib/plugins/registry";
   import { isPluginEnabled } from "$lib/plugins/prefs.svelte";
@@ -1026,6 +1028,28 @@
     return null;
   }
 
+  let profileCardFor = $state<{
+    did: string;
+    name: string;
+    avatarUrl?: string;
+    color?: string;
+  } | null>(null);
+
+  function openProfileFromMessage(msg: Message): void {
+    const own = isSelfSender(msg.senderId);
+    const did = own ? selfId() : senderDid(msg.senderId);
+    profileCardFor = {
+      did,
+      name: own ? profileStore.nickname || "You" : displayName(msg),
+      avatarUrl: own
+        ? (profileStore.avatarUrl ?? undefined)
+        : (senderAvatar(msg.senderId) ?? undefined),
+      color: own
+        ? (profileStore.color ?? undefined)
+        : senderColor(msg.senderId),
+    };
+  }
+
   function openUserMenuFromMessage(msg: Message, e: MouseEvent): void {
     if (isSelfSender(msg.senderId)) return;
     e.stopPropagation();
@@ -1401,14 +1425,18 @@
                     <div
                       role="button"
                       tabindex="0"
-                      onclick={(e) => openUserMenuFromMessage(msg, e)}
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        openProfileFromMessage(msg);
+                      }}
+                      oncontextmenu={(e) => {
+                        e.preventDefault();
+                        openUserMenuFromMessage(msg, e);
+                      }}
                       onkeydown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          openUserMenuFromMessage(
-                            msg,
-                            e as unknown as MouseEvent
-                          );
+                          openProfileFromMessage(msg);
                         }
                       }}
                       class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full overflow-hidden text-xs font-semibold font-mono
@@ -1444,7 +1472,13 @@
                       {#if isOwn}
                         {@const effectStyle = nameEffectStyle(profileStore.nameEffect, profileStore.color, profileStore.gradient2 ?? undefined, profileStore.gradient3 ?? undefined)}
                         <span
-                          class="text-sm font-medium text-primary {displayPrefs.italicOwnName
+                          role="button"
+                          tabindex="0"
+                          onclick={() => openProfileFromMessage(msg)}
+                          onkeydown={(e) => {
+                            if (e.key === "Enter") openProfileFromMessage(msg);
+                          }}
+                          class="cursor-pointer text-sm font-medium text-primary {displayPrefs.italicOwnName
                             ? 'italic'
                             : ''} {effectStyle.class}"
                           style={effectStyle.style || (profileStore.color ? `color: ${profileStore.color}` : "")}
@@ -1464,7 +1498,17 @@
                         {@const grads = senderGradients(msg.senderId)}
                         {@const effectStyle = nameEffectStyle(effect, color, grads.g2, grads.g3)}
                         <span
-                          class="text-sm font-medium text-foreground {effectStyle.class}"
+                          role="button"
+                          tabindex="0"
+                          onclick={() => openProfileFromMessage(msg)}
+                          oncontextmenu={(e) => {
+                            e.preventDefault();
+                            openUserMenuFromMessage(msg, e);
+                          }}
+                          onkeydown={(e) => {
+                            if (e.key === "Enter") openProfileFromMessage(msg);
+                          }}
+                          class="cursor-pointer text-sm font-medium text-foreground {effectStyle.class}"
                           style={effectStyle.style || (color ? `color: ${color}` : "")}
                         >
                           {displayName(msg)}
@@ -1828,6 +1872,37 @@
     </form>
   </div>
 </div>
+
+{#if profileCardFor}
+  <UserProfileCard
+    open={!!profileCardFor}
+    onOpenChange={(open) => {
+      if (!open) profileCardFor = null;
+    }}
+    did={profileCardFor.did}
+    name={profileCardFor.name}
+    avatarUrl={profileCardFor.avatarUrl}
+    color={profileCardFor.color}
+    onEdit={() => openSettings("profile")}
+    onMessage={peerIdForSender(profileCardFor.did)
+      ? () => {
+          const pid = peerIdForSender(profileCardFor!.did)!;
+          profileCardFor = null;
+          startDmFromMenu(pid);
+        }
+      : undefined}
+    onTogglePhonebook={peerIdForSender(profileCardFor.did)
+      ? () => {
+          const pid = peerIdForSender(profileCardFor!.did)!;
+          if (isInPhonebook(pid)) removeFromMenu(pid);
+          else addFromMenu(pid);
+        }
+      : undefined}
+    inPhonebook={peerIdForSender(profileCardFor.did)
+      ? isInPhonebook(peerIdForSender(profileCardFor.did)!)
+      : false}
+  />
+{/if}
 
 <GifPicker
   open={gifPickerOpen}

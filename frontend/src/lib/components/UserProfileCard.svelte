@@ -3,7 +3,7 @@
   import { profileStore } from "$lib/profile.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { nameEffectStyle } from "$lib/name-effect";
-  import { Copy, Check, MessageSquare, UserPlus, UserRoundMinus } from "@lucide/svelte";
+  import { Copy, Check, MessageSquare, Pencil, UserPlus, UserRoundMinus } from "@lucide/svelte";
   import {
     Dialog,
     DialogContent,
@@ -22,6 +22,8 @@
     onMessage?: () => void;
     onTogglePhonebook?: () => void;
     inPhonebook?: boolean;
+    /** Shown on your OWN card only: jumps to profile editing. */
+    onEdit?: () => void;
   }
 
   let {
@@ -34,6 +36,7 @@
     onMessage,
     onTogglePhonebook,
     inPhonebook = false,
+    onEdit,
   }: Props = $props();
 
   // Our own metadata never enters peerProfileMeta (that map is fed by the
@@ -136,6 +139,22 @@
           </div>
         {/if}
       </div>
+
+      {#if isSelf && onEdit}
+        <div class="flex items-center px-1">
+          <button
+            type="button"
+            onclick={() => {
+              onOpenChange(false);
+              onEdit?.();
+            }}
+            class="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border px-3 py-1.5 font-mono text-xs text-foreground hover:bg-muted transition-colors"
+          >
+            <Pencil class="size-3.5" />
+            Edit profile
+          </button>
+        </div>
+      {/if}
 
       {#if !isSelf && (onMessage || onTogglePhonebook)}
         <div class="flex items-center gap-2 px-1">

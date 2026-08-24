@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiState } from "$lib/ui-state.svelte";
   import {
     Dialog,
     DialogContent,
@@ -55,6 +56,15 @@
   let { open = $bindable(), onClose, onOpenSync }: Props = $props();
 
   let activeTab = $state<SettingsTab>("profile");
+
+  // A requested tab (profile card's "Edit profile") wins when the dialog
+  // opens; consumed so later opens land on the default again.
+  $effect(() => {
+    if (open && uiState.settingsTab) {
+      activeTab = uiState.settingsTab as SettingsTab;
+      uiState.settingsTab = null;
+    }
+  });
   let avatarDialogOpen = $state(false);
   let isMobile = $state(false);
 

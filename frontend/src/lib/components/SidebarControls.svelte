@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiState } from "$lib/ui-state.svelte";
   import {
     Camera,
     CameraOff,
@@ -28,6 +29,14 @@
 
   let avatarDialogOpen = $state(false);
   let audioSettingsOpen = $state(false);
+
+  // Open-settings requests from elsewhere (profile card edit button).
+  $effect(() => {
+    if (uiState.settingsOpenRequested) {
+      uiState.settingsOpenRequested = false;
+      audioSettingsOpen = true;
+    }
+  });
   // Owned here (not in SettingsDialog) so the sync dialog survives the settings
   // dialog closing on mobile - see SessionSettings onOpenSync.
   let syncDialogOpen = $state(false);

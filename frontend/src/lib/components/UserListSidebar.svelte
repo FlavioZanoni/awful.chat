@@ -38,6 +38,7 @@
     DrawerTitle,
   } from "$lib/components/ui/drawer";
   import UserProfileCard from "./UserProfileCard.svelte";
+  import { openSettings } from "$lib/ui-state.svelte";
 
   interface Props {
     open: boolean;
@@ -536,6 +537,7 @@
     name={selectedUserForProfile.name}
     avatarUrl={selectedUserForProfile.avatarUrl ?? undefined}
     color={selectedUserForProfile.color ?? undefined}
+    onEdit={() => openSettings("profile")}
     onMessage={selectedUserForProfile.peerId
       ? () => {
           const pid = selectedUserForProfile!.peerId!;
