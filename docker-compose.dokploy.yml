@@ -51,6 +51,11 @@ services:
       - traefik.http.routers.turn.tls=true
       - traefik.http.routers.turn.tls.certresolver=letsencrypt
       - traefik.http.routers.turn.service=relay-api-service
+      - traefik.http.routers.steam.rule=Host(`relay.${DOMAIN}`) && PathPrefix(`/steam`)
+      - traefik.http.routers.steam.entrypoints=websecure
+      - traefik.http.routers.steam.tls=true
+      - traefik.http.routers.steam.tls.certresolver=letsencrypt
+      - traefik.http.routers.steam.service=relay-api-service
 
   sfu:
     build:
