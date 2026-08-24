@@ -13,7 +13,12 @@ export function nameEffectStyle(
   effect: string | undefined,
   color: string | undefined
 ): { class: string; style: string } {
-  if (!effect || effect === "none" || !color) {
+  if (!effect || effect === "none") {
+    return { class: "", style: "" };
+  }
+  // Rainbow supplies its own colors; the rest are built from the nickname
+  // color and are meaningless without one.
+  if (!color && effect !== "rainbow") {
     return { class: "", style: "" };
   }
 
@@ -46,10 +51,17 @@ export function nameEffectStyle(
     }
 
     case "rainbow": {
-      // Animated hue-rotate
+      // hue-rotate needs a SATURATED base: rotating the default near-gray
+      // text color produces the same gray, which is why this effect looked
+      // dead. A multi-stop gradient clipped to the text, spun by hue-rotate
+      // (360deg = identity, so the loop is seamless). Under reduced motion
+      // the animation stops and the static gradient remains.
       return {
         class: `${baseClass} name-effect-rainbow`,
-        style: `animation: rainbow 3s linear infinite;`,
+        style:
+          "background: linear-gradient(90deg,#ff5959,#ffb545,#ffe234,#5be35b,#4fc3ff,#b06aff,#ff5959); " +
+          "-webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; " +
+          "animation: rainbow 3s linear infinite;",
       };
     }
 

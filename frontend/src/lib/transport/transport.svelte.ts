@@ -66,7 +66,7 @@ import {
   verifyPeerBinding,
   verifySignature,
 } from "../messaging";
-import { bytesToBase64, encode, decode, normalizeAvatarUrl, normalizeNicknameColor } from "../utils";
+import { bytesToBase64, sniffImageMime, encode, decode, normalizeAvatarUrl, normalizeNicknameColor } from "../utils";
 import { validateProfileMeta } from "../profile-meta";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
 import { _sendWatchPresence } from "./transmission.svelte";
@@ -329,6 +329,29 @@ initVoice(_voice, _dtln);
 initTransmission(_video);
 initFiles(_fileTransport);
 
+// Stored peer profile metadata is invisible until the peer re-broadcasts:
+// the reactive map only ever filled from live messages, so a reload emptied
+// every card and name effect for anyone not currently online. Hydrate from
+// storage, but never overwrite what a live message already delivered.
+void getAllPeerProfiles()
+  .then((profiles) => {
+    const meta = new Map(transportState.peerProfileMeta);
+    for (const p of profiles) {
+      if (meta.has(p.did)) continue;
+      if (!p.bannerURL && !p.tagText && !p.bio && !p.nameEffect) continue;
+      meta.set(p.did, {
+        bannerUrl: p.bannerURL,
+        tagText: p.tagText,
+        tagTextColor: p.tagTextColor,
+        tagChipColor: p.tagChipColor,
+        bio: p.bio,
+        nameEffect: p.nameEffect,
+      });
+    }
+    transportState.peerProfileMeta = meta;
+  })
+  .catch(() => {});
+
 const STATUS_RANK = { sending: 0, sent: 1, delivered: 2, read: 3 } as const;
 
 /**
@@ -417,19 +440,13 @@ async function _sendProfile(peerId?: string, isReply = false): Promise<void> {
   let avatarUrl: string | null = profile?.pfpURL || null;
   if (!avatarUrl && profile?.pfpData) {
     const bytes = new Uint8Array(profile.pfpData);
-    const binary = Array.from(bytes)
-      .map((b) => String.fromCharCode(b))
-      .join("");
-    avatarUrl = `data:image/jpeg;base64,${btoa(binary)}`;
+    avatarUrl = `data:${sniffImageMime(bytes)};base64,${bytesToBase64(bytes)}`;
   }
 
   let bannerUrl: string | null = profile?.bannerURL || null;
   if (!bannerUrl && profile?.bannerData) {
     const bytes = new Uint8Array(profile.bannerData);
-    const binary = Array.from(bytes)
-      .map((b) => String.fromCharCode(b))
-      .join("");
-    bannerUrl = `data:image/gif;base64,${btoa(binary)}`;
+    bannerUrl = `data:${sniffImageMime(bytes)};base64,${bytesToBase64(bytes)}`;
   }
 
   // Prove this DID owns our peerId; the receiver cannot derive it any more.

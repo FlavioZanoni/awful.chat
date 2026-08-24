@@ -38,6 +38,24 @@ export function utf8(s: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(s);
 }
 
+/**
+ * Image mime from magic bytes. Data-url mimes were hardcoded (jpeg for
+ * avatars, gif for banners) and only worked because browsers sniff the real
+ * bytes; anything that trusts the declared type would mis-handle them.
+ */
+export function sniffImageMime(bytes: Uint8Array): string {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46)
+    return "image/gif";
+  if (
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 &&
+    bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45
+  )
+    return "image/webp";
+  return "image/jpeg"; // ponytail: unknown bytes get the sniffing-tolerant default
+}
+
 export function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
   const CHUNK = 0x8000; // String.fromCharCode blows the arg limit past ~64k

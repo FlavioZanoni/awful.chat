@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Button } from "$lib/components/ui/button";
   import {
@@ -12,9 +11,17 @@
     saveBio,
     saveNameEffect,
   } from "$lib/profile.svelte";
-  import { lock } from "$lib/identity/identity.svelte";
+  import { identityStore, lock } from "$lib/identity/identity.svelte";
   import { nameEffectStyle } from "$lib/name-effect";
-  import { Pencil, LogOut, Trash2 } from "@lucide/svelte";
+  import {
+    Camera,
+    Check,
+    Copy,
+    LogOut,
+    Pencil,
+    Plus,
+    Trash2,
+  } from "@lucide/svelte";
 
   interface Props {
     isMobile?: boolean;
@@ -26,7 +33,6 @@
 
   let nameValue = $state("");
   let colorValue = $state("#3b82f6");
-  let bannerUrl = $state("");
   let tagText = $state("");
   let tagTextColor = $state("#000000");
   let tagChipColor = $state("#e5e7eb");
@@ -34,9 +40,12 @@
   let nameEffect = $state("none");
 
   $effect(() => {
+    // Never let a store echo stomp an edit in progress: saveTag() mutates
+    // the store mid-commit, which re-ran this sync and reset the color
+    // locals to their OLD values before saveTagColors read them.
+    if (editing) return;
     nameValue = profileStore.nickname;
     colorValue = profileStore.color ?? "#3b82f6";
-    bannerUrl = profileStore.bannerUrl ?? "";
     tagText = profileStore.tagText ?? "";
     tagTextColor = profileStore.tagTextColor ?? "#000000";
     tagChipColor = profileStore.tagChipColor ?? "#e5e7eb";
@@ -44,68 +53,78 @@
     nameEffect = profileStore.nameEffect ?? "none";
   });
 
+  /** The card IS the editor: exactly one piece is in edit mode at a time. */
+  let editing = $state<null | "name" | "tag" | "bio">(null);
+  let bannerInput = $state<HTMLInputElement | null>(null);
+  let bannerError = $state<string | null>(null);
+
   const profileInitial = $derived(
     (profileStore.nickname || nameValue || "?").charAt(0).toUpperCase()
   );
+  const effectStyle = $derived(nameEffectStyle(nameEffect, colorValue));
 
-  const previewEffectStyle = $derived(nameEffectStyle(nameEffect, colorValue));
+  function focusOnMount(el: HTMLElement) {
+    el.focus();
+    if (el instanceof HTMLInputElement) el.select();
+  }
 
-  async function handleNameBlur() {
+  async function commitName() {
     const trimmed = nameValue.trim();
-    if (trimmed && trimmed !== profileStore.nickname) {
-      await saveName(trimmed);
+    if (trimmed && trimmed !== profileStore.nickname) await saveName(trimmed);
+    editing = null;
+  }
+
+  async function commitTag() {
+    // Snapshot before any await - belt to the effect-guard's suspenders.
+    const trimmed = tagText.trim();
+    const textColor = tagTextColor || undefined;
+    const chipColor = tagChipColor || undefined;
+    if (trimmed !== (profileStore.tagText ?? "")) {
+      await saveTag(trimmed || undefined);
     }
+    await saveTagColors(textColor, chipColor);
+    editing = null;
+  }
+
+  async function commitBio() {
+    if (bio !== (profileStore.bio ?? "")) await saveBio(bio || undefined);
+    editing = null;
   }
 
   async function handleBannerChange(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
+    input.value = "";
     if (!file) return;
-
+    bannerError = null;
     if (file.size > 1_000_000) {
-      alert("Banner must be under 1 MB");
+      bannerError = "Banner must be under 1 MB";
       return;
     }
-
     const reader = new FileReader();
     reader.onload = async () => {
-      const result = reader.result;
-      if (typeof result === "string") {
-        await saveBanner(result);
-      }
+      if (typeof reader.result === "string") await saveBanner(reader.result);
     };
     reader.readAsDataURL(file);
   }
 
-  async function handleTagBlur() {
-    const trimmed = tagText.trim();
-    if (trimmed !== profileStore.tagText) {
-      await saveTag(trimmed || undefined);
-    }
-  }
-
-  async function handleTagColorsChange() {
-    await saveTagColors(
-      tagTextColor || undefined,
-      tagChipColor || undefined
-    );
-  }
-
-  async function handleBioBlur() {
-    if (bio !== profileStore.bio) {
-      await saveBio(bio || undefined);
-    }
-  }
-
   async function handleNameEffectChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value;
-    if (value !== profileStore.nameEffect) {
-      await saveNameEffect(value || undefined);
+    if (value !== (profileStore.nameEffect ?? "none")) {
+      await saveNameEffect(value === "none" ? undefined : value);
     }
   }
 
-  function handleLockLogout() {
-    lock();
+  let copiedDid = $state(false);
+  async function copyDid() {
+    if (!identityStore.did) return;
+    try {
+      await navigator.clipboard.writeText(identityStore.did);
+      copiedDid = true;
+      setTimeout(() => (copiedDid = false), 1200);
+    } catch {
+      // Clipboard blocked: the did is visible to select by hand.
+    }
   }
 </script>
 
@@ -119,81 +138,62 @@
       >Profile</Label
     >
   </div>
+  <p class="text-xs font-mono text-muted-foreground -mt-2">
+    This card is what others see. Click any part of it to change it.
+  </p>
 
-  <!-- Live Preview -->
-  <div class="flex flex-col gap-2 p-3 bg-card rounded-lg border border-border/30">
-    <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
-      >Live preview</Label
+  <div class="rounded-lg border border-border/50 bg-card overflow-hidden">
+    <!-- Banner: click to change -->
+    <button
+      type="button"
+      onclick={() => bannerInput?.click()}
+      aria-label="Change banner"
+      class="group relative block h-24 w-full cursor-pointer overflow-hidden bg-linear-to-r from-primary/20 to-secondary/40"
     >
-    <div class="flex flex-col gap-2">
-      {#if bannerUrl}
-        <div
-          class="w-full h-16 rounded-lg overflow-hidden bg-muted/30"
-        >
-          <img
-            src={bannerUrl}
-            alt="Banner preview"
-            class="w-full h-full object-cover"
-          />
-        </div>
+      {#if profileStore.bannerUrl}
+        <img
+          src={profileStore.bannerUrl}
+          alt="Profile banner"
+          class="h-full w-full object-cover"
+        />
       {/if}
-      <div class="flex flex-col items-center gap-2">
-        <div
-          class="flex size-16 items-center justify-center rounded-full overflow-hidden bg-primary/20 ring-2 ring-border shrink-0"
-        >
-          {#if profileStore.avatarUrl}
-            <img
-              src={profileStore.avatarUrl}
-              alt="Avatar"
-              class="size-full object-cover"
-            />
-          {:else}
-            <span
-              class="text-lg font-semibold text-primary font-mono select-none"
-            >
-              {profileInitial}
-            </span>
-          {/if}
-        </div>
-        <div class="flex items-center gap-2">
-          <span
-            class="text-sm font-mono font-semibold"
-            class:name-effect-gradient={previewEffectStyle.class.includes("gradient")}
-            class:name-effect-shimmer={previewEffectStyle.class.includes("shimmer")}
-            class:name-effect-glow={previewEffectStyle.class.includes("glow")}
-            class:name-effect-rainbow={previewEffectStyle.class.includes("rainbow")}
-            style={previewEffectStyle.style || (colorValue ? `color: ${colorValue}` : "")}
-          >
-            {nameValue || "Anonymous"}
-          </span>
-          {#if tagText}
-            <div
-              class="px-2 py-0.5 rounded text-xs font-mono font-semibold"
-              style={`background-color: ${tagChipColor}; color: ${tagTextColor}`}
-            >
-              {tagText}
-            </div>
-          {/if}
-        </div>
-        {#if bio}
-          <div class="text-xs text-muted-foreground text-center whitespace-pre-wrap max-w-[200px] break-words">
-            {bio}
-          </div>
-        {/if}
+      <div
+        class="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/50 font-mono text-xs text-white opacity-0 transition-opacity group-hover:opacity-100"
+      >
+        <Camera class="size-4" />
+        {profileStore.bannerUrl ? "Change banner" : "Add a banner"}
       </div>
-    </div>
-  </div>
+    </button>
+    <input
+      bind:this={bannerInput}
+      type="file"
+      accept="image/*"
+      onchange={handleBannerChange}
+      class="hidden"
+    />
+    {#if profileStore.bannerUrl}
+      <div class="relative">
+        <button
+          type="button"
+          onclick={() => saveBanner(undefined)}
+          aria-label="Remove banner"
+          class="absolute -top-22 right-2 z-10 flex size-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-red-500/80 transition-colors cursor-pointer"
+        >
+          <Trash2 class="size-3.5" />
+        </button>
+      </div>
+    {/if}
+    {#if bannerError}
+      <p class="px-3 pt-2 text-xs font-mono text-destructive">{bannerError}</p>
+    {/if}
 
-  <!-- Edit Sections -->
-  <div class="flex flex-col gap-3">
-    <!-- Avatar and Name -->
-    <div class="flex flex-col items-center gap-3">
+    <div class="flex flex-col gap-2 p-3">
+      <!-- Avatar overlapping the banner: click opens the existing picker -->
       <button
         type="button"
         onclick={() => onAvatarClick?.()}
         aria-label="Change avatar"
-        class="relative group flex size-20 md:size-36 items-center justify-center rounded-full overflow-hidden bg-primary/20 ring-2 ring-border hover:ring-primary/60 transition-all cursor-pointer shrink-0"
+        class="group relative -mt-11 flex size-16 items-center justify-center overflow-hidden rounded-full bg-primary/20 ring-4 ring-card cursor-pointer shrink-0"
       >
         {#if profileStore.avatarUrl}
           <img
@@ -202,183 +202,233 @@
             class="size-full object-cover"
           />
         {:else}
-          <span
-            class="text-2xl font-semibold text-primary font-mono select-none"
+          <span class="font-mono text-lg font-semibold text-primary select-none"
             >{profileInitial}</span
           >
         {/if}
         <div
-          class="absolute inset-0 rounded-full flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity"
+          class="absolute inset-0 flex items-center justify-center rounded-full bg-black/60 opacity-0 transition-opacity group-hover:opacity-100"
         >
-          <Pencil class="text-white" />
+          <Pencil class="size-4 text-white" />
         </div>
       </button>
-      <Input
-        bind:value={nameValue}
-        onblur={handleNameBlur}
-        onkeydown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        }}
-        placeholder="Your display name"
-        class="bg-background border-input text-foreground placeholder:text-muted-foreground font-mono focus-visible:ring-ring text-center w-full max-w-64 md:max-w-80"
-      />
 
-      <!-- Nickname Color -->
-      <div class="flex flex-col gap-2 w-full max-w-64 md:max-w-80">
-        <Label
-          class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
-          >Nickname color</Label
+      <!-- Name + tag row -->
+      {#if editing === "name"}
+        <!-- Commit when focus leaves the whole row: committing on the
+             INPUT's blur closed the editor the moment the color or effect
+             control was clicked, unmounting it mid-interaction. -->
+        <div
+          class="flex flex-wrap items-center gap-2"
+          onfocusout={(e) => {
+            const row = e.currentTarget as HTMLElement;
+            if (!row.contains(e.relatedTarget as Node)) commitName();
+          }}
         >
-        <div class="flex items-center gap-2">
+          <input
+            use:focusOnMount
+            bind:value={nameValue}
+            onkeydown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                nameValue = profileStore.nickname;
+                editing = null;
+              }
+            }}
+            placeholder="Your display name"
+            class="w-40 rounded border border-border bg-background px-2 py-1 font-mono text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
           <input
             type="color"
             bind:value={colorValue}
             onchange={() => saveColor(colorValue).catch(() => {})}
             aria-label="Nickname color"
-            class="size-8 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
+            class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
+          />
+          <select
+            bind:value={nameEffect}
+            onchange={handleNameEffectChange}
+            aria-label="Name effect"
+            class="rounded border border-border bg-background px-2 py-1 font-mono text-xs"
+          >
+            <option value="none">No effect</option>
+            <option value="gradient">Gradient</option>
+            <option value="shimmer">Shimmer</option>
+            <option value="glow">Glow</option>
+            <option value="rainbow">Rainbow</option>
+          </select>
+        </div>
+      {:else}
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onclick={() => (editing = "name")}
+            aria-label="Edit name, color and effect"
+            class="group flex cursor-pointer items-center gap-1.5"
+          >
+            <span
+              class="font-mono text-base font-semibold {effectStyle.class}"
+              style={effectStyle.style ||
+                (profileStore.color ? `color: ${profileStore.color}` : "")}
+            >
+              {profileStore.nickname || "Anonymous"}
+            </span>
+            <Pencil
+              class="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+            />
+          </button>
+
+          {#if editing !== "tag"}
+            {#if profileStore.tagText}
+              <button
+                type="button"
+                onclick={() => (editing = "tag")}
+                aria-label="Edit tag"
+                class="cursor-pointer rounded px-2 py-0.5 font-mono text-xs font-semibold hover:opacity-80"
+                style={`background-color: ${profileStore.tagChipColor ?? "#e5e7eb"}; color: ${profileStore.tagTextColor ?? "#000000"}`}
+              >
+                {profileStore.tagText}
+              </button>
+            {:else}
+              <button
+                type="button"
+                onclick={() => (editing = "tag")}
+                aria-label="Add a tag"
+                class="flex cursor-pointer items-center gap-0.5 rounded border border-dashed border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:border-primary/60 hover:text-foreground transition-colors"
+              >
+                <Plus class="size-3" /> tag
+              </button>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+
+      {#if editing === "tag"}
+        <div class="flex flex-wrap items-center gap-2">
+          <input
+            use:focusOnMount
+            bind:value={tagText}
+            maxlength="5"
+            placeholder="2-5 ch"
+            onkeydown={(e) => {
+              if (e.key === "Enter") commitTag();
+              if (e.key === "Escape") {
+                tagText = profileStore.tagText ?? "";
+                editing = null;
+              }
+            }}
+            class="w-20 rounded border border-border bg-background px-2 py-1 text-center font-mono text-xs uppercase focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+          <input
+            type="color"
+            bind:value={tagTextColor}
+            aria-label="Tag text color"
+            title="Text"
+            class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
+          />
+          <input
+            type="color"
+            bind:value={tagChipColor}
+            aria-label="Tag chip color"
+            title="Chip"
+            class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
           />
           <span
-            class="flex-1 truncate text-sm font-medium font-mono"
-            style={colorValue
-              ? `color: ${colorValue}`
-              : ""}
-            >{nameValue || "Anonymous"}</span
-          >
-          <button
-            type="button"
-            onclick={() => {
-              colorValue = "#3b82f6";
-              saveColor(null).catch(() => {});
-            }}
-            aria-label="Reset nickname color to default"
-            class="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-          >
-            Reset
-          </button>
-        </div>
-      </div>
-
-      <!-- Name Effect -->
-      <div class="flex flex-col gap-2 w-full max-w-64 md:max-w-80">
-        <Label
-          class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
-          >Name effect</Label
-        >
-        <select
-          bind:value={nameEffect}
-          onchange={handleNameEffectChange}
-          class="px-3 py-2 rounded border border-border bg-background text-foreground font-mono text-sm"
-        >
-          <option value="none">None</option>
-          <option value="gradient">Gradient</option>
-          <option value="shimmer">Shimmer</option>
-          <option value="glow">Glow</option>
-          <option value="rainbow">Rainbow</option>
-        </select>
-      </div>
-    </div>
-
-    <!-- Banner -->
-    <div class="flex flex-col gap-2 w-full max-w-64 md:max-w-80 mx-auto">
-      <Label
-        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
-        >Banner</Label
-      >
-      <div class="flex items-center gap-2">
-        <input
-          type="file"
-          accept="image/*"
-          onchange={handleBannerChange}
-          aria-label="Banner image"
-          class="text-xs"
-        />
-        {#if bannerUrl}
-          <button
-            type="button"
-            onclick={async () => {
-              await saveBanner(undefined);
-            }}
-            aria-label="Remove banner"
-            class="p-1 text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Trash2 class="w-4 h-4" />
-          </button>
-        {/if}
-      </div>
-    </div>
-
-    <!-- Tag -->
-    <div class="flex flex-col gap-2 w-full max-w-64 md:max-w-80 mx-auto">
-      <Label
-        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
-        >Profile tag (2-5 chars)</Label
-      >
-      <Input
-        bind:value={tagText}
-        onblur={handleTagBlur}
-        onkeydown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        }}
-        placeholder="e.g. ADMIN"
-        maxlength="5"
-        class="bg-background border-input text-foreground placeholder:text-muted-foreground font-mono focus-visible:ring-ring text-center"
-      />
-    </div>
-
-    <!-- Tag Colors -->
-    {#if tagText}
-      <div class="flex flex-col gap-2 w-full max-w-64 md:max-w-80 mx-auto">
-        <Label
-          class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
-          >Tag colors</Label
-        >
-        <div class="flex items-center gap-2">
-          <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground">Text</label>
-            <input
-              type="color"
-              bind:value={tagTextColor}
-              onchange={handleTagColorsChange}
-              aria-label="Tag text color"
-              class="size-8 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
-            />
-          </div>
-          <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground">Background</label>
-            <input
-              type="color"
-              bind:value={tagChipColor}
-              onchange={handleTagColorsChange}
-              aria-label="Tag chip color"
-              class="size-8 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
-            />
-          </div>
-          <div
-            class="px-2 py-1 rounded text-xs font-mono font-semibold"
+            class="rounded px-2 py-0.5 font-mono text-xs font-semibold"
             style={`background-color: ${tagChipColor}; color: ${tagTextColor}`}
           >
-            {tagText}
-          </div>
+            {tagText || "TAG"}
+          </span>
+          <button
+            type="button"
+            onclick={commitTag}
+            aria-label="Save tag"
+            class="cursor-pointer text-muted-foreground hover:text-foreground"
+          >
+            <Check class="size-4" />
+          </button>
+          {#if profileStore.tagText}
+            <button
+              type="button"
+              onclick={async () => {
+                tagText = "";
+                await saveTag(undefined);
+                editing = null;
+              }}
+              aria-label="Remove tag"
+              class="cursor-pointer text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 class="size-3.5" />
+            </button>
+          {/if}
         </div>
-      </div>
-    {/if}
+      {/if}
 
-    <!-- Bio -->
-    <div class="flex flex-col gap-2 w-full max-w-64 md:max-w-80 mx-auto">
-      <Label
-        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
-        >Bio (max 200 chars)</Label
-      >
-      <textarea
-        bind:value={bio}
-        onblur={handleBioBlur}
-        placeholder="Tell us about yourself..."
-        maxlength="200"
-        class="px-3 py-2 rounded border border-border bg-background text-foreground placeholder:text-muted-foreground font-mono text-sm resize-none h-20"
-      ></textarea>
-      <div class="text-xs text-muted-foreground">
-        {bio.length}/200
-      </div>
+      <!-- Bio: click to edit -->
+      {#if editing === "bio"}
+        <div class="flex flex-col gap-1">
+          <textarea
+            use:focusOnMount
+            bind:value={bio}
+            onblur={commitBio}
+            onkeydown={(e) => {
+              if (e.key === "Escape") {
+                bio = profileStore.bio ?? "";
+                editing = null;
+              }
+            }}
+            maxlength="200"
+            placeholder="Tell people something..."
+            class="h-20 resize-none rounded border border-border bg-background px-2 py-1.5 font-mono text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          ></textarea>
+          <span class="text-right font-mono text-[10px] text-muted-foreground"
+            >{bio.length}/200</span
+          >
+        </div>
+      {:else}
+        <button
+          type="button"
+          onclick={() => (editing = "bio")}
+          aria-label="Edit bio"
+          class="group block min-h-20 w-full cursor-pointer rounded text-left"
+        >
+          {#if profileStore.bio}
+            <span
+              class="whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground group-hover:text-foreground transition-colors"
+              >{profileStore.bio}</span
+            >
+          {:else}
+            <span
+              class="font-mono text-xs text-muted-foreground/60 italic group-hover:text-muted-foreground transition-colors"
+              >Add a bio...</span
+            >
+          {/if}
+        </button>
+      {/if}
+
+      <!-- DID -->
+      {#if identityStore.did}
+        <div
+          class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5"
+        >
+          <span
+            class="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
+            >{identityStore.did}</span
+          >
+          <button
+            type="button"
+            onclick={copyDid}
+            aria-label="Copy DID"
+            class="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {#if copiedDid}
+              <Check class="size-3.5 text-primary" />
+            {:else}
+              <Copy class="size-3.5" />
+            {/if}
+          </button>
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -386,31 +436,10 @@
     <Button
       variant="outline"
       class="w-full font-mono text-muted-foreground"
-      onclick={handleLockLogout}
+      onclick={() => lock()}
     >
       <LogOut class="w-4 h-4 mr-2" />
       Lock/Logout
     </Button>
   {/if}
 </div>
-
-<style>
-  :global(.name-effect-gradient) {
-    background: linear-gradient(90deg, var(--color-from), var(--color-to));
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-  }
-
-  :global(.name-effect-shimmer) {
-    animation: shimmer 2s infinite;
-  }
-
-  :global(.name-effect-glow) {
-    animation: glow 2s ease-in-out infinite;
-  }
-
-  :global(.name-effect-rainbow) {
-    animation: rainbow 3s linear infinite;
-  }
-</style>

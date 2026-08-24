@@ -205,26 +205,6 @@
     selectedUserForProfile = user;
   }
 
-  function openUserMenuAtElement(
-    e: MouseEvent,
-    user: User,
-    el: HTMLElement | null
-  ): void {
-    e.preventDefault();
-    e.stopPropagation();
-    if (user.isSelf || !el) return;
-    const rect = el.getBoundingClientRect();
-    const pos = clampMenuPosition(
-      e.clientX || rect.left + Math.min(220, rect.width * 0.6),
-      e.clientY || rect.top + rect.height * 0.6
-    );
-    userMenu = {
-      user,
-      x: pos.x,
-      y: pos.y,
-    };
-  }
-
   function clampMenuPosition(x: number, y: number): { x: number; y: number } {
     if (typeof window === "undefined") return { x, y };
     const menuWidth = 250;
@@ -289,16 +269,11 @@
     tabindex={user.isSelf ? -1 : 0}
     aria-disabled={user.isSelf}
     oncontextmenu={(e) => openUserMenu(e, user)}
-    onclick={(e) =>
-      openUserMenuAtElement(e, user, e.currentTarget as HTMLElement)}
+    onclick={() => openProfileCard(user)}
     onkeydown={(e) => {
-      if (!user.isSelf && (e.key === "Enter" || e.key === " ")) {
+      if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        openUserMenuAtElement(
-          e as unknown as MouseEvent,
-          user,
-          e.currentTarget as HTMLElement
-        );
+        openProfileCard(user);
       }
     }}
     class="flex items-center ml-2 gap-3 px-2 py-1.5 rounded-md transition-colors {user.isSelf
@@ -309,16 +284,7 @@
         ? 'hover:bg-muted/50 cursor-pointer'
         : 'opacity-60 hover:bg-muted/30 cursor-pointer'}"
   >
-    <button
-      type="button"
-      onclick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openProfileCard(user);
-      }}
-      class="relative shrink-0 rounded-full hover:opacity-80 transition-opacity"
-      aria-label={`View ${user.name}'s profile`}
-    >
+    <div class="relative shrink-0 rounded-full">
       <div
         class="size-8 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold font-mono
           {user.isSelf
@@ -342,7 +308,7 @@
           ? 'bg-green-500'
           : 'bg-muted-foreground'}"
       ></div>
-    </button>
+    </div>
     <div class="min-w-0 flex-1">
       {#if true}
         {@const effectStyle = nameEffectStyle(user.nameEffect, user.color)}
@@ -531,5 +497,22 @@
     name={selectedUserForProfile.name}
     avatarUrl={selectedUserForProfile.avatarUrl ?? undefined}
     color={selectedUserForProfile.color ?? undefined}
+    onMessage={selectedUserForProfile.peerId
+      ? () => {
+          const pid = selectedUserForProfile!.peerId!;
+          selectedUserForProfile = null;
+          handleOpenDm(pid);
+        }
+      : undefined}
+    onTogglePhonebook={selectedUserForProfile.peerId
+      ? () => {
+          const pid = selectedUserForProfile!.peerId!;
+          if (isInPhonebook(pid)) handleRemoveFromPhonebook(pid);
+          else handleAddToPhonebook(pid);
+        }
+      : undefined}
+    inPhonebook={selectedUserForProfile.peerId
+      ? isInPhonebook(selectedUserForProfile.peerId)
+      : false}
   />
 {/if}
