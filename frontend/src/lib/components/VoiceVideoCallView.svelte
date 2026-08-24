@@ -122,8 +122,12 @@ import { cn } from "$lib/utils";
     count: number;
     label: string;
   } {
+    // Local tiles carry the DID, but viewers announce the sharer by libp2p
+    // peerId - so the sharer's OWN tile looked its audience up under the
+    // wrong key and always saw nobody.
+    const key = sharerPeerId === selfId() ? selfPeerId() : sharerPeerId;
     const remote = [
-      ...(transportState.transmissionViewers.get(sharerPeerId) ?? []),
+      ...(transportState.transmissionViewers.get(key) ?? []),
     ];
     const self =
       transportState.watchingTransmissionPeerId === sharerPeerId;
@@ -852,7 +856,7 @@ import { cn } from "$lib/utils";
               class="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-mono text-white"
             >
               <Eye class="size-3" />
-              {audience.count}
+              {tile.isLocal ? `${audience.count} watching` : audience.count}
             </div>
           {/snippet}
         </Tip>
