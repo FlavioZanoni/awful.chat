@@ -74,7 +74,7 @@ import {
   validateCardPayload,
   validateUpdatePayload,
 } from "../plugins/validate";
-import { clearCardStates, foldUpdate, touchCardStates } from "../plugins/state.svelte";
+import { clearCardStates, evictCardState, foldUpdate, touchCardStates } from "../plugins/state.svelte";
 import { humanizeMentions, mentionsMe } from "../mentions";
 import { profileStore } from "../profile.svelte";
 import { getPlugin } from "../plugins/registry";
@@ -978,6 +978,26 @@ async function _handleSyncBatch(
 
   await bulkPutMessages(fullMessages);
 
+  // Backfilled plugin updates cannot be folded onto a cached state (the fold
+  // order is global, they may sort BEFORE updates already applied) - evict
+  // the affected cards so the next render rebuilds from storage.
+  {
+    const touched = new Set<string>();
+    for (const m of fullMessages) {
+      if (m.type !== MessageType.PluginUpdate) continue;
+      try {
+        const cardId = (JSON.parse(m.content) as { cardId?: string }).cardId;
+        if (cardId) touched.add(cardId);
+      } catch {
+        // Malformed content was already survived by validation elsewhere.
+      }
+    }
+    if (touched.size > 0) {
+      for (const cardId of touched) evictCardState(cardId);
+      touchCardStates();
+    }
+  }
+
   for (const m of fullMessages) {
     // DM lamports are wall-clock ms; absorbing one would catapult the shared
     // room counter to ~1.7e12 and poison every room message sent after.
@@ -1526,6 +1546,36 @@ async function _handleChatMessage(
     } catch (err) {
       console.warn("[chat] store failed, not claiming the message:", err);
       return;
+    }
+  }
+
+  // Incoming persisted plugin updates fold into card state HERE - the only
+  // folds used to be ephemerals and our own sends, so other people's votes
+  // and spins sat in storage until a refresh rebuilt the card.
+  if (isNewMessage && msg.type === MessageType.PluginUpdate) {
+    try {
+      const payload = JSON.parse(msg.content) as {
+        pluginId?: string;
+        cardId?: string;
+        data?: unknown;
+      };
+      if (payload.pluginId && payload.cardId) {
+        const { getPlugin } = await import("../plugins/registry");
+        const plugin = await getPlugin(payload.pluginId);
+        if (plugin) {
+          foldUpdate(payload.cardId, plugin, {
+            id: msg.id,
+            senderId: msg.senderId,
+            senderDid: msg.senderDid,
+            senderName: msg.senderName,
+            lamport: msg.lamport,
+            data: payload.data,
+          });
+        }
+        touchCardStates();
+      }
+    } catch (err) {
+      console.warn("[plugins] failed to fold incoming update:", err);
     }
   }
   setWatermark(msg.roomCode, msg.senderId, msg.lamport).catch(() => {});

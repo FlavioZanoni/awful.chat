@@ -143,6 +143,9 @@
       <p class="text-[11px] font-mono text-muted-foreground">
         One spin decides it - first spin wins.
       </p>
+    {:else if animating}
+      <!-- The wheel already knows where it lands; the humans get to watch. -->
+      <p class="text-[11px] font-mono text-muted-foreground">Spinning...</p>
     {:else if wheelState.winner !== null}
       <div class="text-center">
         <div class="font-mono text-sm font-bold text-primary">

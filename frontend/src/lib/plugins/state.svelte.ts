@@ -36,6 +36,11 @@ export function touchCardStates(): void {
   bumpTick();
 }
 
+/** Drop one card's cached state so the next render rebuilds from storage. */
+export function evictCardState(cardId: string): void {
+  cardStates.delete(cardId);
+}
+
 /**
  * Comparator for deterministic update ordering: lamport, then senderId, then id.
  * This is MSG_ORDER extended with id as tiebreaker for DM rooms.

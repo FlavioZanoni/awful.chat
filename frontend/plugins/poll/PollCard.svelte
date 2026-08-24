@@ -43,6 +43,8 @@
 
   const totalVotes = $derived(pollState.votes.size);
   const maxVotes = $derived(Math.max(...voteCounts, 1));
+  /** The option I voted for, or null. */
+  const myVote = $derived(pollState.votes.get(host.selfDid())?.vote ?? null);
 </script>
 
 <div class="flex flex-col gap-4 max-w-sm">
@@ -56,18 +58,25 @@
         {@const voteCount = voteCounts[i]}
         {@const percentage = totalVotes > 0 ? (voteCount / totalVotes) * 100 : 0}
 
+        {@const mine = myVote === i}
         <div class="flex flex-col gap-1">
           <div class="flex items-center justify-between text-xs">
-            <span class="font-mono">{option}</span>
+            <span class="font-mono {mine ? 'text-primary font-semibold' : ''}">
+              {option}{#if mine}
+                <span class="ml-1" aria-label="Your vote">✓</span>
+              {/if}
+            </span>
             <span class="text-muted-foreground">
               {voteCount} {voteCount === 1 ? "vote" : "votes"}
             </span>
           </div>
           <Button
             variant="outline"
-            class="h-10 relative overflow-hidden"
+            class="h-10 relative overflow-hidden {mine
+              ? 'ring-1 ring-primary border-primary/60'
+              : ''}"
             onclick={() => handleVote(i)}
-            disabled={voting}
+            disabled={voting || mine}
           >
             <div
               class="absolute inset-0 bg-primary/20 transition-all"
