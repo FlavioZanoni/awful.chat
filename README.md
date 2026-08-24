@@ -2,44 +2,86 @@
   <img src="frontend/public/pwa-192x192.png" alt="awful.chat" width="120" height="120">
 </p>
 
-# awful.chat
+<h1 align="center">awful.chat</h1>
 
-Privacy-focused P2P chat with voice, video, and file sharing. No accounts,
-no phone numbers - identity is a BIP39 mnemonic on your device, messages go
-peer-to-peer over libp2p, files over WebTorrent. Servers only help peers
-find each other and route media for group video.
+<p align="center">
+  Private, peer-to-peer chat with voice, video and file sharing.<br>
+  No accounts, no phone numbers, no server that can read your messages.
+</p>
+
+Your identity is a BIP39 mnemonic that never leaves your device. Messages
+travel peer-to-peer over libp2p with end-to-end encryption, files move
+browser-to-browser over WebTorrent, and voice is direct WebRTC. The servers
+you (or anyone) can self-host only introduce peers to each other and route
+group video.
+
+## Features
+
+- **Rooms** with shareable invite links, message history that syncs
+  peer-to-peer, replies, emoji reactions, code blocks with syntax
+  highlighting, and link previews.
+- **Direct messages** with an offline queue, delivery and read receipts, and
+  a phonebook of saved contacts.
+- **@Mentions** with autocomplete: tamper-proof (they ride inside the signed
+  message), rename-proof (always show the current name), and the mentioned
+  person gets a highlighted message and a notification.
+- **Voice calls**, fully peer-to-peer, with optional neural noise
+  suppression (DTLN) and per-peer volume.
+- **Camera and screen share** at 30 fps through a self-hosted SFU: sharing is
+  opt-in to watch, the sharer sees who is watching, and a streamers-only
+  view hides everyone without video.
+- **Files and media**: WebTorrent transfers with no public trackers, inline
+  images, video, audio and GIFs, a GIF picker with saved favorites, and
+  small files delivered inside the message itself so they load instantly.
+- **Profiles**: avatar, banner (image or GIF), a colored tag chip, bio, and
+  name effects (gradient, shimmer, glow, rainbow).
+- **Plugins**: instance-level, Minecraft-mods style. Drop a folder or point
+  `PLUGIN_SOURCES` at GitHub repos and redeploy; ships with `/wheel` and
+  `/poll`. See [frontend/plugins/README.md](frontend/plugins/README.md).
+- **Multi-device**: several devices on one identity, QR device sync,
+  encrypted backups, and optional biometric unlock (fingerprint or security
+  key via WebAuthn PRF).
+- **Installable PWA**: opens offline with your full history; sending waits
+  for peers.
+
+## How private is it, exactly
+
+| Traffic | Path | Who can read it |
+| --- | --- | --- |
+| Messages, DMs, files | peer-to-peer (relay forwards ciphertext) | only participants |
+| Voice | direct WebRTC between peers | only participants |
+| Camera / screen share | mediasoup SFU | participants **and the SFU operator** |
+
+The one honest exception is group video: an SFU must decrypt media to route
+it, so whoever runs that server can see streams that pass through it. Text,
+DMs, files and voice never touch the SFU. Run your own instance and the
+exception is you.
 
 ## Architecture
 
 ```
-frontend/   Svelte 5 + Vite PWA (the app)
-relay/      Go libp2p relay: circuit relay v2 + rendezvous + /og + /klipy proxies
-sfu/        mediasoup SFU (Node) for group video & screen share
+frontend/   Svelte 5 + Vite PWA - the app
+relay/      Go libp2p relay: circuit relay v2, rendezvous, /og, /klipy, /turn-credentials
+sfu/        mediasoup SFU (Node) for group video and screen share
 coturn      TURN server for voice fallback (compose only, stock image)
 ```
 
-- **Text messages** - gossipsub room topics between browsers; the relay
-  forwards encrypted traffic but can't read it (noise, e2e between peers).
-  History syncs peer-to-peer via lamport watermarks (see `docs/spec.md`).
-- **DMs** - direct libp2p streams with tagged envelopes (chat / delivery ack /
-  read ack), offline queue in localStorage, retried when the peer comes online.
-- **Voice** - P2P WebRTC (never touches the SFU).
-- **Video / screen** - mediasoup SFU, opt-in "click to watch" transmissions.
-  Unlike everything else here, this media is NOT end to end encrypted: the SFU
-  decrypts it to route it, so whoever runs that server can see it. Text, DMs,
-  files and voice never touch it.
-- **Files** - WebTorrent between browsers over their own WebRTC connections,
-  signalled through libp2p. There are no trackers: peers are introduced by the
-  people already in the room. <5 MB attachments are also persisted in
-  IndexedDB and re-seeded.
-- **Identity** - BIP39 mnemonic → ed25519 → did:key, encrypted at rest,
-  optional WebAuthn (biometric) unlock, QR device sync. Each device has its
-  own libp2p key, separate from the identity key, so several devices can be
-  signed into one account at once; a peer proves which did:key is behind its
-  peerId by signing it (see `docs/spec.md`).
-- **Offline** - installable PWA. The app shell, your history and your queued
-  messages are on the device, so it opens and reads with no network; sending
-  waits for peers.
+- **Text** rides gossipsub room topics between browsers; the relay forwards
+  encrypted frames it cannot read (noise, e2e between peers). History syncs
+  peer-to-peer via lamport watermarks.
+- **DMs** are direct libp2p streams with tagged envelopes (chat, delivery
+  ack, read ack) and an offline queue retried when the peer returns.
+- **Files** are WebTorrent over the peers' own WebRTC connections, signalled
+  through libp2p; there are no trackers, peers are introduced by the room.
+  Small attachments (under 5 MB) also persist in IndexedDB and re-seed, and
+  files under 512 KB travel inline in the message.
+- **Identity** is BIP39 mnemonic to ed25519 to did:key, encrypted at rest.
+  Each device carries its own libp2p key, separate from the identity key, and
+  proves which did:key is behind its peerId by signing the binding.
+
+Full data model, sync protocol, wire formats and crypto details:
+[docs/spec.md](docs/spec.md). Plugin surface design:
+[docs/plugin-surface.md](docs/plugin-surface.md).
 
 ## Development
 
@@ -56,44 +98,51 @@ cd relay && go run .
 cd sfu && npm install && npm start
 ```
 
-## Tests & checks
+Tests and checks:
 
 ```sh
-cd frontend && pnpm test    # vitest (crypto, peer auth, dm codec, storage,
-                            # wire types, audio, volume curve)
+cd frontend && pnpm test    # vitest: crypto, peer auth, dm codec, storage,
+                            # wire types, plugins, mentions, profile validation
 cd frontend && pnpm check   # svelte-check + tsc
 cd relay && go test ./...   # rendezvous registry + TURN credentials
 ```
 
-## Deploy
+## Self-hosting
 
-`docker-compose.dokploy.yml` - relay + sfu + coturn + frontend behind
-Traefik. Set `DOMAIN`, `ANNOUNCED_IP` (SFU public IP), `KLIPY_API_KEY`,
-`VITE_API_URL`, `VITE_RELAY_MULTIADDR`.
+`docker-compose.dokploy.yml` runs relay + sfu + coturn + frontend behind
+Traefik. One VPS is enough; give it swap before the first deploy, the
+frontend build is memory-hungry.
+
+| Variable | Required | What it is |
+| --- | --- | --- |
+| `DOMAIN` | yes | public domain of the instance |
+| `ANNOUNCED_IP` | yes | the server's public IP (SFU and coturn announce it) |
+| `VITE_API_URL` | yes | relay API origin, e.g. `https://relay.<domain>` |
+| `VITE_RELAY_MULTIADDR` | yes | the relay's libp2p multiaddr shown on boot |
+| `KLIPY_API_KEY` | no | enables the GIF picker (klipy.co) |
+| `PLUGIN_SOURCES` | no | plugins fetched at build time, see the [plugin guide](frontend/plugins/README.md) |
+| `TURN_SECRET` | no | switches TURN to short-lived credentials (below) |
+| `TURN_URLS` | no | override the TURN URL list served to clients |
+
+Firewall: open 80/443 (web), 3478 tcp+udp (TURN), 5349 tcp+udp (TURN TLS,
+when configured), the SFU port range (40000-40499 by default) and coturn's
+relay range (49152-49251).
 
 ### TURN credentials (optional hardening)
 
-By default coturn uses a static shared username/password baked into the client
-bundle, so anyone can relay through it. To issue short-lived per-session
-credentials instead:
+By default coturn uses a static username/password baked into the client
+bundle, which means anyone can relay traffic through your server. To issue
+short-lived per-session credentials instead:
 
-1. Pick a strong secret and set `TURN_SECRET` (and optionally `TURN_URLS`, a
-   comma-separated TURN URL list) on the relay service.
+1. Set a strong `TURN_SECRET` on the relay service.
 2. Switch coturn from `--lt-cred-mech --user=awful:awful` to
    `--use-auth-secret --static-auth-secret=<same TURN_SECRET>`.
 
 The relay's `/turn-credentials` endpoint then hands the frontend HMAC
-credentials (coturn REST convention) that expire after 12h. With `TURN_SECRET`
-unset the endpoint returns 204 and the client keeps using the static fallback,
-so this is safe to leave off until both sides are configured.
+credentials (coturn REST convention) expiring after 12 hours. With
+`TURN_SECRET` unset the endpoint returns 204 and clients keep the static
+fallback, so this is safe to leave off until both sides are configured.
 
-## Plugins
+---
 
-The app has an instance-level plugin system: drop a folder in
-`frontend/plugins/` or list sources in `PLUGIN_SOURCES` and redeploy. The
-full author and operator guide lives in
-[frontend/plugins/README.md](frontend/plugins/README.md).
-
-## Docs
-
-`docs/spec.md` - data model, sync protocol, wire formats, crypto details.
+Run your own, read the code, trust no one's server, including ours.
