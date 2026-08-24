@@ -941,13 +941,16 @@ import { cn } from "$lib/utils";
             {#snippet children(props)}
           <div
             {...props}
-            class="relative flex size-16 sm:size-20 items-center justify-center rounded-full bg-secondary text-2xl font-semibold text-secondary-foreground ring-2 ring-background font-mono overflow-hidden"
+            class="relative flex size-16 sm:size-20 items-center justify-center rounded-full bg-secondary text-2xl font-semibold text-secondary-foreground ring-2 ring-background font-mono"
           >
             {#if avatar}
+              <!-- The image clips to the circle, not the container: with
+                   overflow-hidden on the container the mute/deafen and relay
+                   badges were shaved by the circle's edge. -->
               <GifImage
                 src={avatar}
                 alt={label}
-                class="size-full object-cover"
+                class="size-full rounded-full object-cover"
                 animate={speakingPeers.has(peerId)}
               />
             {:else}
