@@ -16,11 +16,16 @@ COPY . .
 ARG VITE_SIGNAL_URL
 ARG VITE_API_URL
 ARG VITE_RELAY_MULTIADDR
+# Comma/space separated plugin sources (github urls, user/repo[#ref]) fetched
+# into plugins/ before the build - see plugins/README.md. Empty = built-ins only.
+ARG PLUGIN_SOURCES
 
 ENV VITE_SIGNAL_URL=$VITE_SIGNAL_URL
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_RELAY_MULTIADDR=$VITE_RELAY_MULTIADDR
+ENV PLUGIN_SOURCES=$PLUGIN_SOURCES
 
+RUN node scripts/fetch-plugins.mjs
 RUN pnpm build
 
 FROM nginx:alpine AS runner

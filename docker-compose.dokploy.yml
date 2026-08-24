@@ -134,6 +134,8 @@ services:
       args:
         - VITE_API_URL=${VITE_API_URL}
         - VITE_RELAY_MULTIADDR=${VITE_RELAY_MULTIADDR}
+        # External plugins fetched at build time; see frontend/plugins/README.md
+        - PLUGIN_SOURCES=${PLUGIN_SOURCES:-}
     restart: unless-stopped
     depends_on:
       - relay

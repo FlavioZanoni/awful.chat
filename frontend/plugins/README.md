@@ -103,6 +103,30 @@ other users are unaffected.
 - State must rebuild from updates alone. If you cache, cache derivations.
 - Test your reducer as a pure function; the repo's vitest setup applies.
 
+## Installing plugins from outside this repo
+
+Set `PLUGIN_SOURCES` on the instance and redeploy - the build fetches each
+source into this folder before bundling (the docker-minecraft-server model,
+at build time because plugins compile into the app):
+
+```
+PLUGIN_SOURCES=https://github.com/you/awful-plugin-dice#v1,you/plugin-pack
+```
+
+- Accepted forms: a github url, `user/repo`, either with `#ref` (tag, branch,
+  or commit - pin refs for reproducible deploys), or a local path in dev.
+- A source can hold ONE plugin (manifest.ts at its root) or a PACK: plugin
+  folders at the root or under `plugins/`.
+- Removing an entry removes the plugin on the next deploy. Fetched plugins
+  never overwrite the built-in ones, and a broken source fails the build
+  loudly rather than silently shipping without it.
+- Trust: a fetched plugin runs with the same trust as the app itself, in
+  every user's browser, unsandboxed. Only list sources you trust like your
+  own code.
+
+Locally: `PLUGIN_SOURCES=... node scripts/fetch-plugins.mjs` then `pnpm dev`.
+Fetched folders are gitignored automatically.
+
 ## Developing
 
 `pnpm dev` in `frontend/` picks the folder up with hot reload. The registry
