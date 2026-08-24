@@ -56,7 +56,7 @@
     VolumeX,
     Workflow,
   } from "@lucide/svelte";
-  import { MessageSquare, MonitorIcon, Users as UsersIcon } from "@lucide/svelte";
+  import { MessageSquare, MonitorIcon, Users as UsersIcon, UserX } from "@lucide/svelte";
 import { profileStore, loadProfile } from "$lib/profile.svelte";
 import { displayPrefs } from "$lib/display-prefs.svelte";
 import { cn } from "$lib/utils";
@@ -547,8 +547,20 @@ import { cn } from "$lib/utils";
     return tracks;
   });
 
+  // "Only streamers": hide tiles with nothing to watch. A tile passes when
+  // it carries video (camera or screen) or is a joinable pending
+  // transmission; falls back to everyone when nobody streams.
+  let hideNonVideo = $state(false);
+  const tileHasVideo = (t: TileData) =>
+    t.videoTrack !== null || (t.kind === "transmission" && !!t.isPending);
+  const visibleTiles = $derived.by(() => {
+    if (!hideNonVideo) return tiles;
+    const streaming = tiles.filter(tileHasVideo);
+    return streaming.length ? streaming : tiles;
+  });
+
   const gridCols = $derived.by(() => {
-    const n = tiles.length;
+    const n = visibleTiles.length;
     if (n <= 1) return "grid-cols-1";
     if (n <= 3) return "grid-cols-1 sm:grid-cols-2";
     if (n <= 7) return "grid-cols-2 sm:grid-cols-3";
@@ -564,7 +576,7 @@ import { cn } from "$lib/utils";
     ) {
       return "h-[54vh]";
     }
-    const n = tiles.length;
+    const n = visibleTiles.length;
     const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
     const rows = Math.ceil(n / cols);
     return rows <= 1 ? "h-[35vh]" : "h-[45vh]";
@@ -574,14 +586,16 @@ import { cn } from "$lib/utils";
 
   let focusedTileId = $state<string | null>(null);
   const focusedTile = $derived(
-    focusedTileId ? (tiles.find((t) => t.id === focusedTileId) ?? null) : null
+    focusedTileId
+      ? (visibleTiles.find((t) => t.id === focusedTileId) ?? null)
+      : null
   );
   const showThumbnails = $derived(
     focusedTile ? focusedTile.kind !== "screen" : false
   );
   const thumbnailTiles = $derived(
     focusedTile && showThumbnails
-      ? tiles.filter((t) => t.id !== focusedTileId)
+      ? visibleTiles.filter((t) => t.id !== focusedTileId)
       : []
   );
 
@@ -1030,7 +1044,7 @@ import { cn } from "$lib/utils";
         </div>
       {:else}
         <div class="grid h-full auto-rows-fr gap-1.5 {gridCols}">
-          {#each tiles as tile (tile.id)}
+          {#each visibleTiles as tile (tile.id)}
             {@render callTile(
               tile,
               false,
@@ -1373,6 +1387,30 @@ import { cn } from "$lib/utils";
 
     <Tip text={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
       {#snippet children(props)}
+    <!-- Worth showing only when it changes anything: some tile with
+         video AND some tile without. -->
+    {#if tiles.some(tileHasVideo) && tiles.some((t) => !tileHasVideo(t))}
+      <Tip text={hideNonVideo ? "Show everyone" : "Show only streamers"}>
+        {#snippet children(props)}
+          <button
+            {...props}
+            type="button"
+            onclick={() => (hideNonVideo = !hideNonVideo)}
+            aria-label={hideNonVideo ? "Show everyone" : "Show only streamers"}
+            class="absolute top-3 left-3 sm:top-4 sm:left-4 flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-zinc-900 transition-all duration-200 hover:scale-105 z-20 {hideNonVideo
+              ? 'text-primary'
+              : 'text-zinc-300'}"
+          >
+            {#if hideNonVideo}
+              <UsersIcon class="size-4" />
+            {:else}
+              <UserX class="size-4" />
+            {/if}
+          </button>
+        {/snippet}
+      </Tip>
+    {/if}
+
     <button
       {...props}
       type="button"

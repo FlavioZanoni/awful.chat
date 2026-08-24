@@ -285,7 +285,7 @@ export async function startScreenShare(): Promise<void> {
     // they surface the audio checkbox for screens, hide our own tab from
     // the picker, and let the sharer switch surfaces mid-share.
     const options = {
-      video: { frameRate: { ideal: 15 } },
+      video: { frameRate: { ideal: 30 } },
       audio: {
         echoCancellation: false,
         noiseSuppression: false,
