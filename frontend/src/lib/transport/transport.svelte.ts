@@ -34,6 +34,7 @@ import {
   type ChatMessageType,
   type AnyWireMessage,
   type WireChatMessage,
+  type WirePluginEphemeral,
   type WireProfile,
   type WireRoomName,
   type WireRoomUsersSync,
@@ -68,6 +69,14 @@ import {
 } from "../messaging";
 import { bytesToBase64, sniffImageMime, encode, decode, normalizeAvatarUrl, normalizeNicknameColor } from "../utils";
 import { validateProfileMeta } from "../profile-meta";
+import {
+  validatePluginId,
+  validateCardPayload,
+  validateUpdatePayload,
+} from "../plugins/validate";
+import { clearCardStates, foldUpdate } from "../plugins/state.svelte";
+import { humanizeMentions, mentionsMe } from "../mentions";
+import { getPlugin } from "../plugins/registry";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
 import { _sendWatchPresence } from "./transmission.svelte";
 import {
@@ -104,6 +113,33 @@ const MSG_ORDER = (a: Message, b: Message) =>
   a.lamport !== b.lamport
     ? a.lamport - b.lamport
     : a.senderId.localeCompare(b.senderId);
+
+/**
+ * Check if an ephemeral message can be sent without exceeding flood cap.
+ * Returns true if under limit, false if rate-limited (drop excess).
+ */
+function _checkEphemeralFloodCap(pluginId: string, senderId: string): boolean {
+  const key = `${pluginId}|${senderId}`;
+  const now = Date.now();
+  const entry = _ephemeralFloodTrack.get(key);
+
+  if (!entry || now >= entry.resetAt) {
+    // Window expired or first message, start new window
+    _ephemeralFloodTrack.set(key, {
+      count: 1,
+      resetAt: now + EPHEMERAL_FLOOD_WINDOW,
+    });
+    return true;
+  }
+
+  if (entry.count < EPHEMERAL_FLOOD_LIMIT) {
+    entry.count += 1;
+    return true;
+  }
+
+  // Exceeded limit, drop this message
+  return false;
+}
 
 /**
  * Messages almost always arrive in order, so appending is the common case;
@@ -176,7 +212,7 @@ interface TransportState {
   /** User-picked nickname colors, keyed like peerNames (by DID). */
   peerColors: Map<string, string>;
   /** Profile metadata: banners, tags, bios, name effects; keyed by DID. */
-  peerProfileMeta: Map<string, { bannerUrl?: string; tagText?: string; tagTextColor?: string; tagChipColor?: string; bio?: string; nameEffect?: string }>;
+  peerProfileMeta: Map<string, { bannerUrl?: string; tagText?: string; tagTextColor?: string; tagChipColor?: string; bio?: string; nameEffect?: string; gradient2?: string; gradient3?: string }>;
   error: string | null;
   callPeerIds: Set<string>;
   callPeerRooms: Map<string, string>; // peerId -> roomCode they're calling in
@@ -251,6 +287,12 @@ export const transportState = $state<TransportState>({
 const _lamports = new Map<string, number>();
 let _connectPromise: Promise<void> | null = null;
 
+// Ephemeral message flood cap: ~4 per second per plugin per sender.
+// Key: "{pluginId}|{senderId}", value: { count, resetAt }
+const _ephemeralFloodTrack = new Map<string, { count: number; resetAt: number }>();
+const EPHEMERAL_FLOOD_LIMIT = 4;
+const EPHEMERAL_FLOOD_WINDOW = 1000; // milliseconds
+
 const BATCH_SIZE = 20;
 export const MAX_PERSISTED_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const _peerIdToDid = new Map<string, string>();
@@ -302,6 +344,15 @@ function _replayPendingDm(peerId: string, senderDid: string): void {
   for (const envelope of pending) _handleDmChat(peerId, senderDid, envelope);
 }
 
+/** Display name for a mentioned did - notifications and previews only. */
+function _mentionName(did: string): string {
+  return (
+    transportState.peerNames.get(_peerIdToDid.get(did) ?? did) ??
+    transportState.peerNames.get(did) ??
+    did.slice(0, 12)
+  );
+}
+
 /** Mutate the peer->DID map through here so reactive readers are notified. */
 function _setPeerDid(peerId: string, did: string): void {
   if (_peerIdToDid.get(peerId) === did) return;
@@ -346,6 +397,8 @@ void getAllPeerProfiles()
         tagChipColor: p.tagChipColor,
         bio: p.bio,
         nameEffect: p.nameEffect,
+        gradient2: p.gradient2,
+        gradient3: p.gradient3,
       });
     }
     transportState.peerProfileMeta = meta;
@@ -468,6 +521,8 @@ async function _sendProfile(peerId?: string, isReply = false): Promise<void> {
     bindingSig: binding?.bindingSig,
     reply: isReply || undefined,
     bannerUrl: bannerUrl ?? undefined,
+    gradient2: profile?.gradient2 ?? undefined,
+    gradient3: profile?.gradient3 ?? undefined,
     tagText: profile?.tagText ?? undefined,
     tagTextColor: profile?.tagTextColor ?? undefined,
     tagChipColor: profile?.tagChipColor ?? undefined,
@@ -1051,6 +1106,8 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
   // Validate and store profile metadata
   const validated = validateProfileMeta({
     bannerUrl: msg.bannerUrl,
+    gradient2: msg.gradient2 ?? undefined,
+    gradient3: msg.gradient3 ?? undefined,
     tagText: msg.tagText,
     tagTextColor: msg.tagTextColor,
     tagChipColor: msg.tagChipColor,
@@ -1089,6 +1146,8 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
         updatedAt: Date.now(),
         color: hasColorField ? (color ?? undefined) : existing?.color,
         bannerURL: validated.bannerUrl,
+        gradient2: validated.gradient2,
+        gradient3: validated.gradient3,
         tagText: validated.tagText,
         tagTextColor: validated.tagTextColor,
         tagChipColor: validated.tagChipColor,
@@ -1469,16 +1528,37 @@ async function _handleChatMessage(
     transportState.dmVersion += 1;
   }
 
-  // Reactions are noise as notifications, and a message replayed by sync is
-  // not news - only announce genuinely new chat arriving from someone else.
+  // Reactions and plugin updates are noise as notifications, and a message
+  // replayed by sync is not news - only announce genuinely new chat arriving
+  // from someone else.
   if (
     isNewMessage &&
     msg.type !== MessageType.Reaction &&
+    msg.type !== MessageType.PluginUpdate &&
     !isSelfSender(msg.senderId)
   ) {
+    let body = msg.content || "[file]";
+    if (msg.type === MessageType.PluginCard) {
+      try {
+        const payload = JSON.parse(msg.content);
+        const { getManifest } = await import("../plugins/registry");
+        const manifest = getManifest(payload.pluginId);
+        body = `posted a ${manifest?.name || payload.pluginId}`;
+      } catch {
+        body = "posted a plugin card";
+      }
+    } else {
+      body = humanizeMentions(body, _mentionName);
+    }
+    const mentioned = mentionsMe(msg.content ?? "", [
+      identityStore.did ?? "",
+      _transport.selfId(),
+    ]);
     notifyMessage({
-      title: transportState.roomName || msg.roomCode,
-      body: `${msg.senderName}: ${msg.content || "[file]"}`,
+      title: mentioned
+        ? `${msg.senderName} mentioned you`
+        : transportState.roomName || msg.roomCode,
+      body: `${msg.senderName}: ${body}`,
       tag: `room:${msg.roomCode}`,
       viewingConversation: transportState.uiRoomCode === msg.roomCode,
     });
@@ -1705,7 +1785,7 @@ function _handleDmChat(
       if (!reaction) {
         notifyMessage({
           title: msg.senderName,
-          body: msg.content,
+          body: humanizeMentions(msg.content, _mentionName),
           tag: `dm:${roomCode}`,
           viewingConversation: transportState.uiRoomCode === roomCode,
         });
@@ -1825,6 +1905,46 @@ _transport.on("message", (peerId, data, room) => {
       case MessageType.RoomName:
         _handleRoomName(msg, room);
         break;
+      case MessageType.PluginEphemeral: {
+        // Wire-only ephemeral messages: verify, fold to card state, but never persist.
+        // No watermark, lamport, or storage side effects.
+        const ephemeralMsg = msg as WirePluginEphemeral;
+        _verifyIncoming(ephemeralMsg as unknown as WireChatMessage)
+          .then((ok) => {
+            if (!ok) {
+              console.warn(
+                "[app] dropped ephemeral plugin message with invalid signature from",
+                ephemeralMsg.senderId
+              );
+              return;
+            }
+            // Fold ephemeral into card state. Static imports, not require():
+            // require does not exist in the browser bundle and blew up the
+            // first time an ephemeral arrived. The flood cap guards RECEIVE
+            // too - the sender-side cap is no protection against a peer that
+            // means us harm or a buggy build ticking every frame.
+            try {
+              const payload = JSON.parse(ephemeralMsg.content);
+              if (!_checkEphemeralFloodCap(payload.pluginId, peerId)) return;
+              void getPlugin(payload.pluginId).then((plugin) => {
+                if (!plugin) return;
+                foldUpdate(payload.cardId, plugin, {
+                  id: ephemeralMsg.id,
+                  senderId: ephemeralMsg.senderId,
+                  senderDid: ephemeralMsg.senderDid,
+                  senderName: ephemeralMsg.senderName,
+                  lamport: ephemeralMsg.lamport,
+                  data: payload.data,
+                  ephemeral: true,
+                });
+              });
+            } catch (err) {
+              console.warn("[app] failed to fold ephemeral update:", err);
+            }
+          })
+          .catch(() => {});
+        break;
+      }
       case MessageType.JoinRoom:
         _handleJoinRoom(peerId, msg.peerId, room);
         break;
@@ -1847,6 +1967,8 @@ _transport.on("message", (peerId, data, room) => {
       case MessageType.Reply:
       case MessageType.Reaction:
       case MessageType.File:
+      case MessageType.PluginCard:
+      case MessageType.PluginUpdate:
         // A bare chat message is only legitimate over a room's pubsub topic
         // (room !== null). The same message type arriving over a direct
         // stream (room === null) would otherwise be stamped with whatever
@@ -1985,6 +2107,7 @@ export async function joinRoom(roomCode: string): Promise<boolean> {
     // so nothing from the old conversation is on screen under the new name.
     transportState.roomCode = roomCode;
     transportState.messages = [];
+    clearCardStates();
     await _loadHistory(roomCode, stillCurrent);
     await _hydrateFileTransfersFromStorage(roomCode);
     if (!stillCurrent()) return false;
@@ -2136,6 +2259,7 @@ function _disconnectWithoutBroadcasting(): void {
   leaveCall();
   _transport.disconnect();
   _peerIdToDid.clear();
+  clearCardStates();
   transportState.peerDidVersion += 1;
   // disconnect() fully stops and nulls the libp2p node, so the relay
   // connection is gone too. Without clearing this flag, connect()/joinRoom()
@@ -2335,6 +2459,152 @@ export async function sendFiles(
   transportState.messages = appendSorted(transportState.messages, msg);
 
   markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
+  noteRoomActivity(msg.roomCode, msg.timestamp);
+}
+
+// ponytail: sendCard duplicates the send pipeline (signing, lamport, putMessage,
+// setWatermark, appendSorted, markRoomSeen, noteRoomActivity) without sharing
+// it with sendMessage. This is debt: generalize to a _sendChatMessage(type, ...)
+// path. DMs are banned because plugin state is per-room; extend if needed.
+export async function sendCard(
+  pluginId: string,
+  payload: unknown
+): Promise<string> {
+  if (transportState.chatMode === "dm") {
+    throw new Error("Plugin cards not supported in DMs");
+  }
+  if (!transportState.roomCode) {
+    throw new Error("Not in a room");
+  }
+
+  // Validate plugin ID and payload
+  const idValidation = validatePluginId(pluginId);
+  if (!idValidation.ok) {
+    throw new Error(`Invalid plugin ID: ${idValidation.reason}`);
+  }
+
+  const payloadValidation = validateCardPayload(payload);
+  if (!payloadValidation.ok) {
+    throw new Error(`Card payload error: ${payloadValidation.reason}`);
+  }
+
+  const profile = await getOwnProfile();
+  const senderName = profile?.nickname?.trim() || "Anonymous";
+  const myId = identityStore.did ?? _transport.selfId();
+  const lamport = lamportSend(transportState.roomCode);
+
+  const cardId = crypto.randomUUID();
+  const content = JSON.stringify({ pluginId, data: payload });
+
+  let msg: Message = {
+    id: cardId,
+    roomCode: transportState.roomCode,
+    senderId: myId,
+    senderName,
+    timestamp: Date.now(),
+    lamport,
+    type: MessageType.PluginCard,
+    content,
+    attachments: [],
+  };
+
+  // Sign the message
+  msg = signMessage(msg);
+
+  _transport.broadcast(encode(messageToWire(msg)), transportState.roomCode);
+
+  await putMessage(msg);
+  await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
+
+  transportState.messages = appendSorted(transportState.messages, msg);
+
+  markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
+  noteRoomActivity(msg.roomCode, msg.timestamp);
+
+  return cardId;
+}
+
+export async function sendUpdate(
+  pluginId: string,
+  cardId: string,
+  payload: unknown,
+  opts: { ephemeral?: boolean } = {}
+): Promise<void> {
+  if (transportState.chatMode === "dm") {
+    throw new Error("Plugin updates not supported in DMs");
+  }
+  if (!transportState.roomCode) {
+    throw new Error("Not in a room");
+  }
+
+  // Validate plugin ID and payload
+  const idValidation = validatePluginId(pluginId);
+  if (!idValidation.ok) {
+    throw new Error(`Invalid plugin ID: ${idValidation.reason}`);
+  }
+
+  const payloadValidation = validateUpdatePayload(payload);
+  if (!payloadValidation.ok) {
+    throw new Error(`Update payload error: ${payloadValidation.reason}`);
+  }
+
+  const profile = await getOwnProfile();
+  const senderName = profile?.nickname?.trim() || "Anonymous";
+  const myId = identityStore.did ?? _transport.selfId();
+
+  // Ephemeral messages: check flood cap, wire-only (lamport:0), PluginEphemeral type
+  if (opts.ephemeral) {
+    if (!_checkEphemeralFloodCap(pluginId, myId)) {
+      // Rate-limited, drop this message
+      return;
+    }
+
+    const content = JSON.stringify({ pluginId, cardId, data: payload });
+    let wire: WirePluginEphemeral = {
+      type: MessageType.PluginEphemeral,
+      id: crypto.randomUUID(),
+      senderId: myId,
+      senderName,
+      timestamp: Date.now(),
+      lamport: 0, // Ephemeral messages don't use lamport but need it for signing
+      content,
+    };
+
+    // Sign the ephemeral message (cast to Message-compatible shape for signMessage)
+    const signed = signMessage(wire as any);
+    wire = signed as any as WirePluginEphemeral;
+    _transport.broadcast(encode(wire), transportState.roomCode);
+    // Wire-only: no storage, no watermark, no visibleMessages, no noteRoomActivity
+    return;
+  }
+
+  // Persisted updates
+  const lamport = lamportSend(transportState.roomCode);
+  const content = JSON.stringify({ pluginId, cardId, data: payload });
+
+  let msg: Message = {
+    id: crypto.randomUUID(),
+    roomCode: transportState.roomCode,
+    senderId: myId,
+    senderName,
+    timestamp: Date.now(),
+    lamport,
+    type: MessageType.PluginUpdate,
+    content,
+    attachments: [],
+  };
+
+  // Sign the message
+  msg = signMessage(msg);
+
+  _transport.broadcast(encode(messageToWire(msg)), transportState.roomCode);
+
+  // Persist non-ephemeral updates
+  await putMessage(msg);
+  await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
+  transportState.messages = appendSorted(transportState.messages, msg);
+  markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
+
   noteRoomActivity(msg.roomCode, msg.timestamp);
 }
 

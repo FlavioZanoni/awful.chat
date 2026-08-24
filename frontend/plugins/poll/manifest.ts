@@ -1,0 +1,9 @@
+import type { PluginManifest } from "$lib/plugins/api";
+
+export const manifest: PluginManifest = {
+  id: "poll",
+  name: "Poll",
+  description: "Vote on options to see live results.",
+  icon: "📊",
+  apiVersion: 1,
+};

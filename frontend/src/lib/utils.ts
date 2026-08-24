@@ -116,3 +116,27 @@ export function normalizeAvatarUrl(url: unknown): string | undefined {
     return undefined;
   }
 }
+
+/**
+ * Simple deterministic PRNG seeded from a string.
+ * Uses mulberry32-style algorithm for determinism.
+ * Same seed always produces the same sequence.
+ */
+export function seededRandom(seed: string): () => number {
+  // Hash the seed string to a number
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    const char = seed.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+
+  // Mulberry32 PRNG
+  return function () {
+    hash |= 0; // Ensure it's a 32-bit integer
+    hash = (hash + 0x6d2b79f5) | 0;
+    let t = Math.imul(hash ^ (hash >>> 15), 1 | hash);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}

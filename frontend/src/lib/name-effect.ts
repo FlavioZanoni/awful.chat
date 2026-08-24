@@ -11,7 +11,9 @@ export type NameEffect = "none" | "gradient" | "shimmer" | "glow" | "rainbow";
  */
 export function nameEffectStyle(
   effect: string | undefined,
-  color: string | undefined
+  color: string | undefined,
+  gradient2?: string,
+  gradient3?: string
 ): { class: string; style: string } {
   if (!effect || effect === "none") {
     return { class: "", style: "" };
@@ -26,11 +28,17 @@ export function nameEffectStyle(
 
   switch (effect) {
     case "gradient": {
-      // Static two-color gradient: color -> lighter complementary
-      const lighter = lightenColor(color);
+      // User-picked stops when set; a derived lighter complement otherwise,
+      // so a gradient with no second color still renders something.
+      const stops = [
+        color,
+        // The early return above guarantees color for non-rainbow effects.
+        gradient2 || lightenColor(color!),
+        ...(gradient3 ? [gradient3] : []),
+      ].join(", ");
       return {
         class: `${baseClass} name-effect-gradient`,
-        style: `background: linear-gradient(90deg, ${color}, ${lighter}); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;`,
+        style: `background: linear-gradient(90deg, ${stops}); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;`,
       };
     }
 
@@ -38,7 +46,7 @@ export function nameEffectStyle(
       // Animated gradient sweep
       return {
         class: `${baseClass} name-effect-shimmer`,
-        style: `background: linear-gradient(90deg, ${color}, rgba(255,255,255,0.3), ${color}); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 2s infinite;`,
+        style: `background: linear-gradient(90deg, ${color}, rgba(255,255,255,0.3), ${color}); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 3.5s infinite;`,
       };
     }
 

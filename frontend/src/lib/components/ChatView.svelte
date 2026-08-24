@@ -58,6 +58,13 @@
     removeFromPhonebook,
   } from "$lib/transport/dm.svelte";
   import { joinCall } from "$lib/transport/call.svelte";
+  import { serialize, mentionsMe } from "$lib/mentions";
+  import { makeHostApi } from "$lib/plugins/host";
+  import { identityStore } from "$lib/identity/identity.svelte";
+  import { getRegistry, getPlugin } from "$lib/plugins/registry";
+  import { isPluginEnabled } from "$lib/plugins/prefs.svelte";
+  import type { HostApi } from "$lib/plugins/api";
+  import { seededRandom } from "$lib/utils";
 
   $effect(() => {
     loadProfile();
@@ -123,6 +130,11 @@
   let showUserList = $state(false);
 
   let draft = $state("");
+  let mentionPopupOpen = $state(false);
+  let mentionPrefix = $state("");
+  let mentionSelectedIndex = $state(0);
+  /** Names the user picked from the popup this draft, mapped to dids. */
+  const draftMentionMap = new Map<string, string>();
   let replyTargetId = $state<string | null>(null);
   let reactionPickerFor = $state<string | null>(null);
   let emojiPickerPos = $state({ x: 0, y: 0 });
@@ -182,6 +194,7 @@
     MessageType.Text,
     MessageType.Reply,
     MessageType.File,
+    MessageType.PluginCard,
   ]);
   const visibleMessages = $derived(
     messages.filter((m) => RENDERABLE_TYPES.has(m.type))
@@ -264,7 +277,85 @@
     return () => observer.disconnect();
   });
 
+  const filteredMembersForMention = $derived.by(() => {
+    if (!mentionPopupOpen) return [];
+    const self = selfId();
+    const mine = myPeerId();
+    const lower = mentionPrefix.toLowerCase();
+    return peers
+      .filter((pid) => pid !== self && pid !== mine)
+      .map((pid) => ({ did: senderDid(pid), name: displayNameFor(pid) }))
+      .filter((m) => !lower || m.name.toLowerCase().includes(lower));
+  });
+
+  function updateMentionState() {
+    if (!textareaEl) return;
+    const cursor = textareaEl.selectionStart;
+    const before = draft.slice(0, cursor);
+    const at = before.lastIndexOf("@");
+    // Only an @ at the start or after whitespace opens the popup - emails
+    // and mid-word @s must not.
+    if (at === -1 || (at > 0 && !/\s/.test(before[at - 1]))) {
+      mentionPopupOpen = false;
+      return;
+    }
+    const prefix = before.slice(at + 1);
+    if (/[\s]/.test(prefix)) {
+      mentionPopupOpen = false;
+      return;
+    }
+    mentionPrefix = prefix;
+    mentionSelectedIndex = 0;
+    mentionPopupOpen = true;
+  }
+
+  function selectMentionMember(member: { did: string; name: string }) {
+    if (!textareaEl) return;
+    const cursor = textareaEl.selectionStart;
+    const beforeText = draft.slice(0, cursor);
+    const at = beforeText.lastIndexOf("@");
+    draft = `${draft.slice(0, at)}@${member.name} ${draft.slice(cursor)}`;
+    draftMentionMap.set(member.name, member.did);
+    mentionPopupOpen = false;
+    mentionPrefix = "";
+    requestAnimationFrame(() => {
+      if (!textareaEl) return;
+      const pos = at + member.name.length + 2;
+      textareaEl.selectionStart = textareaEl.selectionEnd = pos;
+      textareaEl.focus();
+      autoResize();
+    });
+  }
+
+  function handleMentionKeydown(e: KeyboardEvent) {
+    if (!mentionPopupOpen || filteredMembersForMention.length === 0) return;
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      mentionSelectedIndex = Math.max(0, mentionSelectedIndex - 1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      mentionSelectedIndex = Math.min(
+        filteredMembersForMention.length - 1,
+        mentionSelectedIndex + 1
+      );
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      selectMentionMember(filteredMembersForMention[mentionSelectedIndex]);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      mentionPopupOpen = false;
+    }
+  }
+
+  function messageIsMentioningMe(msg: Message): boolean {
+    return mentionsMe(msg.content ?? "", [selfId(), myPeerId()]);
+  }
+
   function handleKeydown(e: KeyboardEvent) {
+    if (mentionPopupOpen) {
+      handleMentionKeydown(e);
+      if (e.defaultPrevented) return;
+    }
     if (e.key === "Escape" && stagedFiles.length > 0) {
       e.preventDefault();
       clearStagedFiles();
@@ -276,12 +367,54 @@
     }
   }
 
-  function submit() {
+  async function submit() {
     const text = draft.trim();
     if (!text && stagedFiles.length === 0) return;
 
+    // Check for slash commands
+    const slashMatch = text.match(/^\/([a-z0-9-]+)\s?(.*)$/);
+    if (slashMatch) {
+      const [, commandName, args] = slashMatch;
+      const registry = getRegistry();
+      let found = false;
+
+      for (const [pluginId, registered] of registry) {
+        if (!isPluginEnabled(pluginId)) continue;
+        const plugin = await getPlugin(pluginId);
+        if (!plugin || !plugin.commands || !(commandName in plugin.commands))
+          continue;
+
+        found = true;
+        const handler = plugin.commands[commandName];
+        const hostApi: HostApi = makeHostApi(pluginId, roomCode);
+
+        try {
+          await handler(args, hostApi);
+          draft = "";
+          replyTargetId = null;
+          autoScroll = true;
+          requestAnimationFrame(() => {
+            autoResize();
+            textareaEl?.focus();
+          });
+        } catch (err) {
+          console.error(`[chat] command /${commandName} failed:`, err);
+        }
+        return;
+      }
+
+      if (!found) {
+        // Unknown command: show inline hint
+        console.warn(`[chat] unknown command: ${commandName}`);
+        return;
+      }
+    }
+
+    // Mentions ride the wire as signed @[did] tokens; the input kept names.
+    const wireText = serialize(text, draftMentionMap);
+
     if (stagedFiles.length > 0) {
-      sendFiles(stagedFiles, text, {
+      sendFiles(stagedFiles, wireText, {
         replyTo: replyTarget
           ? {
               id: replyTarget.id,
@@ -295,13 +428,15 @@
       });
       clearStagedFiles();
     } else if (replyTarget) {
-      sendReply(text, replyTarget);
+      sendReply(wireText, replyTarget);
     } else {
-      sendMessage(text);
+      sendMessage(wireText);
     }
 
     draft = "";
     replyTargetId = null;
+    draftMentionMap.clear();
+    mentionPopupOpen = false;
     autoScroll = true;
     // The composer grew with the multiline draft; clearing the value does
     // not fire input, so shrink it back explicitly.
@@ -767,6 +902,16 @@
     return peerProfileMeta.get(did)?.nameEffect ?? peerProfileMeta.get(senderId)?.nameEffect;
   }
 
+  /** Gradient stops for the gradient effect, keyed like names. */
+  function senderGradients(senderId: string): {
+    g2?: string;
+    g3?: string;
+  } {
+    const did = senderDid(senderId);
+    const meta = peerProfileMeta.get(did) ?? peerProfileMeta.get(senderId);
+    return { g2: meta?.gradient2, g3: meta?.gradient3 };
+  }
+
   /** Tag chip, keyed like names. Deliberately NOT behind
    *  showPeerNicknameColors: the tag is content, like the name; the colors
    *  pref governs decoration of the name itself. */
@@ -1145,6 +1290,8 @@
                 id={`msg-${msg.id}`}
                 class="group relative rounded-md px-2 py-0.5 hover:bg-muted/50 cursor-default! {showHeader
                   ? 'mt-3 pt-1'
+                  : ''} {messageIsMentioningMe(msg)
+                  ? 'bg-primary/5 border-l-2 border-l-primary pl-1.5'
                   : ''}"
                 role="button"
                 tabindex={isMobile ? 0 : -1}
@@ -1231,7 +1378,7 @@
                     </div>
                     <div class="flex items-baseline gap-2">
                       {#if isOwn}
-                        {@const effectStyle = nameEffectStyle(profileStore.nameEffect, profileStore.color)}
+                        {@const effectStyle = nameEffectStyle(profileStore.nameEffect, profileStore.color, profileStore.gradient2 ?? undefined, profileStore.gradient3 ?? undefined)}
                         <span
                           class="text-sm font-medium text-primary {displayPrefs.italicOwnName
                             ? 'italic'
@@ -1250,7 +1397,8 @@
                       {:else}
                         {@const color = senderColor(msg.senderId)}
                         {@const effect = senderEffect(msg.senderId)}
-                        {@const effectStyle = nameEffectStyle(effect, color)}
+                        {@const grads = senderGradients(msg.senderId)}
+                        {@const effectStyle = nameEffectStyle(effect, color, grads.g2, grads.g3)}
                         <span
                           class="text-sm font-medium text-foreground {effectStyle.class}"
                           style={effectStyle.style || (color ? `color: ${color}` : "")}
@@ -1516,11 +1664,33 @@
           bind:this={textareaEl}
           bind:value={draft}
           onkeydown={handleKeydown}
-          oninput={autoResize}
+          oninput={() => {
+            autoResize();
+            updateMentionState();
+          }}
           placeholder="Type a message..."
           rows={1}
           class="w-full resize-none rounded-md border border-input bg-background pl-3 pr-20 py-2 text-sm text-foreground placeholder:text-muted-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring min-h-10 max-h-30 overflow-y-auto"
         ></textarea>
+        {#if mentionPopupOpen && filteredMembersForMention.length > 0}
+          <div
+            class="absolute bottom-full left-0 z-50 mb-1 max-h-48 min-w-48 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-lg"
+          >
+            {#each filteredMembersForMention as member, index (member.did)}
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-sm hover:bg-muted {mentionSelectedIndex ===
+                index
+                  ? 'bg-muted'
+                  : ''}"
+                onclick={() => selectMentionMember(member)}
+              >
+                <span class="text-muted-foreground">@</span>
+                <span class="truncate">{member.name}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
         <div
           class="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1"
         >

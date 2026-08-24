@@ -54,6 +54,8 @@
     avatarUrl: string | null;
     color: string | null;
     nameEffect: string | null;
+    gradient2: string | null;
+    gradient3: string | null;
     tagText: string | null;
     tagTextColor: string | null;
     tagChipColor: string | null;
@@ -106,6 +108,8 @@
       let avatarUrl: string | null = null;
       let color: string | null = null;
       let nameEffect: string | null = null;
+      let gradient2: string | null = null;
+      let gradient3: string | null = null;
       let tagText: string | null = null;
       let tagTextColor: string | null = null;
       let tagChipColor: string | null = null;
@@ -115,6 +119,8 @@
         avatarUrl = profileStore.avatarUrl || null;
         color = profileStore.color || null;
         nameEffect = profileStore.nameEffect || null;
+        gradient2 = profileStore.gradient2 || null;
+        gradient3 = profileStore.gradient3 || null;
         tagText = profileStore.tagText || null;
         tagTextColor = profileStore.tagTextColor || null;
         tagChipColor = profileStore.tagChipColor || null;
@@ -134,6 +140,8 @@
         // The tag is content like the name, not decoration - it ignores the
         // colors pref.
         const meta = peerProfileMeta.get(nameKey) ?? peerProfileMeta.get(did);
+        gradient2 = meta?.gradient2 || null;
+        gradient3 = meta?.gradient3 || null;
         tagText = meta?.tagText || null;
         tagTextColor = meta?.tagTextColor || null;
         tagChipColor = meta?.tagChipColor || null;
@@ -175,6 +183,8 @@
         tagText,
         tagTextColor,
         tagChipColor,
+        gradient2,
+        gradient3,
       });
     }
 
@@ -329,21 +339,23 @@
     </div>
     <div class="min-w-0 flex-1">
       {#if true}
-        {@const effectStyle = nameEffectStyle(user.nameEffect, user.color)}
+        {@const effectStyle = nameEffectStyle(user.nameEffect, user.color, user.gradient2 ?? undefined, user.gradient3 ?? undefined)}
         <div
           class="text-sm font-medium truncate {user.isSelf
             ? 'text-primary'
-            : ''} flex items-center gap-1 {effectStyle.class}"
-          style={effectStyle.style || (user.color ? `color: ${user.color}` : "")}
+            : ''} flex items-center gap-1"
         >
-          {user.isSelf ? `${user.name} (You)` : user.name}
+          <!-- Effect on the NAME SPAN only. On the container, rainbow's
+               hue-rotate is a filter and filters transform the whole
+               subtree - the tag chip's colors rotated with it. -->
+          <span
+            class="truncate {effectStyle.class}"
+            style={effectStyle.style || (user.color ? `color: ${user.color}` : "")}
+          >{user.isSelf ? `${user.name} (You)` : user.name}</span>
           {#if user.tagText}
-            <!-- -webkit-text-fill-color reset: the effect classes on this
-                 container clip a gradient to the text and make fills
-                 transparent, which the chip would inherit. -->
             <span
               class="shrink-0 rounded px-1 py-px font-mono text-[10px] font-semibold uppercase leading-4"
-              style={`background-color: ${user.tagChipColor ?? "#e5e7eb"}; color: ${user.tagTextColor ?? "#000000"}; -webkit-text-fill-color: ${user.tagTextColor ?? "#000000"}; animation: none;`}
+              style={`background-color: ${user.tagChipColor ?? "#e5e7eb"}; color: ${user.tagTextColor ?? "#000000"}`}
             >{user.tagText}</span>
           {/if}
           {#if user.isRelayed}

@@ -7,6 +7,8 @@ export interface ValidatedProfileMeta {
   tagText?: string;
   tagTextColor?: string;
   tagChipColor?: string;
+  gradient2?: string;
+  gradient3?: string;
   bio?: string;
   nameEffect?: string;
   bannerUrl?: string;
@@ -47,6 +49,13 @@ export function validateProfileMeta(meta: Partial<ValidatedProfileMeta>): Valida
 
   if (typeof meta.tagChipColor === "string" && hexColorRegex.test(meta.tagChipColor)) {
     result.tagChipColor = meta.tagChipColor;
+  }
+
+  if (typeof meta.gradient2 === "string" && hexColorRegex.test(meta.gradient2)) {
+    result.gradient2 = meta.gradient2;
+  }
+  if (typeof meta.gradient3 === "string" && hexColorRegex.test(meta.gradient3)) {
+    result.gradient3 = meta.gradient3;
   }
 
   // Name effect: must be one of the enum values

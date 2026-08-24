@@ -36,9 +36,11 @@
     putPhonebookEntry,
     type PhonebookEntry,
   } from "$lib/storage";
+  import { MessageType } from "$lib/types/message";
   import { loadProfile } from "$lib/profile.svelte";
 import { displayPrefs } from "$lib/display-prefs.svelte";
   import { consumeLatestSharedPayload } from "$lib/share-target";
+  import { humanizeMentions } from "$lib/mentions";
   import ReloadPrompt from "./ReloadPrompt.svelte";
   import InstallPrompt from "./InstallPrompt.svelte";
   import { Dialog } from "bits-ui";
@@ -62,6 +64,33 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
   function parseRoomCode(pathname: string): string | null {
     const m = pathname.match(/^\/r\/([^/]+)/);
     return m ? m[1] : null;
+  }
+
+  /**
+   * Generate preview text for a message in room/DM list.
+   * Maps message types to renderable previews, mapping plugin cards to their
+   * names and skipping plugin updates (non-renderable data messages).
+   */
+  function previewText(msg: { type: string; content: string }): string {
+    if (msg.type === MessageType.File) return "[file]";
+    if (msg.type === MessageType.PluginUpdate) return "(message)"; // Skip plugin updates
+    if (msg.type === MessageType.PluginCard) {
+      try {
+        const payload = JSON.parse(msg.content);
+        return `[${payload.pluginId}]`;
+      } catch {
+        return "[plugin]";
+      }
+    }
+    return humanizeMentions(msg.content, _previewName) || "(message)";
+  }
+
+  function _previewName(did: string): string {
+    return (
+      transportState.peerNames.get(peerIdToDid(did)) ??
+      transportState.peerNames.get(did) ??
+      did.slice(0, 12)
+    );
   }
 
   let pendingRoomCode = $state<string | null>(
@@ -604,13 +633,12 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
           nickname,
           avatarUrl,
           ts: last.timestamp,
-          text: last.content || (last.type === "file" ? "[file]" : "(message)"),
+          text: previewText(last),
         });
 
         if (last) {
           next.set(peerId, {
-            text:
-              last.content || (last.type === "file" ? "[file]" : "(message)"),
+            text: previewText(last),
             ts: last.timestamp,
           });
         }

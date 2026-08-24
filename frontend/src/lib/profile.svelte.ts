@@ -19,6 +19,8 @@ interface ProfileStore {
   tagChipColor: string | undefined;
   bio: string | undefined;
   nameEffect: string | undefined;
+  gradient2: string | undefined;
+  gradient3: string | undefined;
 }
 
 export const profileStore = $state<ProfileStore>({
@@ -31,6 +33,8 @@ export const profileStore = $state<ProfileStore>({
   tagChipColor: undefined,
   bio: undefined,
   nameEffect: undefined,
+  gradient2: undefined,
+  gradient3: undefined,
 });
 
 let _blobUrl: string | undefined;
@@ -51,6 +55,8 @@ export async function loadProfile(): Promise<void> {
   profileStore.tagChipColor = p.tagChipColor;
   profileStore.bio = p.bio;
   profileStore.nameEffect = p.nameEffect;
+  profileStore.gradient2 = p.gradient2;
+  profileStore.gradient3 = p.gradient3;
   if (_blobUrl) {
     URL.revokeObjectURL(_blobUrl);
     _blobUrl = undefined;
@@ -172,6 +178,22 @@ export async function saveNameEffect(effect: string | undefined): Promise<void> 
   await chained(async () => {
     await ensureProfile();
     await updateOwnProfile({ nameEffect: effect ?? undefined });
+  });
+  broadcastProfile();
+}
+
+export async function saveGradientColors(
+  gradient2: string | undefined,
+  gradient3: string | undefined
+): Promise<void> {
+  profileStore.gradient2 = gradient2;
+  profileStore.gradient3 = gradient3;
+  await chained(async () => {
+    await ensureProfile();
+    await updateOwnProfile({
+      gradient2: gradient2 ?? undefined,
+      gradient3: gradient3 ?? undefined,
+    });
   });
   broadcastProfile();
 }

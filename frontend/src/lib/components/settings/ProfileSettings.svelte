@@ -10,7 +10,9 @@
     saveTagColors,
     saveBio,
     saveNameEffect,
+    saveGradientColors,
   } from "$lib/profile.svelte";
+  import AvatarPickerDialog from "$lib/components/AvatarPickerDialog.svelte";
   import { identityStore, lock } from "$lib/identity/identity.svelte";
   import { nameEffectStyle } from "$lib/name-effect";
   import {
@@ -51,17 +53,41 @@
     tagChipColor = profileStore.tagChipColor ?? "#e5e7eb";
     bio = profileStore.bio ?? "";
     nameEffect = profileStore.nameEffect ?? "none";
+    gradient2Value = profileStore.gradient2 ?? "#a855f7";
+    gradient3Value = profileStore.gradient3 ?? null;
   });
+
+  const EFFECTS = ["none", "gradient", "shimmer", "glow", "rainbow"] as const;
+
+  async function pickEffect(effect: string) {
+    nameEffect = effect;
+    await saveNameEffect(effect === "none" ? undefined : effect);
+    if (effect === "gradient") {
+      await saveGradientColors(gradient2Value, gradient3Value ?? undefined);
+    }
+  }
+
+  async function commitGradients() {
+    await saveGradientColors(gradient2Value, gradient3Value ?? undefined);
+  }
 
   /** The card IS the editor: exactly one piece is in edit mode at a time. */
   let editing = $state<null | "name" | "tag" | "bio">(null);
-  let bannerInput = $state<HTMLInputElement | null>(null);
-  let bannerError = $state<string | null>(null);
+  let bannerPickerOpen = $state(false);
+  let gradient2Value = $state("#a855f7");
+  let gradient3Value = $state<string | null>(null);
 
   const profileInitial = $derived(
     (profileStore.nickname || nameValue || "?").charAt(0).toUpperCase()
   );
-  const effectStyle = $derived(nameEffectStyle(nameEffect, colorValue));
+  const effectStyle = $derived(
+    nameEffectStyle(
+      nameEffect,
+      colorValue,
+      gradient2Value,
+      gradient3Value ?? undefined
+    )
+  );
 
   function focusOnMount(el: HTMLElement) {
     el.focus();
@@ -91,29 +117,7 @@
     editing = null;
   }
 
-  async function handleBannerChange(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = "";
-    if (!file) return;
-    bannerError = null;
-    if (file.size > 1_000_000) {
-      bannerError = "Banner must be under 1 MB";
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = async () => {
-      if (typeof reader.result === "string") await saveBanner(reader.result);
-    };
-    reader.readAsDataURL(file);
-  }
 
-  async function handleNameEffectChange(e: Event) {
-    const value = (e.target as HTMLSelectElement).value;
-    if (value !== (profileStore.nameEffect ?? "none")) {
-      await saveNameEffect(value === "none" ? undefined : value);
-    }
-  }
 
   let copiedDid = $state(false);
   async function copyDid() {
@@ -146,7 +150,7 @@
     <!-- Banner: click to change -->
     <button
       type="button"
-      onclick={() => bannerInput?.click()}
+      onclick={() => (bannerPickerOpen = true)}
       aria-label="Change banner"
       class="group relative block h-24 w-full cursor-pointer overflow-hidden bg-linear-to-r from-primary/20 to-secondary/40"
     >
@@ -164,13 +168,6 @@
         {profileStore.bannerUrl ? "Change banner" : "Add a banner"}
       </div>
     </button>
-    <input
-      bind:this={bannerInput}
-      type="file"
-      accept="image/*"
-      onchange={handleBannerChange}
-      class="hidden"
-    />
     {#if profileStore.bannerUrl}
       <div class="relative">
         <button
@@ -182,9 +179,6 @@
           <Trash2 class="size-3.5" />
         </button>
       </div>
-    {/if}
-    {#if bannerError}
-      <p class="px-3 pt-2 text-xs font-mono text-destructive">{bannerError}</p>
     {/if}
 
     <div class="flex flex-col gap-2 p-3">
@@ -245,19 +239,74 @@
             aria-label="Nickname color"
             class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
           />
-          <select
-            bind:value={nameEffect}
-            onchange={handleNameEffectChange}
-            aria-label="Name effect"
-            class="rounded border border-border bg-background px-2 py-1 font-mono text-xs"
-          >
-            <option value="none">No effect</option>
-            <option value="gradient">Gradient</option>
-            <option value="shimmer">Shimmer</option>
-            <option value="glow">Glow</option>
-            <option value="rainbow">Rainbow</option>
-          </select>
         </div>
+        <!-- Each pill previews its own effect on its label - what you pick
+             is what you get, no dropdown guessing. -->
+        <div class="flex flex-wrap items-center gap-1.5">
+          {#each EFFECTS as fx (fx)}
+            {@const pillStyle = nameEffectStyle(fx, colorValue, gradient2Value, gradient3Value ?? undefined)}
+            <button
+              type="button"
+              onclick={() => pickEffect(fx)}
+              class="cursor-pointer rounded-full border px-2.5 py-1 font-mono text-xs capitalize transition-colors {nameEffect === fx
+                ? 'border-primary bg-primary/10'
+                : 'border-border hover:border-primary/40'}"
+            >
+              <span class={pillStyle.class} style={pillStyle.style}>{fx}</span>
+            </button>
+          {/each}
+        </div>
+        {#if nameEffect === "gradient"}
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-[10px] uppercase text-muted-foreground"
+              >Stops</span
+            >
+            <input
+              type="color"
+              bind:value={colorValue}
+              onchange={() => saveColor(colorValue).catch(() => {})}
+              aria-label="Gradient start (nickname color)"
+              class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
+            />
+            <input
+              type="color"
+              bind:value={gradient2Value}
+              onchange={commitGradients}
+              aria-label="Second gradient color"
+              class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
+            />
+            {#if gradient3Value !== null}
+              <input
+                type="color"
+                bind:value={gradient3Value}
+                onchange={commitGradients}
+                aria-label="Third gradient color"
+                class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
+              />
+              <button
+                type="button"
+                onclick={() => {
+                  gradient3Value = null;
+                  commitGradients();
+                }}
+                aria-label="Remove third color"
+                class="cursor-pointer font-mono text-xs text-muted-foreground hover:text-destructive"
+                >x</button
+              >
+            {:else}
+              <button
+                type="button"
+                onclick={() => {
+                  gradient3Value = "#22d3ee";
+                  commitGradients();
+                }}
+                aria-label="Add a third color"
+                class="cursor-pointer rounded border border-dashed border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:border-primary/60 hover:text-foreground"
+                >+ color</button
+              >
+            {/if}
+          </div>
+        {/if}
       {:else}
         <div class="flex flex-wrap items-center gap-2">
           <button
@@ -431,6 +480,12 @@
       {/if}
     </div>
   </div>
+
+  <AvatarPickerDialog
+    open={bannerPickerOpen}
+    onClose={() => (bannerPickerOpen = false)}
+    target="banner"
+  />
 
   {#if isMobile}
     <Button

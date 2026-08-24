@@ -6,6 +6,8 @@ export enum MessageType {
   Reply = "reply",
   Reaction = "reaction",
   File = "file",
+  PluginCard = "plugin_card",
+  PluginUpdate = "plugin_update",
   // presence - wire only, never persisted
   Profile = "profile",
   CallPresence = "call_presence",
@@ -13,6 +15,7 @@ export enum MessageType {
   WatchPresence = "watch_presence",
   VoiceRedial = "voice_redial",
   RoomName = "room_name",
+  PluginEphemeral = "plugin_ephemeral",
   // room users - wire only, never persisted
   JoinRoom = "join_room",
   LeaveRoom = "leave_room",
@@ -30,7 +33,9 @@ export type ChatMessageType =
   | MessageType.Text
   | MessageType.Reply
   | MessageType.Reaction
-  | MessageType.File;
+  | MessageType.File
+  | MessageType.PluginCard
+  | MessageType.PluginUpdate;
 
 export type MessageStatus = "sending" | "sent" | "delivered" | "read";
 export type AttachmentStatus =
@@ -160,6 +165,8 @@ export interface WireProfile {
   tagChipColor?: string;
   bio?: string;
   nameEffect?: string;
+  gradient2?: string | null;
+  gradient3?: string | null;
 }
 
 export interface WireCallPresence {
@@ -190,6 +197,19 @@ export interface WireWatchPresence {
   type: MessageType.WatchPresence;
   /** Sharer peerId being watched, or null when the viewer stopped. */
   watching: string | null;
+}
+
+export interface WirePluginEphemeral {
+  type: MessageType.PluginEphemeral;
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderDid?: string;
+  sig?: string;
+  sigV?: number;
+  timestamp: number;
+  lamport: number; // Always 0 for ephemeral, but needed for signing
+  content: string; // JSON of { pluginId, cardId, data }
 }
 
 export interface WireRoomName {
@@ -253,6 +273,7 @@ export type AnyWireMessage =
   | WireCallPresence
   | WireWatchPresence
   | WireCallState
+  | WirePluginEphemeral
   | WireRoomName
   | WireJoinRoom
   | WireLeaveRoom
@@ -316,6 +337,8 @@ export function isChatMessage(msg: AnyWireMessage): msg is WireChatMessage {
     msg.type === MessageType.Text ||
     msg.type === MessageType.Reply ||
     msg.type === MessageType.Reaction ||
-    msg.type === MessageType.File
+    msg.type === MessageType.File ||
+    msg.type === MessageType.PluginCard ||
+    msg.type === MessageType.PluginUpdate
   );
 }

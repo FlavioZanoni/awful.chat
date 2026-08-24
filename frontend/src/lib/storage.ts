@@ -52,6 +52,9 @@ export interface OwnProfile {
   tagChipColor?: string; // hex like "#aabbcc"
   bio?: string; // max 200 chars
   nameEffect?: string; // none | gradient | shimmer | glow | rainbow
+  /** Extra gradient stops for the "gradient" name effect. */
+  gradient2?: string;
+  gradient3?: string;
   updatedAt: number;
 }
 
@@ -70,6 +73,9 @@ export interface PeerProfile {
   tagChipColor?: string; // hex like "#aabbcc"
   bio?: string; // max 200 chars
   nameEffect?: string; // none | gradient | shimmer | glow | rainbow
+  /** Extra gradient stops for the "gradient" name effect. */
+  gradient2?: string;
+  gradient3?: string;
   updatedAt: number;
 }
 
@@ -434,13 +440,15 @@ export async function getUnreadCount(
     [roomCode, Number.MAX_SAFE_INTEGER]
   );
 
-  // Reactions are not "new messages": a heart on an old message must not
-  // light the unread badge with nothing visible to read. The range holds
-  // only unseen messages, so materializing it stays cheap.
+  // Reactions and plugin updates are not "new messages": a heart on an old
+  // message or a plugin update must not light the unread badge with nothing
+  // visible to read. The range holds only unseen messages, so materializing
+  // it stays cheap.
   const messages = await index.getAll(range);
   return messages.filter(
     (m) =>
       m.type !== MessageType.Reaction &&
+      m.type !== MessageType.PluginUpdate &&
       (!excludeSenderId || m.senderId !== excludeSenderId)
   ).length;
 }
@@ -852,7 +860,7 @@ export async function rekeyOwnProfile(
  * pfpData and pfpURL are mutually exclusive - setting one clears the other.
  */
 export async function updateOwnProfile(
-  patch: Partial<Pick<OwnProfile, "nickname" | "pfpData" | "pfpURL" | "color" | "bannerData" | "bannerURL" | "tagText" | "tagTextColor" | "tagChipColor" | "bio" | "nameEffect">>
+  patch: Partial<Pick<OwnProfile, "nickname" | "pfpData" | "pfpURL" | "color" | "bannerData" | "bannerURL" | "tagText" | "tagTextColor" | "tagChipColor" | "bio" | "nameEffect" | "gradient2" | "gradient3">>
 ): Promise<void> {
   const database = await getDB();
   const tx = database.transaction("profiles", "readwrite");

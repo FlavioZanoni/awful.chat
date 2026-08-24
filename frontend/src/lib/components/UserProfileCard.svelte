@@ -48,11 +48,20 @@
           tagChipColor: profileStore.tagChipColor ?? undefined,
           bio: profileStore.bio ?? undefined,
           nameEffect: profileStore.nameEffect ?? undefined,
+          gradient2: profileStore.gradient2 ?? undefined,
+          gradient3: profileStore.gradient3 ?? undefined,
         }
       : transportState.peerProfileMeta.get(did)
   );
 
-  const effectStyle = $derived(nameEffectStyle(profileMeta?.nameEffect, color));
+  const effectStyle = $derived(
+    nameEffectStyle(
+      profileMeta?.nameEffect,
+      color,
+      profileMeta?.gradient2,
+      profileMeta?.gradient3
+    )
+  );
 
   const bannerUrl = $derived(profileMeta?.bannerUrl);
   const tagText = $derived(profileMeta?.tagText);

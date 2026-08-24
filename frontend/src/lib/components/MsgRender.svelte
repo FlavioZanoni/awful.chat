@@ -20,6 +20,12 @@
   import GifImage from "./GifImage.svelte";
   import { mediaPrefs } from "$lib/media-prefs.svelte";
   import { putSavedGif, deleteSavedGif, isGifSaved, getAttachmentsByInfoHash } from "$lib/storage";
+  import { humanize } from "$lib/mentions";
+  import { makeHostApi } from "$lib/plugins/host";
+  import { peerIdToDid, transportState } from "$lib/transport/transport.svelte";
+  import { getPlugin, getManifest } from "$lib/plugins/registry";
+  import { isPluginEnabled } from "$lib/plugins/prefs.svelte";
+  import type { ComponentType } from "svelte";
 
   interface Props {
     msg: Message;
@@ -55,12 +61,43 @@
   let videoEl = $state<HTMLVideoElement | null>(null);
   let videoNaturalWidth = $state(0);
   let videoNaturalHeight = $state(0);
+  let pluginCardComponent = $state<ComponentType | null>(null);
+  let pluginCardState = $state<unknown>(undefined);
+  let pluginCardError = $state<string | null>(null);
+  let pluginCardPluginId = $state("");
 
   $effect(() => {
     linkedUrl;
     videoPlaying = false;
     videoNaturalWidth = 0;
     videoNaturalHeight = 0;
+  });
+
+  // Load plugin card component on mount
+  $effect(async () => {
+    if (msg.type !== MessageType.PluginCard) {
+      pluginCardComponent = null;
+      pluginCardError = null;
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(msg.content);
+      const { pluginId } = payload;
+      pluginCardPluginId = pluginId;
+      const plugin = await getPlugin(pluginId);
+      if (!plugin) {
+        pluginCardError = `Plugin ${pluginId} not found`;
+        return;
+      }
+      if (!plugin.card) {
+        pluginCardError = `Plugin ${pluginId} has no card component`;
+        return;
+      }
+      pluginCardComponent = plugin.card;
+    } catch (err) {
+      pluginCardError = `Failed to load plugin card: ${err}`;
+    }
   });
 
   function formatSize(size: number): string {
@@ -299,12 +336,26 @@
   }
 
   function linkifyText(text: string): string {
+    // Order is the security property: escape the whole body FIRST, then
+    // decorate. Mention tokens (@[did]) contain no HTML characters so they
+    // survive escaping, and humanize() escapes the resolved display name
+    // itself before emitting the chip.
     const escaped = escapeHtml(text);
+    const mentionized = humanize(escaped, resolveMentionName);
     const urlRegex = /(https?:\/\/[^\s<]+)/gi;
-    return escaped.replace(
+    return mentionized.replace(
       urlRegex,
       (url) =>
         `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">${url}</a>`
+    );
+  }
+
+  function resolveMentionName(did: string): string {
+    const mapped = peerIdToDid(did);
+    return (
+      transportState.peerNames.get(mapped) ||
+      transportState.peerNames.get(did) ||
+      did.slice(0, 12)
     );
   }
 
@@ -475,6 +526,25 @@
         <Bookmark class="size-4 {gifSaved ? 'fill-current' : ''}" />
       </button>
     </div>
+  {:else if msg.type === MessageType.PluginCard}
+    {#if pluginCardError}
+      <div class="inline-block px-3 py-2 rounded-md bg-destructive/10 text-destructive text-sm">
+        🔌 Plugin error: {pluginCardError}
+      </div>
+    {:else if !pluginCardComponent}
+      <div class="inline-block px-3 py-2 rounded-md bg-muted/50 text-muted-foreground text-sm animate-pulse">
+        Loading plugin...
+      </div>
+    {:else}
+      <!-- In Svelte 5, components can be rendered directly from variables -->
+      {#if pluginCardComponent}
+        <pluginCardComponent
+          card={msg}
+          state={pluginCardState}
+          host={makeHostApi(pluginCardPluginId, msg.roomCode)}
+        ></pluginCardComponent>
+      {/if}
+    {/if}
   {:else}
     <p class="whitespace-pre-wrap">{@html linkifyText(msg.content)}</p>
 

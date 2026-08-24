@@ -5,7 +5,7 @@
   import Button from "$lib/components/ui/button/button.svelte";
   import Input from "$lib/components/ui/input/input.svelte";
   import { Drawer, DrawerContent } from "$lib/components/ui/drawer";
-  import { saveAvatar, profileStore } from "$lib/profile.svelte";
+  import { saveAvatar, saveBanner, profileStore } from "$lib/profile.svelte";
   import {
     searchGifs,
     getTrendingGifs,
@@ -16,20 +16,23 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    /** What the picked image becomes. Same picker, two destinations. */
+    target?: "avatar" | "banner";
   }
 
-  let { open, onClose }: Props = $props();
+  let { open, onClose, target = "avatar" }: Props = $props();
+  const isBanner = $derived(target === "banner");
 
   type Tab = "upload" | "klipy" | "url";
   let activeTab = $state<Tab>("klipy");
   let preview = $state<string | undefined>(undefined);
   let error = $state<string | undefined>(undefined);
 
-  const MAX_AVATAR_BYTES = 512 * 1024;
+  const MAX_AVATAR_BYTES = $derived(isBanner ? 1_000_000 : 512 * 1024);
 
   $effect(() => {
     if (open) {
-      preview = profileStore.avatarUrl;
+      preview = isBanner ? (profileStore.bannerUrl ?? undefined) : profileStore.avatarUrl;
     }
   });
 
@@ -188,7 +191,8 @@
     if (saving) return;
     saving = true;
     try {
-      await saveAvatar(preview);
+      if (isBanner) await saveBanner(preview);
+      else await saveAvatar(preview);
       onClose();
     } finally {
       saving = false;
@@ -249,7 +253,9 @@
   <div class="flex justify-center pt-4 pb-2 shrink-0">
     <div class="relative group">
       <div
-        class="size-28 rounded-full overflow-hidden bg-primary/20 flex items-center justify-center ring-2 ring-border"
+        class="{isBanner
+          ? 'h-20 w-60 rounded-lg'
+          : 'size-28 rounded-full'} overflow-hidden bg-primary/20 flex items-center justify-center ring-2 ring-border"
       >
         {#if preview}
           <img
