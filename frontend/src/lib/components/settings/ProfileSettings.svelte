@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { Label } from "$lib/components/ui/label";
   import { Button } from "$lib/components/ui/button";
   import {
@@ -88,6 +89,14 @@
       gradient3Value ?? undefined
     )
   );
+
+  // Closing the dialog or switching tabs mid-edit unmounts this component;
+  // whatever was being typed must be saved, not thrown away.
+  onDestroy(() => {
+    if (editing === "name") void commitName();
+    else if (editing === "tag") void commitTag();
+    else if (editing === "bio") void commitBio();
+  });
 
   function focusOnMount(el: HTMLElement) {
     el.focus();
@@ -353,7 +362,15 @@
       {/if}
 
       {#if editing === "tag"}
-        <div class="flex flex-wrap items-center gap-2">
+        <!-- Same rule as the name row: clicking away SAVES. Enter-or-the-
+             check-button-only silently discarded a typed tag on blur. -->
+        <div
+          class="flex flex-wrap items-center gap-2"
+          onfocusout={(e) => {
+            const row = e.currentTarget as HTMLElement;
+            if (!row.contains(e.relatedTarget as Node)) commitTag();
+          }}
+        >
           <input
             use:focusOnMount
             bind:value={tagText}

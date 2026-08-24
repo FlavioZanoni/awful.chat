@@ -11,11 +11,16 @@
 
   let { card, cardState, host }: Props = $props();
 
-  const pollState = cardState as {
-    question: string;
-    options: string[];
-    votes: Map<string, { did: string; name: string; vote: number }>;
-  };
+  // $derived, never a plain const: a const captures the prop ONCE at mount,
+  // so every vote folded after that - yours included - rendered nowhere
+  // until a refresh remounted the card.
+  const pollState = $derived(
+    cardState as {
+      question: string;
+      options: string[];
+      votes: Map<string, { did: string; name: string; vote: number }>;
+    }
+  );
 
   let voting = $state(false);
 
