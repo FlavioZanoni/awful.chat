@@ -33,6 +33,7 @@
   import UserListSidebar from "./UserListSidebar.svelte";
   import { profileStore, loadProfile } from "$lib/profile.svelte";
   import { displayPrefs } from "$lib/display-prefs.svelte";
+  import { nameEffectStyle } from "$lib/name-effect";
   import { viewportHeight } from "$lib/actions/viewport-height";
   import {
     transportState,
@@ -107,6 +108,7 @@
     peerNames,
     peerAvatars,
     peerColors,
+    peerProfileMeta,
     fileTransfers,
     connecting,
   } = $derived(transportState);
@@ -748,6 +750,13 @@
     return peerColors.get(senderDid(senderId)) ?? peerColors.get(senderId);
   }
 
+  /** Name effect, keyed like names (by DID, peerId fallback). Respects showPeerNicknameColors. */
+  function senderEffect(senderId: string): string | undefined {
+    if (!displayPrefs.showPeerNicknameColors) return undefined;
+    const did = senderDid(senderId);
+    return peerProfileMeta.get(did)?.nameEffect ?? peerProfileMeta.get(senderId)?.nameEffect;
+  }
+
   /** Live name wins over the one stored with the message, so a rename shows up
    *  on everything that person ever said, not just what they say next. */
   function displayNameFor(senderId: string, stored?: string): string {
@@ -1195,24 +1204,27 @@
                       {/if}
                     </div>
                     <div class="flex items-baseline gap-2">
-                      <span
-                        class="text-sm font-medium {isOwn
-                          ? 'text-primary'
-                          : 'text-foreground'} {isOwn && displayPrefs.italicOwnName
-                          ? 'italic'
-                          : ''}"
-                        style={isOwn
-                          ? profileStore.color
-                            ? `color: ${profileStore.color}`
-                            : ""
-                          : senderColor(msg.senderId)
-                            ? `color: ${senderColor(msg.senderId)}`
-                            : ""}
-                      >
-                        {isOwn
-                          ? profileStore.nickname || "You"
-                          : displayName(msg)}
-                      </span>
+                      {#if isOwn}
+                        {@const effectStyle = nameEffectStyle(profileStore.nameEffect, profileStore.color)}
+                        <span
+                          class="text-sm font-medium text-primary {displayPrefs.italicOwnName
+                            ? 'italic'
+                            : ''} {effectStyle.class}"
+                          style={effectStyle.style || (profileStore.color ? `color: ${profileStore.color}` : "")}
+                        >
+                          {profileStore.nickname || "You"}
+                        </span>
+                      {:else}
+                        {@const color = senderColor(msg.senderId)}
+                        {@const effect = senderEffect(msg.senderId)}
+                        {@const effectStyle = nameEffectStyle(effect, color)}
+                        <span
+                          class="text-sm font-medium text-foreground {effectStyle.class}"
+                          style={effectStyle.style || (color ? `color: ${color}` : "")}
+                        >
+                          {displayName(msg)}
+                        </span>
+                      {/if}
                       <span class="text-xs text-muted-foreground"
                         >{formatTime(msg.timestamp)}</span
                       >

@@ -13,12 +13,24 @@ interface ProfileStore {
   avatarUrl: string | undefined;
   /** User-picked nickname color, hex like "#aabbcc". Absent = default. */
   color: string | undefined;
+  bannerUrl: string | undefined;
+  tagText: string | undefined;
+  tagTextColor: string | undefined;
+  tagChipColor: string | undefined;
+  bio: string | undefined;
+  nameEffect: string | undefined;
 }
 
 export const profileStore = $state<ProfileStore>({
   nickname: "Anonymous",
   avatarUrl: undefined,
   color: undefined,
+  bannerUrl: undefined,
+  tagText: undefined,
+  tagTextColor: undefined,
+  tagChipColor: undefined,
+  bio: undefined,
+  nameEffect: undefined,
 });
 
 let _blobUrl: string | undefined;
@@ -33,6 +45,12 @@ export async function loadProfile(): Promise<void> {
   }
   profileStore.nickname = p.nickname || "Anonymous";
   profileStore.color = p.color;
+  profileStore.bannerUrl = p.bannerURL;
+  profileStore.tagText = p.tagText;
+  profileStore.tagTextColor = p.tagTextColor;
+  profileStore.tagChipColor = p.tagChipColor;
+  profileStore.bio = p.bio;
+  profileStore.nameEffect = p.nameEffect;
   if (_blobUrl) {
     URL.revokeObjectURL(_blobUrl);
     _blobUrl = undefined;
@@ -101,6 +119,58 @@ export async function saveColor(color: string | undefined | null): Promise<void>
   await chained(async () => {
     await ensureProfile();
     await updateOwnProfile({ color: color ?? undefined });
+  });
+  broadcastProfile();
+}
+
+export async function saveBanner(url: string | undefined): Promise<void> {
+  profileStore.bannerUrl = url;
+  await chained(async () => {
+    await ensureProfile();
+    await updateOwnProfile({ bannerURL: url, bannerData: undefined });
+  });
+  broadcastProfile();
+}
+
+export async function saveTag(tagText: string | undefined): Promise<void> {
+  profileStore.tagText = tagText;
+  await chained(async () => {
+    await ensureProfile();
+    await updateOwnProfile({ tagText: tagText ?? undefined });
+  });
+  broadcastProfile();
+}
+
+export async function saveTagColors(
+  textColor: string | undefined,
+  chipColor: string | undefined
+): Promise<void> {
+  profileStore.tagTextColor = textColor;
+  profileStore.tagChipColor = chipColor;
+  await chained(async () => {
+    await ensureProfile();
+    await updateOwnProfile({
+      tagTextColor: textColor ?? undefined,
+      tagChipColor: chipColor ?? undefined,
+    });
+  });
+  broadcastProfile();
+}
+
+export async function saveBio(bio: string | undefined): Promise<void> {
+  profileStore.bio = bio;
+  await chained(async () => {
+    await ensureProfile();
+    await updateOwnProfile({ bio: bio ?? undefined });
+  });
+  broadcastProfile();
+}
+
+export async function saveNameEffect(effect: string | undefined): Promise<void> {
+  profileStore.nameEffect = effect;
+  await chained(async () => {
+    await ensureProfile();
+    await updateOwnProfile({ nameEffect: effect ?? undefined });
   });
   broadcastProfile();
 }

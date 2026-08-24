@@ -6,7 +6,7 @@
  * QR device sync depend on it round-tripping without silently dropping data.
  */
 
-import { base64ToBytes } from "../utils";
+import { base64ToBytes, bytesToBase64 } from "../utils";
 import type { Message, Attachment, PendingMessage } from "../types/message";
 import type {
   Room,
@@ -86,17 +86,35 @@ export interface BackupSummary {
   profiles: number;
 }
 
-// Rooms and profiles carry avatar bytes in an ArrayBuffer, which JSON turns
-// into `{}` - silently losing the image on both a file backup and the QR sync.
-// Convert to a plain number[] on the way out and back on the way in.
-export function pfpToJson<T extends { pfpData?: unknown }>(rec: T): T {
-  const data = rec?.pfpData;
-  if (!data || Array.isArray(data)) return rec;
-  if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data)) return rec;
-  const bytes = ArrayBuffer.isView(data)
-    ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-    : new Uint8Array(data);
-  return { ...rec, pfpData: Array.from(bytes) };
+// Rooms and profiles carry avatar and banner bytes in an ArrayBuffer, which JSON
+// turns into `{}` - silently losing the image on both a file backup and the QR sync.
+// Convert to base64 strings on the way out and back on the way in.
+export function pfpToJson<T extends { pfpData?: unknown; bannerData?: unknown }>(rec: T): T {
+  const pfpData = rec?.pfpData;
+  const bannerData = rec?.bannerData;
+  const result = { ...rec };
+
+  // Handle pfpData
+  if (pfpData && !(pfpData instanceof Array)) {
+    if (pfpData instanceof ArrayBuffer || ArrayBuffer.isView(pfpData)) {
+      const bytes = ArrayBuffer.isView(pfpData)
+        ? new Uint8Array(pfpData.buffer, pfpData.byteOffset, pfpData.byteLength)
+        : new Uint8Array(pfpData);
+      (result as any).pfpData = bytesToBase64(bytes);
+    }
+  }
+
+  // Handle bannerData
+  if (bannerData && !(bannerData instanceof Array)) {
+    if (bannerData instanceof ArrayBuffer || ArrayBuffer.isView(bannerData)) {
+      const bytes = ArrayBuffer.isView(bannerData)
+        ? new Uint8Array(bannerData.buffer, bannerData.byteOffset, bannerData.byteLength)
+        : new Uint8Array(bannerData);
+      (result as any).bannerData = bytesToBase64(bytes);
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -150,17 +168,40 @@ export function bytesFromExport(
   return undefined;
 }
 
-export function pfpFromJson<T extends { pfpData?: unknown }>(rec: T): T {
-  const data = rec?.pfpData;
-  if (!data) return rec;
-  if (Array.isArray(data)) {
-    return { ...rec, pfpData: new Uint8Array(data as number[]).buffer };
+export function pfpFromJson<T extends { pfpData?: unknown; bannerData?: unknown }>(rec: T): T {
+  const result = { ...rec } as Record<string, unknown>;
+
+  // Handle pfpData - accept base64 string or legacy number[]
+  const pfpData = rec?.pfpData;
+  if (pfpData) {
+    if (typeof pfpData === "string") {
+      const bytes = bytesFromExport(pfpData);
+      if (bytes) result.pfpData = bytes;
+      else delete result.pfpData;
+    } else if (Array.isArray(pfpData)) {
+      result.pfpData = new Uint8Array(pfpData as number[]).buffer;
+    } else if (!(pfpData instanceof ArrayBuffer)) {
+      // `{}` from an older peer - drop it
+      delete result.pfpData;
+    }
   }
-  if (data instanceof ArrayBuffer) return rec;
-  // `{}` from an older peer that serialized the buffer lossily - drop it
-  // rather than persist an unusable value.
-  const { pfpData: _drop, ...rest } = rec as Record<string, unknown>;
-  return rest as T;
+
+  // Handle bannerData - accept base64 string or legacy number[]
+  const bannerData = rec?.bannerData;
+  if (bannerData) {
+    if (typeof bannerData === "string") {
+      const bytes = bytesFromExport(bannerData);
+      if (bytes) result.bannerData = bytes;
+      else delete result.bannerData;
+    } else if (Array.isArray(bannerData)) {
+      result.bannerData = new Uint8Array(bannerData as number[]).buffer;
+    } else if (!(bannerData instanceof ArrayBuffer)) {
+      // `{}` from an older peer - drop it
+      delete result.bannerData;
+    }
+  }
+
+  return result as T;
 }
 
 /**

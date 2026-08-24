@@ -28,6 +28,7 @@
   import { roomsStore, refreshPhonebook } from "$lib/rooms.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Tip } from "$lib/components/ui/tooltip";
+  import { nameEffectStyle } from "$lib/name-effect";
   import { RELAY_TIP } from "$lib/copy";
   import { ScrollArea } from "$lib/components/ui/scroll-area";
   import {
@@ -36,6 +37,7 @@
     DrawerHeader,
     DrawerTitle,
   } from "$lib/components/ui/drawer";
+  import UserProfileCard from "./UserProfileCard.svelte";
 
   interface Props {
     open: boolean;
@@ -51,6 +53,7 @@
     name: string;
     avatarUrl: string | null;
     color: string | null;
+    nameEffect: string | null;
     isOnline: boolean;
     isSelf: boolean;
     isRelayed: boolean;
@@ -63,6 +66,7 @@
   const peerNames = $derived(transportState.peerNames);
   const peerAvatars = $derived(transportState.peerAvatars);
   const peerColors = $derived(transportState.peerColors);
+  const peerProfileMeta = $derived(transportState.peerProfileMeta);
 
   const selfDid = $derived(selfId());
   const ownDid = $derived(identityStore.did);
@@ -98,11 +102,13 @@
       let name: string;
       let avatarUrl: string | null = null;
       let color: string | null = null;
+      let nameEffect: string | null = null;
 
       if (isSelf) {
         name = profileStore.nickname || "You";
         avatarUrl = profileStore.avatarUrl || null;
         color = profileStore.color || null;
+        nameEffect = profileStore.nameEffect || null;
       } else {
         // roomUsers can carry a raw peerId while these maps are DID-keyed.
         const nameKey = peerIdToDid(did) || did;
@@ -112,6 +118,10 @@
           displayPrefs.showPeerNicknameColors
             ? peerColors.get(nameKey) || peerColors.get(did) || null
             : null;
+        // Name effect: respect showPeerNicknameColors like color does
+        nameEffect = displayPrefs.showPeerNicknameColors
+          ? peerProfileMeta.get(nameKey)?.nameEffect || peerProfileMeta.get(did)?.nameEffect || null
+          : null;
       }
 
       // In a call in THIS room: presence is announced per peer, self via
@@ -141,6 +151,7 @@
         name,
         avatarUrl,
         color,
+        nameEffect,
         isOnline,
         isSelf,
         isRelayed: userIsRelayed,
@@ -180,6 +191,7 @@
   }
 
   let userMenu = $state<{ user: User; x: number; y: number } | null>(null);
+  let selectedUserForProfile = $state<User | null>(null);
 
   function openUserMenu(e: MouseEvent, user: User): void {
     if (user.isSelf) return;
@@ -187,6 +199,10 @@
     e.stopPropagation();
     const pos = clampMenuPosition(e.clientX, e.clientY);
     userMenu = { user, x: pos.x, y: pos.y };
+  }
+
+  function openProfileCard(user: User): void {
+    selectedUserForProfile = user;
   }
 
   function openUserMenuAtElement(
@@ -293,7 +309,16 @@
         ? 'hover:bg-muted/50 cursor-pointer'
         : 'opacity-60 hover:bg-muted/30 cursor-pointer'}"
   >
-    <div class="relative shrink-0">
+    <button
+      type="button"
+      onclick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openProfileCard(user);
+      }}
+      class="relative shrink-0 rounded-full hover:opacity-80 transition-opacity"
+      aria-label={`View ${user.name}'s profile`}
+    >
       <div
         class="size-8 rounded-full overflow-hidden flex items-center justify-center text-xs font-semibold font-mono
           {user.isSelf
@@ -317,30 +342,33 @@
           ? 'bg-green-500'
           : 'bg-muted-foreground'}"
       ></div>
-    </div>
+    </button>
     <div class="min-w-0 flex-1">
-      <div
-        class="text-sm font-medium truncate {user.isSelf
-          ? 'text-primary'
-          : ''} flex items-center gap-1"
-        style={user.color ? `color: ${user.color}` : ""}
-      >
-        {user.isSelf ? `${user.name} (You)` : user.name}
-        {#if user.isRelayed}
-          <Tip text={RELAY_TIP}>
-            {#snippet children(props)}
-              <button
-                {...props}
-                type="button"
-                aria-label="Relayed connection"
-                class="inline-flex shrink-0 cursor-help"
-              >
-                <Workflow class="size-3 text-blue-500" />
-              </button>
-            {/snippet}
-          </Tip>
-        {/if}
-      </div>
+      {#if true}
+        {@const effectStyle = nameEffectStyle(user.nameEffect, user.color)}
+        <div
+          class="text-sm font-medium truncate {user.isSelf
+            ? 'text-primary'
+            : ''} flex items-center gap-1 {effectStyle.class}"
+          style={effectStyle.style || (user.color ? `color: ${user.color}` : "")}
+        >
+          {user.isSelf ? `${user.name} (You)` : user.name}
+          {#if user.isRelayed}
+            <Tip text={RELAY_TIP}>
+              {#snippet children(props)}
+                <button
+                  {...props}
+                  type="button"
+                  aria-label="Relayed connection"
+                  class="inline-flex shrink-0 cursor-help"
+                >
+                  <Workflow class="size-3 text-blue-500" />
+                </button>
+              {/snippet}
+            </Tip>
+          {/if}
+        </div>
+      {/if}
       <div class="text-xs truncate {user.inCall
           ? 'text-primary'
           : 'text-muted-foreground'}">
@@ -491,4 +519,17 @@
       </button>
     {/if}
   </div>
+{/if}
+
+{#if selectedUserForProfile}
+  <UserProfileCard
+    open={!!selectedUserForProfile}
+    onOpenChange={(open) => {
+      if (!open) selectedUserForProfile = null;
+    }}
+    did={selectedUserForProfile.did}
+    name={selectedUserForProfile.name}
+    avatarUrl={selectedUserForProfile.avatarUrl ?? undefined}
+    color={selectedUserForProfile.color ?? undefined}
+  />
 {/if}

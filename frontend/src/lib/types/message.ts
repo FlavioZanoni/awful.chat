@@ -154,6 +154,12 @@ export interface WireProfile {
   bindingSig?: string;
   /** Set on a profile sent in answer to one, so replies do not ping-pong. */
   reply?: boolean;
+  bannerUrl?: string;
+  tagText?: string;
+  tagTextColor?: string;
+  tagChipColor?: string;
+  bio?: string;
+  nameEffect?: string;
 }
 
 export interface WireCallPresence {

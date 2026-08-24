@@ -45,6 +45,13 @@ export interface OwnProfile {
   pfpURL?: string; // external URL - stored as-is
   /** User-picked nickname color, hex like "#aabbcc". Absent = default. */
   color?: string;
+  bannerData?: ArrayBuffer; // local upload
+  bannerURL?: string; // external URL
+  tagText?: string; // 2-5 chars
+  tagTextColor?: string; // hex like "#aabbcc"
+  tagChipColor?: string; // hex like "#aabbcc"
+  bio?: string; // max 200 chars
+  nameEffect?: string; // none | gradient | shimmer | glow | rainbow
   updatedAt: number;
 }
 
@@ -56,6 +63,13 @@ export interface PeerProfile {
   pfpURL?: string;
   /** User-picked nickname color, hex like "#aabbcc". Absent = default. */
   color?: string;
+  bannerData?: ArrayBuffer; // local upload
+  bannerURL?: string; // external URL
+  tagText?: string; // 2-5 chars
+  tagTextColor?: string; // hex like "#aabbcc"
+  tagChipColor?: string; // hex like "#aabbcc"
+  bio?: string; // max 200 chars
+  nameEffect?: string; // none | gradient | shimmer | glow | rainbow
   updatedAt: number;
 }
 
@@ -838,7 +852,7 @@ export async function rekeyOwnProfile(
  * pfpData and pfpURL are mutually exclusive - setting one clears the other.
  */
 export async function updateOwnProfile(
-  patch: Partial<Pick<OwnProfile, "nickname" | "pfpData" | "pfpURL" | "color">>
+  patch: Partial<Pick<OwnProfile, "nickname" | "pfpData" | "pfpURL" | "color" | "bannerData" | "bannerURL" | "tagText" | "tagTextColor" | "tagChipColor" | "bio" | "nameEffect">>
 ): Promise<void> {
   const database = await getDB();
   const tx = database.transaction("profiles", "readwrite");
@@ -848,6 +862,8 @@ export async function updateOwnProfile(
   const updated: OwnProfile = { ...profile, ...patch, updatedAt: Date.now() };
   if (patch.pfpData !== undefined) updated.pfpURL = undefined;
   if (patch.pfpURL !== undefined) updated.pfpData = undefined;
+  if (patch.bannerData !== undefined) updated.bannerURL = undefined;
+  if (patch.bannerURL !== undefined) updated.bannerData = undefined;
   await tx.store.put(updated);
   await tx.done;
 }

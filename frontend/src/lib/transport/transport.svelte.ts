@@ -67,6 +67,7 @@ import {
   verifySignature,
 } from "../messaging";
 import { bytesToBase64, encode, decode, normalizeAvatarUrl, normalizeNicknameColor } from "../utils";
+import { validateProfileMeta } from "../profile-meta";
 import { _sendCallPresence, _sendCallState, leaveCall } from "./call.svelte";
 import { _sendWatchPresence } from "./transmission.svelte";
 import {
@@ -174,6 +175,8 @@ interface TransportState {
   peerAvatars: Map<string, string>;
   /** User-picked nickname colors, keyed like peerNames (by DID). */
   peerColors: Map<string, string>;
+  /** Profile metadata: banners, tags, bios, name effects; keyed by DID. */
+  peerProfileMeta: Map<string, { bannerUrl?: string; tagText?: string; tagTextColor?: string; tagChipColor?: string; bio?: string; nameEffect?: string }>;
   error: string | null;
   callPeerIds: Set<string>;
   callPeerRooms: Map<string, string>; // peerId -> roomCode they're calling in
@@ -214,6 +217,7 @@ export const transportState = $state<TransportState>({
   peerDidVersion: 0,
   peerAvatars: new Map(),
   peerColors: new Map(),
+  peerProfileMeta: new Map(),
   error: null,
   callPeerIds: new Set(),
   callPeerRooms: new Map(),
@@ -419,6 +423,15 @@ async function _sendProfile(peerId?: string, isReply = false): Promise<void> {
     avatarUrl = `data:image/jpeg;base64,${btoa(binary)}`;
   }
 
+  let bannerUrl: string | null = profile?.bannerURL || null;
+  if (!bannerUrl && profile?.bannerData) {
+    const bytes = new Uint8Array(profile.bannerData);
+    const binary = Array.from(bytes)
+      .map((b) => String.fromCharCode(b))
+      .join("");
+    bannerUrl = `data:image/gif;base64,${btoa(binary)}`;
+  }
+
   // Prove this DID owns our peerId; the receiver cannot derive it any more.
   let binding: { did: string; bindingSig: string } | null = null;
   try {
@@ -437,6 +450,12 @@ async function _sendProfile(peerId?: string, isReply = false): Promise<void> {
     peerId: _transport.selfId(),
     bindingSig: binding?.bindingSig,
     reply: isReply || undefined,
+    bannerUrl: bannerUrl ?? undefined,
+    tagText: profile?.tagText ?? undefined,
+    tagTextColor: profile?.tagTextColor ?? undefined,
+    tagChipColor: profile?.tagChipColor ?? undefined,
+    bio: profile?.bio ?? undefined,
+    nameEffect: profile?.nameEffect ?? undefined,
   });
 
   if (peerId) {
@@ -1012,6 +1031,26 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
     transportState.peerColors = colors;
   }
 
+  // Validate and store profile metadata
+  const validated = validateProfileMeta({
+    bannerUrl: msg.bannerUrl,
+    tagText: msg.tagText,
+    tagTextColor: msg.tagTextColor,
+    tagChipColor: msg.tagChipColor,
+    bio: msg.bio,
+    nameEffect: msg.nameEffect,
+  });
+
+  if (Object.keys(validated).length > 0) {
+    const meta = new Map(transportState.peerProfileMeta);
+    meta.set(did, validated);
+    transportState.peerProfileMeta = meta;
+  } else {
+    const meta = new Map(transportState.peerProfileMeta);
+    meta.delete(did);
+    transportState.peerProfileMeta = meta;
+  }
+
   // NEVER write over our own row. Profiles are keyed by did and getOwnProfile
   // finds the one flagged isMe, so a peer profile stored under our own did
   // replaces it with isMe:false and their name and avatar - and our identity
@@ -1032,6 +1071,12 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
         pfpURL: avatarUrl,
         updatedAt: Date.now(),
         color: hasColorField ? (color ?? undefined) : existing?.color,
+        bannerURL: validated.bannerUrl,
+        tagText: validated.tagText,
+        tagTextColor: validated.tagTextColor,
+        tagChipColor: validated.tagChipColor,
+        bio: validated.bio,
+        nameEffect: validated.nameEffect,
         ...(existing?.pfpData ? { pfpData: existing.pfpData } : {}),
       }).catch(() => {})
     )
