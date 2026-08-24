@@ -16,6 +16,8 @@ services:
       # clients fall back to the bundled static creds. See README.
       - TURN_SECRET=${TURN_SECRET:-}
       - TURN_URLS=${TURN_URLS:-}
+      # Enables the /steam proxy used by the steam-roulette plugin.
+      - STEAM_API_KEY=${STEAM_API_KEY:-}
     volumes:
       - relay_data:/app/data
     networks:

@@ -37,7 +37,9 @@ group video.
   name effects (gradient, shimmer, glow, rainbow).
 - **Plugins**: instance-level, Minecraft-mods style. Drop a folder or point
   `PLUGIN_SOURCES` at GitHub repos and redeploy; ships with `/wheel` and
-  `/poll`. See [frontend/plugins/README.md](frontend/plugins/README.md).
+  `/poll`, with more at
+  [awful-org/awesome-awful](https://github.com/awful-org/awesome-awful).
+  See [frontend/plugins/README.md](frontend/plugins/README.md).
 - **Multi-device**: several devices on one identity, QR device sync,
   encrypted backups, and optional biometric unlock (fingerprint or security
   key via WebAuthn PRF).
@@ -123,6 +125,7 @@ frontend build is memory-hungry.
 | `PLUGIN_SOURCES` | no | plugins fetched at build time, see the [plugin guide](frontend/plugins/README.md) |
 | `TURN_SECRET` | no | switches TURN to short-lived credentials (below) |
 | `TURN_URLS` | no | override the TURN URL list served to clients |
+| `STEAM_API_KEY` | no | enables the relay's `/steam` proxy for the steam-roulette plugin ([get one](https://steamcommunity.com/dev/apikey)) |
 
 Firewall: open 80/443 (web), 3478 tcp+udp (TURN), 5349 tcp+udp (TURN TLS,
 when configured), the SFU port range (40000-40499 by default) and coturn's

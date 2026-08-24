@@ -340,6 +340,8 @@ func main() {
 		mux.HandleFunc("/klipy/search", handleKlipySearch)
 		mux.HandleFunc("/klipy/trending", handleKlipyTrending)
 		mux.HandleFunc("/turn-credentials", handleTurnCredentials)
+		mux.HandleFunc("/steam/resolve", handleSteamResolve)
+		mux.HandleFunc("/steam/games", handleSteamGames)
 		log.Printf("[http] Starting API server on port %s", apiPort)
 		server := &http.Server{
 			Addr:              ":" + apiPort,
