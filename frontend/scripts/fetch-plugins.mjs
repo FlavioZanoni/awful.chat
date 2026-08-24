@@ -150,6 +150,11 @@ for (const source of sources) {
       }
       cpSync(dir, join(PLUGINS_DIR, id), { recursive: true });
       fetched.push(id);
+      if (!existsSync(join(dir, "README.md"))) {
+        console.warn(
+          `[fetch-plugins] WARNING: ${id} ships no README.md - operators cannot know its requirements`
+        );
+      }
       console.log(`[fetch-plugins] installed ${id} from ${source}`);
     }
   } finally {

@@ -14,7 +14,14 @@ frontend/plugins/
     manifest.ts   loaded eagerly at boot: metadata only, no logic
     index.ts      lazy-loaded on first use: the actual plugin
     WheelCard.svelte
+    README.md     usage, install, and instance requirements
 ```
+
+Every plugin ships a README.md covering: what it does, its commands, how to
+install it (built-in vs a PLUGIN_SOURCES entry), and any instance
+requirements - proxy hosts, secrets, external accounts. "None" is a valid
+and useful answer. The fetcher warns when an installed plugin has no
+README.
 
 `manifest.ts` exports metadata only. It must stay import-light: every
 manifest loads at boot, and heavy imports here defeat the lazy loading.
