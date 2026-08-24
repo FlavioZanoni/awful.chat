@@ -115,10 +115,14 @@ GET  <VITE_API_URL>/plugin-proxy?url=<https upstream url>
 
 The upstream host must be in the instance's `PLUGIN_PROXY_HOSTS` allowlist,
 and the url may carry `{{secret:NAME}}` placeholders that the relay fills
-from `PLUGIN_PROXY_SECRETS` server-side. A 204 means the instance is not
-configured for your plugin: say so in the card. Document the hosts and
-secrets your plugin needs in its README. GET only, https only, 2 MB
-response cap, responses cached ~5 minutes.
+from `PLUGIN_PROXY_SECRETS` server-side. Operators should bind secrets to
+their host (`STEAM@api.steampowered.com=key`): an unbound secret can be
+sent to any allowlisted host, which is a leak the moment a second host is
+allowlisted. A 204 means the instance is not configured for your plugin:
+say so in the card. Placeholders belong in QUERY STRINGS (values are
+query-escaped). GET only, https only, 2 MB response cap, responses cached
+~5 minutes, ~10 requests/minute per client. Document the hosts and secrets
+your plugin needs in its README.
 
 ## Rules
 

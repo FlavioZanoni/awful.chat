@@ -17,8 +17,9 @@ services:
       - TURN_SECRET=${TURN_SECRET:-}
       - TURN_URLS=${TURN_URLS:-}
       # Generic plugin proxy: allowlisted upstream hosts and named secrets
-      # substituted server-side ({{secret:NAME}}). What keeps API-using
-      # plugins "env + redeploy" instead of relay code changes.
+      # substituted server-side ({{secret:NAME}}). Bind secrets to their
+      # host - NAME@host=value - so no other allowlisted upstream can ever
+      # receive them. What keeps API-using plugins "env + redeploy".
       - PLUGIN_PROXY_HOSTS=${PLUGIN_PROXY_HOSTS:-}
       - PLUGIN_PROXY_SECRETS=${PLUGIN_PROXY_SECRETS:-}
     volumes:

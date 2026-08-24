@@ -126,7 +126,7 @@ frontend build is memory-hungry.
 | `TURN_SECRET` | no | switches TURN to short-lived credentials (below) |
 | `TURN_URLS` | no | override the TURN URL list served to clients |
 | `PLUGIN_PROXY_HOSTS` | no | hostnames plugins may reach through the relay's `/plugin-proxy` |
-| `PLUGIN_PROXY_SECRETS` | no | `NAME=value` list; plugins reference `{{secret:NAME}}`, substituted server-side |
+| `PLUGIN_PROXY_SECRETS` | no | `NAME@host=value` list; plugins reference `{{secret:NAME}}`, substituted server-side only for that host |
 
 Firewall: open 80/443 (web), 3478 tcp+udp (TURN), 5349 tcp+udp (TURN TLS,
 when configured), the SFU port range (40000-40499 by default) and coturn's

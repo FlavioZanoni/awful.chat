@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -37,23 +38,69 @@ const pluginProxyCacheTTL = 5 * time.Minute
 var pluginProxyCache sync.Map // key string -> pluginProxyCacheEntry
 
 type pluginProxyCacheEntry struct {
-	body    []byte
-	expires time.Time
+	body        []byte
+	contentType string
+	expires     time.Time
 }
 
-func pluginProxyCached(key string) ([]byte, bool) {
+func pluginProxyCached(key string) (pluginProxyCacheEntry, bool) {
 	if v, ok := pluginProxyCache.Load(key); ok {
 		e := v.(pluginProxyCacheEntry)
 		if time.Now().Before(e.expires) {
-			return e.body, true
+			return e, true
 		}
 		pluginProxyCache.Delete(key)
 	}
-	return nil, false
+	return pluginProxyCacheEntry{}, false
 }
 
-func pluginProxyStore(key string, body []byte) {
-	pluginProxyCache.Store(key, pluginProxyCacheEntry{body: body, expires: time.Now().Add(pluginProxyCacheTTL)})
+func pluginProxyStore(key string, body []byte, contentType string) {
+	pluginProxyCache.Store(key, pluginProxyCacheEntry{body: body, contentType: contentType, expires: time.Now().Add(pluginProxyCacheTTL)})
+}
+
+// Per-client fixed-window rate limit. The Origin check only holds honest
+// browsers; without this the proxy is a free spender of the operator's API
+// quotas for anyone with curl.
+var pluginProxyRate sync.Map // ip -> rateEntry
+
+type rateEntry struct {
+	count   int
+	resetAt time.Time
+}
+
+const pluginProxyRateLimit = 10
+const pluginProxyRateWindow = time.Minute
+
+func pluginProxyAllow(ip string) bool {
+	now := time.Now()
+	v, _ := pluginProxyRate.Load(ip)
+	e, ok := v.(rateEntry)
+	if !ok || now.After(e.resetAt) {
+		pluginProxyRate.Store(ip, rateEntry{count: 1, resetAt: now.Add(pluginProxyRateWindow)})
+		return true
+	}
+	if e.count >= pluginProxyRateLimit {
+		return false
+	}
+	e.count++
+	pluginProxyRate.Store(ip, e)
+	return true
+}
+
+func clientIP(r *http.Request) string {
+	// Behind traefik the socket peer is traefik; the client is the first
+	// X-Forwarded-For hop, which traefik sets.
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if first, _, ok := strings.Cut(xff, ","); ok {
+			return strings.TrimSpace(first)
+		}
+		return strings.TrimSpace(xff)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 var secretPlaceholderRe = regexp.MustCompile(`\{\{secret:([A-Za-z0-9_-]+)\}\}`)
@@ -69,30 +116,58 @@ func pluginProxyHosts() map[string]bool {
 	return out
 }
 
-func pluginProxySecrets() map[string]string {
-	out := map[string]string{}
+type pluginSecret struct {
+	value string
+	// Host this secret may be sent to. Empty = any allowlisted host, which
+	// is safe with ONE host and a leak with two: any allowlisted upstream
+	// could be handed every unbound secret. Bind with NAME@host=value.
+	host string
+}
+
+var unboundSecretWarn sync.Once
+
+func pluginProxySecrets() map[string]pluginSecret {
+	out := map[string]pluginSecret{}
+	var unbound []string
 	for _, pair := range strings.Split(os.Getenv("PLUGIN_PROXY_SECRETS"), ",") {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue
 		}
 		k, v, ok := strings.Cut(pair, "=")
-		if ok && k != "" {
-			out[strings.ToUpper(strings.TrimSpace(k))] = v
+		if !ok || k == "" {
+			continue
 		}
+		name, host, bound := strings.Cut(strings.TrimSpace(k), "@")
+		name = strings.ToUpper(strings.TrimSpace(name))
+		sec := pluginSecret{value: v}
+		if bound {
+			sec.host = strings.ToLower(strings.TrimSpace(host))
+		} else {
+			unbound = append(unbound, name)
+		}
+		out[name] = sec
+	}
+	if len(unbound) > 0 {
+		unboundSecretWarn.Do(func() {
+			log.Printf("[plugin-proxy] secrets without a host binding (%s) can be sent to ANY allowlisted host; prefer NAME@host=value", strings.Join(unbound, ", "))
+		})
 	}
 	return out
 }
 
-// substituteSecrets replaces {{secret:NAME}} placeholders. Returns an error
-// naming the first missing secret so the client can say "instance not
-// configured for this plugin" instead of guessing.
-func substituteSecrets(raw string, secrets map[string]string) (string, error) {
+// substituteSecrets replaces {{secret:NAME}} placeholders for a request
+// bound for targetHost. A secret bound to a different host counts as
+// missing: the caller answers 204 and no upstream ever sees a key that was
+// not meant for it. Placeholders belong in query strings (values are
+// query-escaped).
+func substituteSecrets(raw string, secrets map[string]pluginSecret, targetHost string) (string, error) {
+	targetHost = strings.ToLower(targetHost)
 	var missing string
 	replaced := secretPlaceholderRe.ReplaceAllStringFunc(raw, func(m string) string {
 		name := strings.ToUpper(secretPlaceholderRe.FindStringSubmatch(m)[1])
-		if v, ok := secrets[name]; ok {
-			return url.QueryEscape(v)
+		if sec, ok := secrets[name]; ok && (sec.host == "" || sec.host == targetHost) {
+			return url.QueryEscape(sec.value)
 		}
 		if missing == "" {
 			missing = name
@@ -100,7 +175,7 @@ func substituteSecrets(raw string, secrets map[string]string) (string, error) {
 		return m
 	})
 	if missing != "" {
-		return "", fmt.Errorf("secret %s not configured", missing)
+		return "", fmt.Errorf("secret %s not configured for %s", missing, targetHost)
 	}
 	return replaced, nil
 }
@@ -150,34 +225,49 @@ func handlePluginProxy(w http.ResponseWriter, r *http.Request) {
 		withCors(w, r, func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) })
 		return
 	}
+	if !pluginProxyAllow(clientIP(r)) {
+		apiError(w, r, "Slow down", http.StatusTooManyRequests)
+		return
+	}
 	raw := strings.TrimSpace(r.URL.Query().Get("url"))
 	if raw == "" {
 		apiError(w, r, "Missing url parameter", http.StatusBadRequest)
 		return
 	}
-	substituted, err := substituteSecrets(raw, pluginProxySecrets())
+	// Parse BEFORE substitution: the target host decides which secrets may
+	// be filled, so it has to come from the placeholder form of the url.
+	pre, err := url.Parse(raw)
+	if err != nil || pre.Scheme != "https" {
+		apiError(w, r, "Only https urls", http.StatusBadRequest)
+		return
+	}
+	host := strings.ToLower(pre.Hostname())
+	if !allowed[host] {
+		apiError(w, r, "Host not allowlisted on this instance", http.StatusForbidden)
+		return
+	}
+	substituted, err := substituteSecrets(raw, pluginProxySecrets(), host)
 	if err != nil {
-		// Unconfigured secret = the same "not set up" answer as no allowlist.
+		// Unconfigured or host-mismatched secret = "not set up".
 		withCors(w, r, func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) })
 		return
 	}
 	target, err := url.Parse(substituted)
-	if err != nil || target.Scheme != "https" {
-		apiError(w, r, "Only https urls", http.StatusBadRequest)
-		return
-	}
-	if !allowed[strings.ToLower(target.Hostname())] {
-		apiError(w, r, "Host not allowlisted on this instance", http.StatusForbidden)
+	if err != nil || target.Scheme != "https" ||
+		strings.ToLower(target.Hostname()) != host {
+		// Substitution must never move the request to another host.
+		apiError(w, r, "Bad url", http.StatusBadRequest)
 		return
 	}
 
 	// Cache key includes secrets, deliberately: it lives only in this
 	// process's memory and distinct keys must not share entries.
 	cacheKey := "pp:" + substituted
-	if body, ok := pluginProxyCached(cacheKey); ok {
+	if entry, ok := pluginProxyCached(cacheKey); ok {
 		withCors(w, r, func(w http.ResponseWriter) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(body)
+			w.Header().Set("Content-Type", entry.contentType)
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Write(entry.body)
 		})
 		return
 	}
@@ -201,9 +291,10 @@ func handlePluginProxy(w http.ResponseWriter, r *http.Request) {
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	pluginProxyStore(cacheKey, body)
+	pluginProxyStore(cacheKey, body, contentType)
 	withCors(w, r, func(w http.ResponseWriter) {
 		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Write(body)
 	})
 }
