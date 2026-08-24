@@ -6,4 +6,5 @@ export const manifest: PluginManifest = {
   description: "Spin a wheel to settle what to play.",
   icon: "🎡",
   apiVersion: 1,
+  commands: [{ name: "wheel", usage: "/wheel option1, option2, ..." }],
 };

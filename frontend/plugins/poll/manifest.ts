@@ -6,4 +6,5 @@ export const manifest: PluginManifest = {
   description: "Vote on options to see live results.",
   icon: "📊",
   apiVersion: 1,
+  commands: [{ name: "poll", usage: "/poll Question? Option A, Option B" }],
 };

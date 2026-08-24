@@ -6,6 +6,12 @@ export interface PluginManifest {
   description: string; // one line, shown in settings
   icon: string; // emoji, keeps v1 free of asset plumbing
   apiVersion: 1;
+  /**
+   * Slash commands this plugin offers, for the composer's "/" popup. Lives
+   * in the manifest because the popup must list commands WITHOUT loading
+   * plugin code. Names must match the keys of the definition's `commands`.
+   */
+  commands?: Array<{ name: string; usage: string }>;
 }
 
 export interface UpdateCtx {

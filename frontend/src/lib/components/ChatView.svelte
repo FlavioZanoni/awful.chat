@@ -130,6 +130,9 @@
   let showUserList = $state(false);
 
   let draft = $state("");
+  let commandPopupOpen = $state(false);
+  let commandSelectedIndex = $state(0);
+  let commandHint = $state<string | null>(null);
   let mentionPopupOpen = $state(false);
   let mentionPrefix = $state("");
   let mentionSelectedIndex = $state(0);
@@ -277,6 +280,63 @@
     return () => observer.disconnect();
   });
 
+  /** Enabled plugin commands matching the draft's "/prefix". */
+  const filteredCommands = $derived.by(() => {
+    if (!commandPopupOpen) return [];
+    const m = draft.match(/^\/([a-z0-9-]*)$/);
+    if (!m) return [];
+    const prefix = m[1];
+    const out: Array<{ name: string; usage: string; icon: string }> = [];
+    for (const [pluginId, registered] of getRegistry()) {
+      if (!isPluginEnabled(pluginId)) continue;
+      for (const cmd of registered.manifest.commands ?? []) {
+        if (cmd.name.startsWith(prefix)) {
+          out.push({ ...cmd, icon: registered.manifest.icon });
+        }
+      }
+    }
+    return out;
+  });
+
+  function updateCommandState() {
+    // Only a lone "/word" at the start of the draft is a command in
+    // progress; anything after a space is prose.
+    commandPopupOpen = /^\/[a-z0-9-]*$/.test(draft);
+    commandSelectedIndex = 0;
+    if (commandHint) commandHint = null;
+  }
+
+  function selectCommand(cmd: { name: string; usage: string }) {
+    draft = `/${cmd.name} `;
+    commandPopupOpen = false;
+    requestAnimationFrame(() => {
+      textareaEl?.focus();
+      if (textareaEl) {
+        textareaEl.selectionStart = textareaEl.selectionEnd = draft.length;
+      }
+    });
+  }
+
+  function handleCommandKeydown(e: KeyboardEvent) {
+    if (!commandPopupOpen || filteredCommands.length === 0) return;
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      commandSelectedIndex = Math.max(0, commandSelectedIndex - 1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      commandSelectedIndex = Math.min(
+        filteredCommands.length - 1,
+        commandSelectedIndex + 1
+      );
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      selectCommand(filteredCommands[commandSelectedIndex]);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      commandPopupOpen = false;
+    }
+  }
+
   const filteredMembersForMention = $derived.by(() => {
     if (!mentionPopupOpen) return [];
     const self = selfId();
@@ -352,6 +412,10 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    if (commandPopupOpen) {
+      handleCommandKeydown(e);
+      if (e.defaultPrevented) return;
+    }
     if (mentionPopupOpen) {
       handleMentionKeydown(e);
       if (e.defaultPrevented) return;
@@ -404,8 +468,7 @@
       }
 
       if (!found) {
-        // Unknown command: show inline hint
-        console.warn(`[chat] unknown command: ${commandName}`);
+        commandHint = `Unknown command /${commandName} - type / to see what is available`;
         return;
       }
     }
@@ -1667,11 +1730,37 @@
           oninput={() => {
             autoResize();
             updateMentionState();
+            updateCommandState();
           }}
           placeholder="Type a message..."
           rows={1}
           class="w-full resize-none rounded-md border border-input bg-background pl-3 pr-20 py-2 text-sm text-foreground placeholder:text-muted-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring min-h-10 max-h-30 overflow-y-auto"
         ></textarea>
+        {#if commandHint}
+          <p class="absolute bottom-full left-0 mb-1 rounded bg-popover border border-border px-2 py-1 font-mono text-xs text-muted-foreground">
+            {commandHint}
+          </p>
+        {/if}
+        {#if commandPopupOpen && filteredCommands.length > 0}
+          <div
+            class="absolute bottom-full left-0 z-50 mb-1 max-h-48 min-w-64 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-lg"
+          >
+            {#each filteredCommands as cmd, index (cmd.name)}
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-sm hover:bg-muted {commandSelectedIndex ===
+                index
+                  ? 'bg-muted'
+                  : ''}"
+                onclick={() => selectCommand(cmd)}
+              >
+                <span>{cmd.icon}</span>
+                <span class="text-foreground">/{cmd.name}</span>
+                <span class="truncate text-xs text-muted-foreground">{cmd.usage}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
         {#if mentionPopupOpen && filteredMembersForMention.length > 0}
           <div
             class="absolute bottom-full left-0 z-50 mb-1 max-h-48 min-w-48 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-lg"
