@@ -85,8 +85,7 @@
           >
             <div
               class="absolute inset-0 bg-primary/20 transition-all"
-              style="width: {percentage}%"
-            />
+              style="width: {percentage}%"></div>
             <div class="relative z-10 w-full text-left text-xs">
               {#if percentage > 0}
                 {Math.round(percentage)}%
