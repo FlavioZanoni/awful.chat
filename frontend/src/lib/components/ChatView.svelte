@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import type { Message } from "$lib/transport/transport.svelte";
   import { MessageType } from "$lib/types/message";
   import {
@@ -31,6 +32,7 @@
   import GifPicker from "./GifPicker.svelte";
   import GifImage from "./GifImage.svelte";
   import EmojiPickerPopup from "./EmojiPickerPopup.svelte";
+  import MentionInput from "./MentionInput.svelte";
   import UserListSidebar from "./UserListSidebar.svelte";
   import { profileStore, loadProfile } from "$lib/profile.svelte";
   import { displayPrefs } from "$lib/display-prefs.svelte";
@@ -61,7 +63,7 @@
     removeFromPhonebook,
   } from "$lib/transport/dm.svelte";
   import { joinCall } from "$lib/transport/call.svelte";
-  import { serialize, mentionsMe } from "$lib/mentions";
+  import { serialize, mentionsMe, segmentDraft } from "$lib/mentions";
   import { makeHostApi } from "$lib/plugins/host";
   import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   import UserProfileCard from "./UserProfileCard.svelte";
@@ -143,8 +145,12 @@
   let mentionPopupOpen = $state(false);
   let mentionPrefix = $state("");
   let mentionSelectedIndex = $state(0);
-  /** Names the user picked from the popup this draft, mapped to dids. */
-  const draftMentionMap = new Map<string, string>();
+  /**
+   * Names the user picked from the popup this draft, mapped to dids. Reactive
+   * because the composer highlight is derived from it - a plain Map would
+   * leave a freshly picked mention unhighlighted until the next keystroke.
+   */
+  const draftMentionMap = new SvelteMap<string, string>();
   let replyTargetId = $state<string | null>(null);
   let reactionPickerFor = $state<string | null>(null);
   let reactionAnchor = $state<DOMRect | null>(null);
@@ -373,6 +379,14 @@
       commandPopupOpen = false;
     }
   }
+
+  /**
+   * What the composer highlights. It runs the same tokenizer the wire
+   * serializer uses, so the chips mark exactly the text that will ship as a
+   * signed @[did] token - a hand-typed @Name stays plain, and breaking a
+   * picked name un-highlights it immediately.
+   */
+  const draftSegments = $derived(segmentDraft(draft, draftMentionMap));
 
   const filteredMembersForMention = $derived.by(() => {
     if (!mentionPopupOpen) return [];
@@ -1832,19 +1846,18 @@
         }}
       />
       <div class="relative flex w-full items-center">
-        <textarea
-          bind:this={textareaEl}
+        <MentionInput
+          bind:el={textareaEl}
           bind:value={draft}
+          segments={draftSegments}
           onkeydown={handleKeydown}
+          placeholder="Type a message..."
           oninput={() => {
             autoResize();
             updateMentionState();
             updateCommandState();
           }}
-          placeholder="Type a message..."
-          rows={1}
-          class="w-full resize-none rounded-md border border-input bg-background pl-3 pr-28 py-2 text-sm text-foreground placeholder:text-muted-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring min-h-10 max-h-30 overflow-y-auto"
-        ></textarea>
+        />
         {#if commandHint}
           <p class="absolute bottom-full left-0 mb-1 rounded bg-popover border border-border px-2 py-1 font-mono text-xs text-muted-foreground">
             {commandHint}

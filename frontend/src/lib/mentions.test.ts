@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { serialize, humanize, mentionsMe } from "./mentions";
+import { serialize, humanize, mentionsMe, segmentDraft } from "./mentions";
 
 describe("mentions", () => {
   describe("serialize", () => {
@@ -166,5 +166,88 @@ describe("humanize escaping", () => {
     const out = humanize("@[did:key:zEvil]", () => "<img src=x onerror=alert(1)>");
     expect(out).not.toContain("<img");
     expect(out).toContain("&lt;img");
+  });
+});
+
+describe("segmentDraft", () => {
+  const alice = new Map([["Alice", "did:key:z6MkAlice"]]);
+
+  it("returns nothing for an empty draft", () => {
+    expect(segmentDraft("", alice)).toEqual([]);
+  });
+
+  it("returns one plain run when no name is recorded", () => {
+    expect(segmentDraft("@Alice hi", new Map())).toEqual([
+      { text: "@Alice hi", did: null },
+    ]);
+  });
+
+  it("tags a recorded mention and leaves the rest plain", () => {
+    expect(segmentDraft("Hey @Alice!", alice)).toEqual([
+      { text: "Hey ", did: null },
+      { text: "@Alice", did: "did:key:z6MkAlice" },
+      { text: "!", did: null },
+    ]);
+  });
+
+  it("leaves an unrecorded @name plain", () => {
+    const segments = segmentDraft("@Alice and @Charlie", alice);
+    expect(segments).toEqual([
+      { text: "@Alice", did: "did:key:z6MkAlice" },
+      { text: " and @Charlie", did: null },
+    ]);
+  });
+
+  it("does not tag a name that is only a prefix of the typed word", () => {
+    const segments = segmentDraft("@Alice-bot pinged", alice);
+    expect(segments).toEqual([{ text: "@Alice-bot pinged", did: null }]);
+  });
+
+  it("prefers the longest recorded name on a collision", () => {
+    const map = new Map([
+      ["Ana", "did:key:z6MkAna"],
+      ["Anna", "did:key:z6MkAnna"],
+    ]);
+    expect(segmentDraft("@Anna and @Ana", map)).toEqual([
+      { text: "@Anna", did: "did:key:z6MkAnna" },
+      { text: " and ", did: null },
+      { text: "@Ana", did: "did:key:z6MkAna" },
+    ]);
+  });
+
+  it("handles names containing spaces and regex metacharacters", () => {
+    const map = new Map([["A. (dev)", "did:key:z6MkDev"]]);
+    expect(segmentDraft("ping @A. (dev) now", map)).toEqual([
+      { text: "ping ", did: null },
+      { text: "@A. (dev)", did: "did:key:z6MkDev" },
+      { text: " now", did: null },
+    ]);
+  });
+
+  it("concatenating the segments reproduces the draft exactly", () => {
+    const map = new Map([
+      ["Alice", "did:key:z6MkAlice"],
+      ["Bob", "did:key:z6MkBob"],
+    ]);
+    const draft = "@Alice, ping @Bob about @Charlie\nthanks";
+    const joined = segmentDraft(draft, map)
+      .map((s) => s.text)
+      .join("");
+    expect(joined).toBe(draft);
+  });
+
+  it("agrees with serialize about what is a mention", () => {
+    const map = new Map([
+      ["Alice", "did:key:z6MkAlice"],
+      ["Bob", "did:key:z6MkBob"],
+    ]);
+    const draft = "@Alice @Alice-bot @Bob @Charlie";
+    const highlighted = segmentDraft(draft, map)
+      .filter((s) => s.did !== null)
+      .map((s) => s.text);
+    expect(highlighted).toEqual(["@Alice", "@Bob"]);
+    expect(serialize(draft, map)).toBe(
+      "@[did:key:z6MkAlice] @Alice-bot @[did:key:z6MkBob] @Charlie"
+    );
   });
 });
