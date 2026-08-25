@@ -56,7 +56,7 @@
     VolumeX,
     Workflow,
   } from "@lucide/svelte";
-  import { MessageSquare, MonitorIcon, Users as UsersIcon, UserX } from "@lucide/svelte";
+  import { Check, MessageSquare, MonitorIcon, Users as UsersIcon, UserX } from "@lucide/svelte";
 import { profileStore, loadProfile } from "$lib/profile.svelte";
 import { displayPrefs } from "$lib/display-prefs.svelte";
 import { cn } from "$lib/utils";
@@ -155,7 +155,7 @@ import { cn } from "$lib/utils";
     );
   }
 
-  // ── Per-peer volume menu ──────────────────────────────────────────────────
+  // ── Context menus ─────────────────────────────────────────────────────────
 
   let peerMenu = $state<{
     peerId: string;
@@ -163,28 +163,69 @@ import { cn } from "$lib/utils";
     x: number;
     y: number;
   } | null>(null);
+  /** Right-click on the call background: picks what the grid shows. */
+  let viewMenu = $state<{ x: number; y: number } | null>(null);
   let peerVolumeSlider = $state(UNITY_STOP);
 
   const peerVolumePercent = $derived(formatGain(sliderToGain(peerVolumeSlider)));
 
-  function openPeerMenu(e: MouseEvent, tile: TileData): void {
-    if (tile.isLocal || !tile.peerId) return;
-    e.preventDefault();
-    e.stopPropagation();
-    peerVolumeSlider = gainToSlider(getVoicePeerVolume(tile.peerId));
-    const width = 224;
-    const height = 132;
+  /**
+   * Keep a menu of this size inside the viewport. Both menus live inside the
+   * panel so they survive fullscreen, and a fixed child of a fullscreen
+   * element still measures against the viewport - so these coordinates hold
+   * either way.
+   */
+  function clampMenu(
+    e: MouseEvent,
+    width: number,
+    height: number
+  ): { x: number; y: number } {
     const pad = 8;
-    peerMenu = {
-      peerId: tile.peerId,
-      label: tile.label,
+    return {
       x: Math.max(pad, Math.min(e.clientX, window.innerWidth - width - pad)),
       y: Math.max(pad, Math.min(e.clientY, window.innerHeight - height - pad)),
     };
   }
 
-  function closePeerMenu(): void {
+  function openPeerMenu(e: MouseEvent, tile: TileData): void {
+    // The local tile has nothing to offer here, so the event is left to bubble
+    // to the panel and open the view menu instead.
+    if (tile.isLocal || !tile.peerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    peerVolumeSlider = gainToSlider(getVoicePeerVolume(tile.peerId));
+    viewMenu = null;
+    peerMenu = { peerId: tile.peerId, label: tile.label, ...clampMenu(e, 224, 132) };
+  }
+
+  function openViewMenu(e: MouseEvent): void {
+    e.preventDefault();
     peerMenu = null;
+    viewMenu = clampMenu(e, 224, 156);
+  }
+
+  function closeMenus(): void {
+    peerMenu = null;
+    viewMenu = null;
+  }
+
+  function pickFilter(next: TileFilter): void {
+    tileFilter = next;
+    closeMenus();
+  }
+
+  /**
+   * Step the corner button through the filters that currently match something,
+   * so the whole set stays reachable without a right-click. A filter whose last
+   * match went away drops out of the order, which lands the next step on
+   * "all".
+   */
+  function cycleFilter(): void {
+    const order = viewFilterOptions
+      .map((o) => o.value)
+      .filter((v) => v === "all" || tiles.some(filterMatch[v]));
+    const next = order[(order.indexOf(tileFilter) + 1) % order.length];
+    tileFilter = next ?? "all";
   }
 
   function onPeerVolume(value: number): void {
@@ -194,7 +235,7 @@ import { cn } from "$lib/utils";
 
   async function dmFromPeerMenu(): Promise<void> {
     const peerId = peerMenu?.peerId;
-    closePeerMenu();
+    closeMenus();
     if (peerId) await openDmConversation(peerId);
   }
 
@@ -551,17 +592,49 @@ import { cn } from "$lib/utils";
     return tracks;
   });
 
-  // "Only streamers": hide tiles with nothing to watch. A tile passes when
-  // it carries video (camera or screen) or is a joinable pending
-  // transmission; falls back to everyone when nobody streams.
-  let hideNonVideo = $state(false);
+  // What the grid shows. "streaming" keeps anything worth watching - a camera
+  // as much as a share - while "screens" narrows to shares alone, which is
+  // what you want when someone is presenting and the cameras are noise.
+  // Either filter falls back to everyone if its last match goes away, so the
+  // panel never ends up empty.
+  type TileFilter = "all" | "streaming" | "screens";
+
+  let tileFilter = $state<TileFilter>("all");
   const tileHasVideo = (t: TileData) =>
     t.videoTrack !== null || (t.kind === "transmission" && !!t.isPending);
+  const tileIsShare = (t: TileData) =>
+    t.kind === "screen" || t.kind === "transmission";
+  const filterMatch: Record<TileFilter, (t: TileData) => boolean> = {
+    all: () => true,
+    streaming: tileHasVideo,
+    screens: tileIsShare,
+  };
   const visibleTiles = $derived.by(() => {
-    if (!hideNonVideo) return tiles;
-    const streaming = tiles.filter(tileHasVideo);
-    return streaming.length ? streaming : tiles;
+    if (tileFilter === "all") return tiles;
+    const kept = tiles.filter(filterMatch[tileFilter]);
+    return kept.length ? kept : tiles;
   });
+
+  const viewFilterOptions: {
+    value: TileFilter;
+    label: string;
+    icon: typeof UsersIcon;
+    emptyHint: string;
+  }[] = [
+    { value: "all", label: "Everyone", icon: UserX, emptyHint: "" },
+    {
+      value: "streaming",
+      label: "Only streamers",
+      icon: UsersIcon,
+      emptyHint: "Nobody is sharing a camera or screen",
+    },
+    {
+      value: "screens",
+      label: "Screen shares only",
+      icon: MonitorIcon,
+      emptyHint: "Nobody is sharing a screen",
+    },
+  ];
 
   const gridCols = $derived.by(() => {
     const n = visibleTiles.length;
@@ -1004,6 +1077,9 @@ import { cn } from "$lib/utils";
 {:else if inCall}
   <div
     bind:this={panelEl}
+    role="group"
+    aria-label="Call"
+    oncontextmenu={openViewMenu}
     class="flex flex-col border-b border-border relative shrink-0 bg-background
       {isFullscreen ? 'h-screen' : rowClass}
       {!isFullscreen && !hasActiveVideo ? 'pb-14' : ''}"
@@ -1395,24 +1471,27 @@ import { cn } from "$lib/utils";
     <Tip text={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
       {#snippet children(props)}
     <!-- Worth showing only when it changes anything: some tile with
-         video AND some tile without. -->
-    {#if tiles.some(tileHasVideo) && tiles.some((t) => !tileHasVideo(t))}
-      <Tip text={hideNonVideo ? "Show everyone" : "Show only streamers"}>
+         video AND some tile without. It also stays up whenever a filter is
+         active, so a filter picked from the menu always has a way out even
+         once everyone is streaming. -->
+    {#if tileFilter !== "all" || (tiles.some(tileHasVideo) && tiles.some((t) => !tileHasVideo(t)))}
+      {@const current =
+        viewFilterOptions.find((o) => o.value === tileFilter) ??
+        viewFilterOptions[0]}
+      <Tip text={`Showing ${current.label.toLowerCase()} - right-click for options`}>
         {#snippet children(props)}
           <button
             {...props}
             type="button"
-            onclick={() => (hideNonVideo = !hideNonVideo)}
-            aria-label={hideNonVideo ? "Show everyone" : "Show only streamers"}
-            class="absolute top-3 left-3 sm:top-4 sm:left-4 flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-zinc-900 transition-all duration-200 hover:scale-105 z-20 {hideNonVideo
+            onclick={cycleFilter}
+            oncontextmenu={openViewMenu}
+            aria-label={`Change who is shown - currently ${current.label.toLowerCase()}`}
+            class="absolute top-3 left-3 sm:top-4 sm:left-4 flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-zinc-900 transition-all duration-200 hover:scale-105 z-20 {tileFilter !==
+            'all'
               ? 'text-primary'
               : 'text-zinc-300'}"
           >
-            {#if hideNonVideo}
-              <UsersIcon class="size-4" />
-            {:else}
-              <UserX class="size-4" />
-            {/if}
+            <current.icon class="size-4" />
           </button>
         {/snippet}
       </Tip>
@@ -1434,11 +1513,48 @@ import { cn } from "$lib/utils";
       {/snippet}
     </Tip>
 
-    <!-- The menu belongs inside the panel. The panel is the element handed to
-         requestFullscreen, and only the fullscreen element's own subtree is
-         painted - a menu rendered as its sibling exists in the DOM but is
-         invisible for as long as the call is fullscreen, however high its
-         z-index. -->
+    <!-- Both menus live inside the panel on purpose. The panel is the element
+         handed to requestFullscreen, and only the fullscreen element's own
+         subtree is painted - a menu rendered as its sibling exists in the DOM
+         but is invisible for as long as the call is fullscreen, however high
+         its z-index. -->
+    {#if viewMenu}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div
+        role="menu"
+        tabindex="-1"
+        class="fixed z-50 w-56 rounded-md border border-border bg-popover py-1 shadow-xl font-mono"
+        style="top: {viewMenu.y}px; left: {viewMenu.x}px"
+        onkeydown={() => {}}
+        onclick={(e) => e.stopPropagation()}
+        oncontextmenu={(e) => e.preventDefault()}
+      >
+        <p class="truncate px-3 pb-1 pt-0.5 text-xs text-muted-foreground">
+          Show
+        </p>
+
+        {#each viewFilterOptions as option (option.value)}
+          {@const available =
+            option.value === "all" || tiles.some(filterMatch[option.value])}
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={tileFilter === option.value}
+            disabled={!available}
+            title={available ? undefined : option.emptyHint}
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-sm enabled:cursor-pointer enabled:hover:bg-muted disabled:opacity-40"
+            onclick={() => pickFilter(option.value)}
+          >
+            <option.icon class="size-4 shrink-0" />
+            <span class="flex-1 truncate text-left">{option.label}</span>
+            {#if tileFilter === option.value}
+              <Check class="size-3.5 shrink-0 text-primary" />
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     {#if peerMenu}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
@@ -1493,9 +1609,9 @@ import { cn } from "$lib/utils";
 {/if}
 
 <svelte:window
-  onclick={closePeerMenu}
+  onclick={closeMenus}
   onkeydown={(e) => {
-    if (e.key === "Escape") closePeerMenu();
+    if (e.key === "Escape") closeMenus();
   }}
 />
 
