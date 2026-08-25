@@ -38,7 +38,7 @@ group video.
 - **Plugins**: instance-level, Minecraft-mods style. Drop a folder or point
   `PLUGIN_SOURCES` at GitHub repos and redeploy; ships with `/wheel` and
   `/poll`, with more at
-  [awful-org/awesome-awful](https://github.com/awful-org/awesome-awful).
+  [awful-org/awfully-awesome](https://github.com/awful-org/awfully-awesome).
   See [frontend/plugins/README.md](frontend/plugins/README.md).
 - **Multi-device**: several devices on one identity, QR device sync,
   encrypted backups, and optional biometric unlock (fingerprint or security
