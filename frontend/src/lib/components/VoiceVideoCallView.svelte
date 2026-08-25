@@ -1433,6 +1433,62 @@ import { cn } from "$lib/utils";
     </button>
       {/snippet}
     </Tip>
+
+    <!-- The menu belongs inside the panel. The panel is the element handed to
+         requestFullscreen, and only the fullscreen element's own subtree is
+         painted - a menu rendered as its sibling exists in the DOM but is
+         invisible for as long as the call is fullscreen, however high its
+         z-index. -->
+    {#if peerMenu}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div
+        role="menu"
+        tabindex="-1"
+        class="fixed z-50 w-56 rounded-md border border-border bg-popover py-1 shadow-xl font-mono"
+        style="top: {peerMenu.y}px; left: {peerMenu.x}px"
+        onkeydown={() => {}}
+        onclick={(e) => e.stopPropagation()}
+        oncontextmenu={(e) => e.preventDefault()}
+      >
+        <p class="truncate px-3 pb-1 pt-0.5 text-xs text-muted-foreground">
+          {peerMenu.label}
+        </p>
+
+        <button
+          type="button"
+          class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
+          onclick={dmFromPeerMenu}
+        >
+          <MessageSquare class="size-4" />
+          Message
+        </button>
+
+        <div class="mt-1 border-t border-border px-3 pb-2 pt-2">
+          <div class="flex items-center justify-between pb-1.5">
+            <span class="text-xs text-muted-foreground">Volume</span>
+            <span
+              class="text-xs tabular-nums {peerVolumeSlider <= 0
+                ? 'text-destructive'
+                : 'text-primary'}">{peerVolumePercent}</span
+            >
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={peerVolumeSlider}
+            aria-label={`Volume for ${peerMenu.label}`}
+            oninput={(e) => onPeerVolume(Number(e.currentTarget.value))}
+            class="h-1 w-full cursor-pointer appearance-none rounded-full accent-primary"
+            style={`background: linear-gradient(to right, var(--primary) ${peerVolumeSlider}%, var(--muted) ${peerVolumeSlider}%)`}
+          />
+          <p class="pt-1 text-[10px] text-muted-foreground">
+            Only changes what you hear
+          </p>
+        </div>
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -1442,57 +1498,6 @@ import { cn } from "$lib/utils";
     if (e.key === "Escape") closePeerMenu();
   }}
 />
-
-{#if peerMenu}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div
-    role="menu"
-    tabindex="-1"
-    class="fixed z-50 w-56 rounded-md border border-border bg-popover py-1 shadow-xl font-mono"
-    style="top: {peerMenu.y}px; left: {peerMenu.x}px"
-    onkeydown={() => {}}
-    onclick={(e) => e.stopPropagation()}
-    oncontextmenu={(e) => e.preventDefault()}
-  >
-    <p class="truncate px-3 pb-1 pt-0.5 text-xs text-muted-foreground">
-      {peerMenu.label}
-    </p>
-
-    <button
-      type="button"
-      class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
-      onclick={dmFromPeerMenu}
-    >
-      <MessageSquare class="size-4" />
-      Message
-    </button>
-
-    <div class="mt-1 border-t border-border px-3 pb-2 pt-2">
-      <div class="flex items-center justify-between pb-1.5">
-        <span class="text-xs text-muted-foreground">Volume</span>
-        <span
-          class="text-xs tabular-nums {peerVolumeSlider <= 0
-            ? 'text-destructive'
-            : 'text-primary'}">{peerVolumePercent}</span
-        >
-      </div>
-      <input
-        type="range"
-        min="0"
-        max="100"
-        step="1"
-        value={peerVolumeSlider}
-        aria-label={`Volume for ${peerMenu.label}`}
-        oninput={(e) => onPeerVolume(Number(e.currentTarget.value))}
-        class="h-1 w-full cursor-pointer appearance-none rounded-full accent-primary"
-        style={`background: linear-gradient(to right, var(--primary) ${peerVolumeSlider}%, var(--muted) ${peerVolumeSlider}%)`}
-      />
-      <p class="pt-1 text-[10px] text-muted-foreground">
-        Only changes what you hear
-      </p>
-    </div>
-  </div>
-{/if}
 
 <style>
   /* Connecting tiles: a pronounced opacity wave - Tailwind's pulse was too
