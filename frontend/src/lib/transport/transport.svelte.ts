@@ -1597,31 +1597,39 @@ async function _handleChatMessage(
     msg.type !== MessageType.PluginUpdate &&
     !isSelfSender(msg.senderId)
   ) {
-    let body = msg.content || "[file]";
-    if (msg.type === MessageType.PluginCard) {
-      try {
-        const payload = JSON.parse(msg.content);
-        const { getManifest } = await import("../plugins/registry");
-        const manifest = getManifest(payload.pluginId);
-        body = `posted a ${manifest?.name || payload.pluginId}`;
-      } catch {
-        body = "posted a plugin card";
+    // This whole block sits between putMessage and appendSorted: an
+    // uncaught throw here (a bad mention resolve, a notification quirk)
+    // turns "stored" into "invisible until refresh" for every message
+    // after it. Notifying is best-effort; painting the message is not.
+    try {
+      let body = msg.content || "[file]";
+      if (msg.type === MessageType.PluginCard) {
+        try {
+          const payload = JSON.parse(msg.content);
+          const { getManifest } = await import("../plugins/registry");
+          const manifest = getManifest(payload.pluginId);
+          body = `posted a ${manifest?.name || payload.pluginId}`;
+        } catch {
+          body = "posted a plugin card";
+        }
+      } else {
+        body = humanizeMentions(body, resolveMentionDisplayName);
       }
-    } else {
-      body = humanizeMentions(body, resolveMentionDisplayName);
+      const mentioned = mentionsMe(msg.content ?? "", [
+        identityStore.did ?? "",
+        _transport.selfId(),
+      ]);
+      notifyMessage({
+        title: mentioned
+          ? `${msg.senderName} mentioned you`
+          : transportState.roomName || msg.roomCode,
+        body: `${msg.senderName}: ${body}`,
+        tag: `room:${msg.roomCode}`,
+        viewingConversation: transportState.uiRoomCode === msg.roomCode,
+      });
+    } catch (err) {
+      console.warn("[chat] notification failed:", err);
     }
-    const mentioned = mentionsMe(msg.content ?? "", [
-      identityStore.did ?? "",
-      _transport.selfId(),
-    ]);
-    notifyMessage({
-      title: mentioned
-        ? `${msg.senderName} mentioned you`
-        : transportState.roomName || msg.roomCode,
-      body: `${msg.senderName}: ${body}`,
-      tag: `room:${msg.roomCode}`,
-      viewingConversation: transportState.uiRoomCode === msg.roomCode,
-    });
   }
 
   // Match on the open room, not the mode: DM file messages arrive through
