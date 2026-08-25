@@ -147,7 +147,9 @@
   const draftMentionMap = new Map<string, string>();
   let replyTargetId = $state<string | null>(null);
   let reactionPickerFor = $state<string | null>(null);
-  let emojiPickerPos = $state({ x: 0, y: 0 });
+  let reactionAnchor = $state<DOMRect | null>(null);
+  let composerEmojiOpen = $state(false);
+  let composerEmojiAnchor = $state<DOMRect | null>(null);
   let gifPickerOpen = $state(false);
   let hasMoreHistory = $state(true);
   let loadingMore = $state(false);
@@ -553,9 +555,29 @@
     requestAnimationFrame(() => textareaEl?.focus());
   }
 
-  function openReactionPicker(msgId: string, e: MouseEvent) {
-    emojiPickerPos = { x: e.clientX - 40, y: e.clientY - 12 };
+  function openReactionPicker(msgId: string, trigger: HTMLElement) {
+    reactionAnchor = trigger.getBoundingClientRect();
     reactionPickerFor = msgId;
+  }
+
+  /** Drop an emoji in at the caret, replacing any selection. */
+  function insertEmoji(emoji: string) {
+    const el = textareaEl;
+    if (!el) {
+      draft += emoji;
+      return;
+    }
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    draft = draft.slice(0, start) + emoji + draft.slice(end);
+    // The value lands on the next flush, so the caret has to wait for it.
+    requestAnimationFrame(() => {
+      if (!textareaEl) return;
+      const caret = start + emoji.length;
+      textareaEl.focus();
+      textareaEl.setSelectionRange(caret, caret);
+      autoResize();
+    });
   }
 
   function jumpToMessage(messageId: string) {
@@ -1638,7 +1660,7 @@
                       if (reactionPickerFor === msg.id) {
                         reactionPickerFor = null;
                       } else {
-                        openReactionPicker(msg.id, e as MouseEvent);
+                        openReactionPicker(msg.id, e.currentTarget);
                       }
                       activeMessageId = null;
                     }}
@@ -1821,7 +1843,7 @@
           }}
           placeholder="Type a message..."
           rows={1}
-          class="w-full resize-none rounded-md border border-input bg-background pl-3 pr-20 py-2 text-sm text-foreground placeholder:text-muted-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring min-h-10 max-h-30 overflow-y-auto"
+          class="w-full resize-none rounded-md border border-input bg-background pl-3 pr-28 py-2 text-sm text-foreground placeholder:text-muted-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring min-h-10 max-h-30 overflow-y-auto"
         ></textarea>
         {#if commandHint}
           <p class="absolute bottom-full left-0 mb-1 rounded bg-popover border border-border px-2 py-1 font-mono text-xs text-muted-foreground">
@@ -1882,6 +1904,26 @@
                 class="size-8 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
               >
                 <Paperclip class="size-4" />
+              </Button>
+            {/snippet}
+          </Tip>
+          <Tip text="Insert emoji">
+            {#snippet children(props)}
+              <Button
+                {...props}
+                type="button"
+                variant="ghost"
+                size="icon"
+                onclick={(e: MouseEvent) => {
+                  composerEmojiAnchor = (
+                    e.currentTarget as HTMLElement
+                  ).getBoundingClientRect();
+                  composerEmojiOpen = !composerEmojiOpen;
+                }}
+                aria-label="Insert emoji"
+                class="size-8 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
+              >
+                <Smile class="size-4" />
               </Button>
             {/snippet}
           </Tip>
@@ -1955,8 +1997,7 @@
 
 <EmojiPickerPopup
   open={reactionPickerFor !== null}
-  x={emojiPickerPos.x}
-  y={emojiPickerPos.y}
+  anchor={reactionAnchor}
   onClose={() => {
     reactionPickerFor = null;
     activeMessageId = null;
@@ -1967,6 +2008,13 @@
     reactionPickerFor = null;
     activeMessageId = null;
   }}
+/>
+
+<EmojiPickerPopup
+  open={composerEmojiOpen}
+  anchor={composerEmojiAnchor}
+  onClose={() => (composerEmojiOpen = false)}
+  onSelect={insertEmoji}
 />
 
 {#if userMenu}
