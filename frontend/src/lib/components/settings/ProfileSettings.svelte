@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { Label } from "$lib/components/ui/label";
   import { Button } from "$lib/components/ui/button";
   import {
@@ -77,6 +77,8 @@
   let bannerPickerOpen = $state(false);
   let gradient2Value = $state("#a855f7");
   let gradient3Value = $state<string | null>(null);
+  let gradient3El = $state<HTMLInputElement | null>(null);
+  let addColorEl = $state<HTMLButtonElement | null>(null);
 
   const profileInitial = $derived(
     (profileStore.nickname || nameValue || "?").charAt(0).toUpperCase()
@@ -226,6 +228,12 @@
         <div
           class="contents"
           onfocusout={(e) => {
+            // A focused control Svelte just swapped out of the DOM (the
+            // + color button replacing itself with the input) fires
+            // focusout with relatedTarget null - indistinguishable from a
+            // click-away except the target is no longer connected. Only a
+            // still-connected target means focus really left the editor.
+            if (!(e.target as HTMLElement).isConnected) return;
             const editor = e.currentTarget as HTMLElement;
             if (!editor.contains(e.relatedTarget as Node)) commitName();
           }}
@@ -290,6 +298,7 @@
             {#if gradient3Value !== null}
               <input
                 type="color"
+                bind:this={gradient3El}
                 bind:value={gradient3Value}
                 onchange={commitGradients}
                 aria-label="Third gradient color"
@@ -297,9 +306,13 @@
               />
               <button
                 type="button"
-                onclick={() => {
+                onclick={async () => {
                   gradient3Value = null;
                   commitGradients();
+                  // The clicked button just unmounted itself; park focus
+                  // back inside so the next click-away still commits.
+                  await tick();
+                  addColorEl?.focus();
                 }}
                 aria-label="Remove third color"
                 class="cursor-pointer font-mono text-xs text-muted-foreground hover:text-destructive"
@@ -308,9 +321,12 @@
             {:else}
               <button
                 type="button"
-                onclick={() => {
+                bind:this={addColorEl}
+                onclick={async () => {
                   gradient3Value = "#22d3ee";
                   commitGradients();
+                  await tick();
+                  gradient3El?.focus();
                 }}
                 aria-label="Add a third color"
                 class="cursor-pointer rounded border border-dashed border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:border-primary/60 hover:text-foreground"
