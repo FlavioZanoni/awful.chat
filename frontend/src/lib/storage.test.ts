@@ -279,6 +279,39 @@ describe("markOwnMessagesReadUpTo", () => {
 });
 
 describe("history pagination", () => {
+  it("plugin updates never consume page slots", async () => {
+    // One steam-roulette link writes ~40 PluginUpdate rows; letting them
+    // fill the newest page hid two weeks of real messages behind one
+    // afternoon of plugin traffic.
+    const rows = [];
+    for (let i = 1; i <= 5; i++) {
+      rows.push(msg({ id: `old-${i}`, roomCode: "room-pu", lamport: i }));
+    }
+    for (let i = 6; i <= 80; i++) {
+      rows.push(
+        msg({
+          id: `upd-${i}`,
+          roomCode: "room-pu",
+          lamport: i,
+          type: MessageType.PluginUpdate,
+          content: JSON.stringify({ pluginId: "p", cardId: "c", data: {} }),
+        })
+      );
+    }
+    await bulkPutMessages(rows);
+
+    const page = await getMessages("room-pu");
+    expect(page.map((m) => m.id)).toEqual([
+      "old-1",
+      "old-2",
+      "old-3",
+      "old-4",
+      "old-5",
+    ]);
+    // The unpaged sync read still sees everything.
+    expect(await getAllMessages("room-pu")).toHaveLength(80);
+  });
+
   it("pages backwards without overlap or gaps and reports the end", async () => {
     const rows = [];
     for (let i = 1; i <= 120; i++) {

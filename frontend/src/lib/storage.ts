@@ -291,7 +291,14 @@ export async function getMessages(
   let cursor = await index.openCursor(range, "prev");
 
   while (cursor && results.length < PAGE_SIZE) {
-    results.push(cursor.value);
+    // Plugin updates are stored as messages but never rendered (card state
+    // replays them from storage directly). Letting them fill the page meant
+    // one steam-roulette library link (~40 update rows per member) pushed
+    // every real message out of the newest page: a 15-day room showed only
+    // today. They must not consume page slots.
+    if (cursor.value.type !== MessageType.PluginUpdate) {
+      results.push(cursor.value);
+    }
     cursor = await cursor.continue();
   }
 
