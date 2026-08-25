@@ -340,7 +340,7 @@
     </div>
     <div class="min-w-0 flex-1">
       {#if true}
-        {@const effectStyle = nameEffectStyle(user.nameEffect, user.color, user.gradient2 ?? undefined, user.gradient3 ?? undefined)}
+        {@const effectStyle = nameEffectStyle(user.nameEffect ?? undefined, user.color ?? undefined, user.gradient2 ?? undefined, user.gradient3 ?? undefined)}
         <div
           class="text-sm font-medium truncate {user.isSelf
             ? 'text-primary'

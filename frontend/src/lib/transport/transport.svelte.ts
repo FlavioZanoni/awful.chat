@@ -20,6 +20,7 @@ import {
   getAttachmentsByMessage,
   updateMessageStatus,
   getMessage,
+  getAllRooms,
   getRoomParticipants,
   addRoomParticipant,
   removeRoomParticipant,
@@ -2346,6 +2347,39 @@ function _disconnectWithoutBroadcasting(): void {
   transportState.activeDmPeerId = null;
 }
 
+/**
+ * Chat used to ride gossipsub alone, and a publish into a dead or still-forming
+ * mesh is silently dropped (allowPublishToZeroTopicPeers) - only the slow
+ * digest rotation repaired it, which read as "messages take forever unless I
+ * refresh" while profiles stayed instant, because _sendProfile already sends
+ * belt-and-braces: the broadcast plus a direct copy per peer. Give chat the
+ * same insurance: after the publish, hand each connected peer that is KNOWN to
+ * be in the room a one-message SyncBatch. The batch receive path verifies
+ * signatures, refuses rooms it has not joined, dedups against storage and the
+ * view, and evicts plugin card state - so the duplicate costs nothing when
+ * gossip worked, and saves a refresh when it did not.
+ *
+ * Membership-gated on purpose: the roomCode is the room's join secret, and
+ * roomUsers holds the DIDs that already possess it. A connected-but-unbound
+ * peer gets no copy - gossip and sync still cover them.
+ */
+function _broadcastChatWire(wire: WireChatMessage, roomCode: string): void {
+  _transport.broadcast(encode(wire), roomCode);
+  const members = new Set(transportState.roomUsers);
+  const batch = encode({
+    type: MessageType.SyncBatch,
+    roomCode,
+    messages: [wire],
+    batchIndex: 0,
+    totalBatches: 1,
+  });
+  for (const pid of _transport.peers()) {
+    const did = _peerIdToDid.get(pid);
+    if (!did || !members.has(did)) continue;
+    _transport.send(pid, batch).catch(() => {});
+  }
+}
+
 export async function sendMessage(
   text: string,
   options: SendMessageOptions = {}
@@ -2381,7 +2415,7 @@ export async function sendMessage(
   // Sign the message before sending
   msg = signMessage(msg);
 
-  _transport.broadcast(encode(messageToWire(msg)), transportState.roomCode);
+  _broadcastChatWire(messageToWire(msg), transportState.roomCode);
 
   await putMessage(msg);
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
@@ -2511,7 +2545,7 @@ export async function sendFiles(
       }),
     };
   }
-  _transport.broadcast(encode(wire), transportState.roomCode);
+  _broadcastChatWire(wire, transportState.roomCode);
   await putMessage(msg);
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
 
@@ -2570,7 +2604,7 @@ export async function sendCard(
   // Sign the message
   msg = signMessage(msg);
 
-  _transport.broadcast(encode(messageToWire(msg)), transportState.roomCode);
+  _broadcastChatWire(messageToWire(msg), transportState.roomCode);
 
   await putMessage(msg);
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
@@ -2656,7 +2690,7 @@ export async function sendUpdate(
   // Sign the message
   msg = signMessage(msg);
 
-  _transport.broadcast(encode(messageToWire(msg)), transportState.roomCode);
+  _broadcastChatWire(messageToWire(msg), transportState.roomCode);
 
   // Persist non-ephemeral updates
   await putMessage(msg);
