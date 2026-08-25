@@ -139,6 +139,7 @@
   let commandPopupOpen = $state(false);
   let commandSelectedIndex = $state(0);
   let commandHint = $state<string | null>(null);
+  let commandHintTimer: ReturnType<typeof setTimeout> | undefined;
   let mentionPopupOpen = $state(false);
   let mentionPrefix = $state("");
   let mentionSelectedIndex = $state(0);
@@ -503,6 +504,9 @@
 
       if (!found) {
         commandHint = `Unknown command /${commandName} - type / to see what is available`;
+        // Typing clears it too, but a hint left alone must fade by itself.
+        clearTimeout(commandHintTimer);
+        commandHintTimer = setTimeout(() => (commandHint = null), 5000);
         return;
       }
     }

@@ -8,6 +8,8 @@ export interface PluginManifest {
   author?: string;
   /** SPDX-ish string, e.g. "MIT". Shown next to the author. */
   license?: string; // one line, shown in settings
+  /** Shown on the card header and in settings, e.g. "1.2.0". */
+  version?: string;
   /** An emoji, or a lucide icon as "lucide:<kebab-name>" (e.g. "lucide:dices"). */
   icon: string;
   apiVersion: 1;

@@ -4,9 +4,10 @@ export const manifest: PluginManifest = {
   id: "wheel",
   name: "Wheel decide",
   description: "Spin a wheel to settle what to play.",
-  icon: "🎡",
+  icon: "lucide:ferris-wheel",
   author: "awful.chat",
   license: "MIT",
+  version: "1.1.0",
   apiVersion: 1,
   commands: [{ name: "wheel", usage: "/wheel option1, option2, ..." }],
 };

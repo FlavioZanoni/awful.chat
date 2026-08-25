@@ -544,14 +544,26 @@
            so <pluginCardComponent> mounted NOTHING - an empty unknown
            element where the poll should be. -->
       {@const PluginCardUi = pluginCardComponent}
+      {@const pluginManifest = getManifest(pluginCardPluginId)}
       <!-- Prop is cardState, NOT state: a binding named `state` makes
            Svelte 5 compile the component's own $state(...) runes as store
            subscriptions to the prop - .subscribe crash on mount. -->
-      <PluginCardUi
-        card={msg}
-        cardState={pluginCardState}
-        host={makeHostApi(pluginCardPluginId, msg.roomCode)}
-      />
+      <div
+        class="inline-block max-w-full rounded-lg border border-primary/25 bg-primary/[0.04] px-3 py-2.5"
+      >
+        <div class="mb-1.5 flex items-center justify-end">
+          <span class="font-mono text-[10px] text-muted-foreground">
+            {pluginManifest?.name ?? pluginCardPluginId}{pluginManifest?.version
+              ? ` v${pluginManifest.version}`
+              : ""}
+          </span>
+        </div>
+        <PluginCardUi
+          card={msg}
+          cardState={pluginCardState}
+          host={makeHostApi(pluginCardPluginId, msg.roomCode)}
+        />
+      </div>
     {/if}
   {:else}
     <p class="whitespace-pre-wrap">{@html linkifyText(msg.content)}</p>
