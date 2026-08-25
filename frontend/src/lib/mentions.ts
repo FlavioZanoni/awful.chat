@@ -6,9 +6,72 @@
  * are tamper-proof.
  */
 
+/** One run of draft text, tagged with the DID when it is a real mention. */
+export interface DraftSegment {
+  /** The text exactly as it appears in the draft (mentions keep their `@`). */
+  text: string;
+  /** DID for a recorded mention, `null` for plain text. */
+  did: string | null;
+}
+
+/**
+ * Split a draft into plain-text and mention runs.
+ *
+ * This is the single place that decides which `@Name` in a draft is a real
+ * mention. Both the wire serializer and the composer's highlight read it, so
+ * what the user sees highlighted is exactly what gets signed as `@[did]` -
+ * they cannot drift apart.
+ *
+ * Only names the user picked from the mention popup count. Hand-typed
+ * `@Charlie` stays literal text, and `@Alice-bot` does not match `Alice`.
+ *
+ * @param content The draft with human-readable names
+ * @param nameToDidMap Map from display names to DIDs
+ * @returns The draft split into consecutive segments (concatenating `text`
+ *   reproduces `content` exactly)
+ */
+export function segmentDraft(
+  content: string,
+  nameToDidMap: Map<string, string>
+): DraftSegment[] {
+  if (!content) return [];
+
+  // Longest name first: a JS alternation takes the first branch that matches
+  // at a position, so this order IS the collision precedence. With both "Ana"
+  // and "Anna" recorded, "@Anna" must not resolve to "Ana".
+  const names = Array.from(nameToDidMap.keys()).sort(
+    (a, b) => b.length - a.length
+  );
+  if (names.length === 0) return [{ text: content, did: null }];
+
+  // The trailing guard keeps "@Alice-bot" and "@Alices" literal.
+  const pattern = new RegExp(
+    `@(?:${names.map(escapeRegex).join("|")})(?![\\w-])`,
+    "g"
+  );
+
+  const segments: DraftSegment[] = [];
+  let cursor = 0;
+
+  for (const match of content.matchAll(pattern)) {
+    const did = nameToDidMap.get(match[0].slice(1));
+    if (did === undefined) continue;
+    if (match.index > cursor) {
+      segments.push({ text: content.slice(cursor, match.index), did: null });
+    }
+    segments.push({ text: match[0], did });
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < content.length) {
+    segments.push({ text: content.slice(cursor), did: null });
+  }
+
+  return segments;
+}
+
 /**
  * Replace all recorded @Name mentions with @[did] tokens in content.
- * Processes names in longest-first order to avoid prefix collisions.
  * Unrecorded @something text is left untouched.
  *
  * @param content The message content with human-readable names
@@ -19,21 +82,11 @@ export function serialize(
   content: string,
   nameToDidMap: Map<string, string>
 ): string {
-  // Sort by name length descending to handle prefix collisions
-  // e.g., if both "Ana" and "Anna" are mentioned, replace "Anna" first
-  const entries = Array.from(nameToDidMap.entries()).sort(
-    (a, b) => b[0].length - a[0].length
-  );
-
-  let result = content;
-  for (const [name, did] of entries) {
-    // Match @Name (with word boundary to avoid partial matches)
-    // Use case-sensitive replacement since names are exact
-    const regex = new RegExp(`@${escapeRegex(name)}(?![\\w-])`, "g");
-    result = result.replace(regex, `@[${did}]`);
-  }
-
-  return result;
+  return segmentDraft(content, nameToDidMap)
+    .map((segment) =>
+      segment.did === null ? segment.text : `@[${segment.did}]`
+    )
+    .join("");
 }
 
 /**
