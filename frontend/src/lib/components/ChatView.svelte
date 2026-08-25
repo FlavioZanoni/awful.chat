@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import type { Message } from "$lib/transport/transport.svelte";
   import { MessageType } from "$lib/types/message";
   import {
@@ -242,6 +243,31 @@
     if (!messagesEl) return;
     const { scrollHeight, scrollTop, clientHeight } = messagesEl;
     autoScroll = scrollHeight - scrollTop - clientHeight < 40;
+    // Reaching the top fetches the next page - the button alone was gated on
+    // 50+ VISIBLE messages, and a page full of invisible rows (reactions,
+    // plugin updates) kept the count below that forever: two weeks of
+    // history with no way to scroll to it.
+    if (
+      scrollTop < 80 &&
+      initialScrollDone &&
+      hasMoreHistory &&
+      !loadingMore
+    ) {
+      void loadOlderPreservingScroll();
+    }
+  }
+
+  /** Prepending grows the container upward; without compensation the view
+   *  jumps to the oldest loaded message and re-triggers the top fetch. */
+  async function loadOlderPreservingScroll() {
+    if (!messagesEl) return;
+    const prevHeight = messagesEl.scrollHeight;
+    const prevTop = messagesEl.scrollTop;
+    await handleLoadMore();
+    await tick();
+    if (messagesEl) {
+      messagesEl.scrollTop = prevTop + (messagesEl.scrollHeight - prevHeight);
+    }
   }
 
   $effect(() => {
@@ -1335,12 +1361,12 @@
       onscroll={handleScroll}
       class="chat-messages flex-1 overflow-y-auto overflow-x-hidden px-4 py-2 min-h-0"
     >
-      {#if hasMoreHistory && visibleMessages.length >= 50}
+      {#if hasMoreHistory && visibleMessages.length > 0}
         <div class="flex justify-center py-2">
           <Button
             variant="ghost"
             size="sm"
-            onclick={handleLoadMore}
+            onclick={loadOlderPreservingScroll}
             disabled={loadingMore}
             class="gap-1.5 text-xs text-muted-foreground font-mono cursor-pointer"
           >
