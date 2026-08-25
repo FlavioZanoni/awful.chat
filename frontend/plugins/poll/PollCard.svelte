@@ -52,7 +52,8 @@
   const myVote = $derived(pollState.votes.get(host.selfDid())?.vote ?? null);
 </script>
 
-<div class="flex flex-col gap-4 max-w-sm">
+<!-- w-full: the host frame sets the default card size; the poll fills it. -->
+<div class="flex w-full flex-col gap-4">
   <div class="font-mono font-semibold text-sm">{pollState.question}</div>
 
   {#if pollState.options.length === 0}

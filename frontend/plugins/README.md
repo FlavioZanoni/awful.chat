@@ -76,6 +76,12 @@ host API. The prop is `cardState`, never `state`: in Svelte 5 a binding
 named `state` makes the compiler treat your own `$state(...)` runes as store
 subscriptions to that prop, and the component crashes on mount.
 
+The host renders every card inside a framed container with a default
+minimum size (about 38rem wide, capped to the chat column on small
+screens) and the plugin name and version in its header. Give your card's
+root `w-full` and let the frame own the sizing; only cap inner elements
+that should not stretch (a banner image, a fixed-size canvas).
+
 **Updates** attach to a card. `host.sendUpdate(cardId, data)` persists and
 replays; `{ ephemeral: true }` sends live-only (cursors, ticks) and is capped
 at ~4 per second per sender. Your `reduce(state, update, ctx)` folds them:

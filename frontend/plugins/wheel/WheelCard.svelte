@@ -95,7 +95,8 @@
   }
 </script>
 
-<div class="flex max-w-sm flex-col items-center gap-3">
+<!-- w-full + centered: the host frame sets the default card size. -->
+<div class="flex w-full flex-col items-center gap-3">
   {#if wheelState.options.length === 0}
     <div class="text-xs text-muted-foreground">No options configured</div>
   {:else}

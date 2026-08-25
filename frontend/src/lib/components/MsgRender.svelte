@@ -548,8 +548,11 @@
       <!-- Prop is cardState, NOT state: a binding named `state` makes
            Svelte 5 compile the component's own $state(...) runes as store
            subscriptions to the prop - .subscribe crash on mount. -->
+      <!-- The frame owns the default card size: every plugin gets the same
+           minimum canvas instead of each card guessing its own width, and
+           min() keeps it inside the bubble on phones. -->
       <div
-        class="inline-block max-w-full rounded-lg border border-primary/25 bg-primary/[0.04] px-3 py-2.5"
+        class="inline-block min-w-[min(38rem,100%)] min-h-24 max-w-full rounded-lg border border-primary/25 bg-primary/[0.04] px-3 py-2.5"
       >
         <div class="mb-1.5 flex items-center justify-end">
           <span class="font-mono text-[10px] text-muted-foreground">
