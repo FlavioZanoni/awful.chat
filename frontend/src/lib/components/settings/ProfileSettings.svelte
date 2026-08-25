@@ -218,16 +218,19 @@
 
       <!-- Name + tag row -->
       {#if editing === "name"}
-        <!-- Commit when focus leaves the whole row: committing on the
-             INPUT's blur closed the editor the moment the color or effect
-             control was clicked, unmounting it mid-interaction. -->
+        <!-- Commit when focus leaves the whole EDITOR, pills and gradient
+             stops included: with the handler on just the name row, pressing
+             an effect pill blurred the input, committed, and unmounted the
+             editor before mouseup - the pick never landed. display:contents
+             keeps the layout while giving focusout one shared boundary. -->
         <div
-          class="flex flex-wrap items-center gap-2"
+          class="contents"
           onfocusout={(e) => {
-            const row = e.currentTarget as HTMLElement;
-            if (!row.contains(e.relatedTarget as Node)) commitName();
+            const editor = e.currentTarget as HTMLElement;
+            if (!editor.contains(e.relatedTarget as Node)) commitName();
           }}
         >
+        <div class="flex flex-wrap items-center gap-2">
           <input
             use:focusOnMount
             bind:value={nameValue}
@@ -316,6 +319,7 @@
             {/if}
           </div>
         {/if}
+        </div>
       {:else}
         <div class="flex flex-wrap items-center gap-2">
           <button

@@ -55,7 +55,7 @@ export function humanize(
     // escaping here is what stands between a nickname like
     // "<img onerror=...>" and script execution in every viewer.
     const name = escapeHtml(resolveName(did));
-    return `<span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-sm font-medium bg-primary/15 text-primary ring-1 ring-primary/30">@${name}</span>`;
+    return `<span class="font-medium text-primary">@${name}</span>`;
   });
 }
 

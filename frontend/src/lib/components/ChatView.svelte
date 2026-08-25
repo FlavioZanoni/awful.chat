@@ -49,7 +49,9 @@
     loadMoreMessages,
     markSeen,
     requestFileDownload,
+    resolveMentionDisplayName,
   } from "$lib/transport/transport.svelte";
+  import { humanizeMentions } from "$lib/mentions";
   import { roomsStore, refreshPhonebook } from "$lib/rooms.svelte";
   import { formatReactorNames } from "$lib/reaction-names";
   import {
@@ -1416,7 +1418,12 @@
                       class="text-muted-foreground -ml-5 transform -scale-x-100"
                     />
                     <span class="font-semibold">{msg.replyTo.senderName}</span>
-                    <span class="truncate">{msg.replyTo.content}</span>
+                    <span class="truncate"
+                      >{humanizeMentions(
+                        msg.replyTo.content,
+                        resolveMentionDisplayName
+                      )}</span
+                    >
                   </button>
                 {/if}
 
@@ -1674,7 +1681,9 @@
             >{displayName(replyTarget)}</span
           >
           <span class="mx-1">•</span>
-          <span class="truncate">{replyTarget.content}</span>
+          <span class="truncate"
+            >{humanizeMentions(replyTarget.content, resolveMentionDisplayName)}</span
+          >
         </div>
         <Tip text="Cancel reply (Esc)">
           {#snippet children(props)}
