@@ -242,7 +242,10 @@
   function handleScroll() {
     if (!messagesEl) return;
     const { scrollHeight, scrollTop, clientHeight } = messagesEl;
-    autoScroll = scrollHeight - scrollTop - clientHeight < 40;
+    // "At the bottom" within 120px: the old 40px meant stopping half a
+    // message short of the end - one flick of momentum scroll on mobile -
+    // silently stopped the view from following new arrivals.
+    autoScroll = scrollHeight - scrollTop - clientHeight < 120;
     // Reaching the top fetches the next page - the button alone was gated on
     // 50+ VISIBLE messages, and a page full of invisible rows (reactions,
     // plugin updates) kept the count below that forever: two weeks of
