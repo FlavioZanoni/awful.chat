@@ -163,9 +163,12 @@ for (const source of sources) {
 }
 
 writeFileSync(FETCHED_MANIFEST, JSON.stringify(fetched, null, 2));
-// Keep the working tree clean in dev: fetched plugins are not repo content.
-writeFileSync(
-  join(PLUGINS_DIR, ".gitignore"),
-  ["/.fetched.json", "/.gitignore", ...fetched.map((id) => `/${id}/`)].join("\n") + "\n"
-);
+// NEVER leave ignore rules covering fetched plugins: Tailwind v4's source
+// detection honors gitignore rules (any of them - a plugins/.gitignore,
+// the repo root's, even .git/info/exclude, and @source does not override),
+// so an ignored plugin builds with NONE of its utility classes - unstyled
+// strips, default blue range inputs, in every deployed image. Keeping the
+// working tree clean is not worth shipping broken CSS; fetched plugins
+// simply show as untracked in dev.
+rmSync(join(PLUGINS_DIR, ".gitignore"), { force: true });
 console.log(`[fetch-plugins] done: ${fetched.length} plugin(s)`);

@@ -1,0 +1,26 @@
+#!/bin/sh
+# Block committing outsider plugins. Fetched/dev plugin folders under
+# frontend/plugins/ are deliberately NOT gitignored - Tailwind's source
+# detection honors ignore rules (all of them, @source cannot override) and
+# an ignored plugin ships with none of its CSS. This hook is the hygiene
+# layer instead: anything under frontend/plugins/ whose top-level entry is
+# not already tracked in HEAD is refused.
+#
+# Adding a NEW built-in on purpose: commit it with --no-verify once.
+
+blocked=""
+for f in $(git diff --cached --name-only -- frontend/plugins/); do
+  entry=${f#frontend/plugins/}
+  entry=${entry%%/*}
+  if ! git ls-tree --name-only HEAD "frontend/plugins/$entry" | grep -q .; then
+    blocked="$blocked\n  $f"
+  fi
+done
+
+if [ -n "$blocked" ]; then
+  printf "pre-commit: refusing to commit outsider plugin files:%b\n" "$blocked"
+  printf "Fetched and dev plugins live outside this repo (PLUGIN_SOURCES).\n"
+  printf "If this really is a new BUILT-IN plugin, commit with --no-verify.\n"
+  exit 1
+fi
+exit 0
