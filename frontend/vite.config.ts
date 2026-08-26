@@ -42,6 +42,10 @@ export default defineConfig(({ mode }) => ({
         short_name: "Awful.chat",
         description:
           "End-to-end encrypted P2P chat with voice, video, and file sharing. Open source. No accounts, no phone numbers, no personal data required.",
+        // NEVER change this id. Browsers key installed PWAs by it: the one
+        // historical change ("awfulchat" -> "/") is why some devices carry
+        // two Awful.chat icons - each id is a separate app to the OS, and
+        // no code can merge or remove an already-installed one.
         id: "/",
         scope: "/",
         start_url: "/app",
