@@ -245,7 +245,9 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
     Entering this password at the unlock screen instead of your real one
     silently and permanently erases this device's data - messages, files,
     identity - and shows the fresh-install screen. Your account survives on
-    other devices and through your recovery phrase.
+    other devices and through your recovery phrase. Setting it clears any
+    remembered password on this device (auto-unlock would skip the screen
+    where you would type it).
   </p>
   {#if duressEnabled}
     <p class="text-xs text-green-500 font-mono">A duress password is set</p>

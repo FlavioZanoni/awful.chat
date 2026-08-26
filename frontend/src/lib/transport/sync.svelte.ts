@@ -26,7 +26,15 @@ import {
 } from "../storage";
 import type { Message, Attachment, PendingMessage } from "../types/message";
 import { bytesToBase64 } from "../utils";
-import { openRows, sealRow, STORE_SPECS } from "../storage-crypto";
+import {
+  openRows,
+  sealRow,
+  STORE_SPECS,
+  beginPlaintextImport,
+  clearStorageCrypto,
+  storageCryptoReady,
+} from "../storage-crypto";
+import { markAtRestSweepNeeded } from "../storage";
 import type {
   Room,
   DMRoom,
@@ -789,7 +797,14 @@ async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
       .getAll("pending")
       .then((r) => openRows<PendingMessage>(r, STORE_SPECS.pending)),
     db.getAll("watermarks"),
-    db.getAll("yjsDocs"),
+    db
+      .getAll("yjsDocs")
+      .then((r) => openRows(r, STORE_SPECS.yjsDocs))
+      .then((docs) =>
+        (docs as { id: string; update: Uint8Array | ArrayBuffer }[]).map(
+          (d) => ({ id: d.id, update: new Uint8Array(d.update as ArrayBuffer) })
+        )
+      ),
     db.getAll("rooms").then((r) => openRows(r, STORE_SPECS.rooms)),
     db.getAll("profiles").then((r) => openRows(r, STORE_SPECS.profiles)),
     db.getAll("savedGifs").then((r) => openRows(r, STORE_SPECS.savedGifs)),
@@ -840,7 +855,31 @@ async function importDatabase(
     // Clear existing data first
     console.log("[Sync] Wiping local database (replace mode)");
     await wipeLocalDatabase();
+    // Replace mode installs a possibly DIFFERENT identity. Sealing the
+    // imported rows with the currently armed key would brick them for the
+    // identity that owns them, so drop the key: the rows land plaintext and
+    // the first unlock as the RIGHT identity derives the right key and
+    // sweeps them sealed. (DataSettings reloads after a replace restore, so
+    // the stale session never touches storage again.)
+    clearStorageCrypto();
   }
+  // A fresh sync target has never unlocked, so no at-rest key exists yet -
+  // there is nothing to derive it from until the user types their password.
+  // Inside this window sealRow passes rows through as plaintext instead of
+  // throwing, and the sweep flag makes the first unlock seal all of it.
+  const endPlaintextImport = beginPlaintextImport();
+  if (!storageCryptoReady()) markAtRestSweepNeeded();
+  try {
+    await importDatabaseInner(data, mode);
+  } finally {
+    endPlaintextImport();
+  }
+}
+
+async function importDatabaseInner(
+  data: DatabaseExport,
+  mode: "add" | "replace"
+): Promise<void> {
 
   // Import identity only if provided (not provided in "add" mode)
   if (data.identity) {
@@ -958,10 +997,13 @@ async function importDatabase(
     ...data.yjsDocs.map((doc) => {
       return (async () => {
         const db = await getDB();
-        await db.put("yjsDocs", {
-          id: doc.id,
-          update: new Uint8Array(doc.update),
-        });
+        await db.put(
+          "yjsDocs",
+          (await sealRow(
+            { id: doc.id, update: new Uint8Array(doc.update) },
+            STORE_SPECS.yjsDocs
+          )) as unknown as { id: string; update: Uint8Array }
+        );
       })();
     }),
   ]);

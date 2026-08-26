@@ -3,6 +3,7 @@ import { deleteDB, openDB, type IDBPDatabase } from "idb";
 import {
   sealRow,
   openRow,
+  openRows,
   isSealed,
   rowHasBytes,
   storageCryptoReady,
@@ -295,11 +296,18 @@ async function _open<T>(
   row: T | undefined
 ): Promise<T | undefined> {
   if (row === undefined) return undefined;
-  return openRow<T>(row, STORE_SPECS[store]);
+  try {
+    return await openRow<T>(row, STORE_SPECS[store]);
+  } catch (err) {
+    // One undecryptable row (truncated blob, foreign key) degrades to one
+    // missing row, never to a thrown query.
+    console.warn(`[storage] dropped undecryptable ${store} row:`, err);
+    return undefined;
+  }
 }
 
 async function _openAll<T>(store: EncryptedStoreName, rows: T[]): Promise<T[]> {
-  return Promise.all(rows.map((r) => openRow<T>(r, STORE_SPECS[store])));
+  return openRows<T>(rows, STORE_SPECS[store]);
 }
 
 /**
@@ -546,8 +554,17 @@ export async function markOwnMessagesReadUpTo(
   if (!changed.length) return [];
 
   const tx = database.transaction("messages", "readwrite");
-  await Promise.all([...changed.map((m) => tx.store.put(m)), tx.done]);
-  return changed.map((m) => m.id);
+  const written: string[] = [];
+  for (const m of changed) {
+    // Skip rows deleted while the crypto ran; "read" is the max rank, so
+    // overwriting a surviving row can never regress it.
+    const fresh = await tx.store.get(m.id);
+    if (!fresh) continue;
+    await tx.store.put(m);
+    written.push(m.id);
+  }
+  await tx.done;
+  return written;
 }
 
 /** Advance a message's delivery status. Never regresses (read stays read). */
@@ -567,7 +584,20 @@ export async function updateMessageStatus(
   ) {
     return;
   }
-  await database.put("messages", await _seal("messages", { ...message, status }));
+  const sealed = await _seal("messages", { ...message, status });
+  // The crypto ran outside any transaction; re-check against the freshest
+  // row (status is a clear field on sealed rows) so a read-cascade that
+  // landed meanwhile is never regressed, and a deleted row never returns.
+  const tx = database.transaction("messages", "readwrite");
+  const fresh = await tx.store.get(id);
+  if (
+    fresh &&
+    (!fresh.status ||
+      MESSAGE_STATUS_RANK[fresh.status] < MESSAGE_STATUS_RANK[status])
+  ) {
+    await tx.store.put(sealed);
+  }
+  await tx.done;
 }
 
 export async function getAttachment(
@@ -727,8 +757,13 @@ export async function updateAttachmentData(
   // seeding path may have advanced it while we were encrypting the blob.
   const tx = database.transaction("attachments", "readwrite");
   const fresh = await tx.store.get(id);
+  if (!fresh) {
+    // Deleted (room wipe) while the blob was encrypting: re-inserting it
+    // would leave an undeletable orphan.
+    await tx.done;
+    return;
+  }
   if (
-    fresh &&
     ATTACHMENT_STATUS_RANK[fresh.status] > ATTACHMENT_STATUS_RANK[sealed.status]
   ) {
     sealed.status = fresh.status;
@@ -948,11 +983,17 @@ export async function rekeyOwnProfile(
     (await database.get("profiles", from)) as OwnProfile | undefined
   );
   if (existing) {
-    await database.put(
-      "profiles",
-      await _seal("profiles", { ...existing, did: to, isMe: true as const })
-    );
-    await database.delete("profiles", from);
+    const sealed = await _seal("profiles", {
+      ...existing,
+      did: to,
+      isMe: true as const,
+    });
+    // Crypto done; put+delete in ONE transaction so an interruption can
+    // never leave two isMe rows behind.
+    const tx = database.transaction("profiles", "readwrite");
+    await tx.store.put(sealed);
+    await tx.store.delete(from);
+    await tx.done;
   }
 }
 
@@ -1166,10 +1207,30 @@ export async function wipeLocalDatabase(): Promise<void> {
   await deleteDB("awful-chat");
 }
 
+/** Close the cached connection without deleting anything - a
+ *  deleteDatabase from elsewhere (the duress wipe) blocks forever while
+ *  this module holds its handle open. */
+export function closeDatabase(): void {
+  if (db) {
+    db.close();
+    db = null;
+  }
+}
+
 // ── at-rest migration ────────────────────────────────────────────────────────
 
 const ATREST_DONE_FLAG = "awful:atrest:v1";
 let _migrationRunning = false;
+
+/** Call after any write that may have landed plaintext (a locked import):
+ *  the next unlock's sweep re-scans and seals it. */
+export function markAtRestSweepNeeded(): void {
+  try {
+    localStorage.removeItem(ATREST_DONE_FLAG);
+  } catch {
+    // Without localStorage the sweep always runs anyway.
+  }
+}
 
 /**
  * One-time background sweep re-encrypting rows written before at-rest
@@ -1195,26 +1256,35 @@ export async function migrateAtRest(): Promise<void> {
     for (const store of Object.keys(STORE_SPECS) as EncryptedStoreName[]) {
       for (;;) {
         // Collect one chunk of plaintext rows (no crypto inside the tx)...
-        const plain: Record<string, unknown>[] = [];
+        const plain: Array<{ key: IDBValidKey; row: Record<string, unknown> }> =
+          [];
         let cursor = await database.transaction(store).store.openCursor();
         while (cursor && plain.length < CHUNK) {
           if (!isSealed(cursor.value)) {
-            plain.push(cursor.value as unknown as Record<string, unknown>);
+            plain.push({
+              key: cursor.primaryKey,
+              row: cursor.value as unknown as Record<string, unknown>,
+            });
           }
           cursor = await cursor.continue();
         }
         if (plain.length === 0) break;
-        // ...seal it outside, write it back. put() replaces in place: every
-        // spec keeps the store's keyPath in its clear fields.
+        // ...seal it outside, write it back conditionally. Every app write
+        // seals, so a row that changed while our crypto ran is sealed by
+        // now - re-checking inside the (atomic) write transaction means the
+        // sweep can never clobber a live update with its stale pre-read.
         const sealed = await Promise.all(
-          plain.map((r) => sealRow(r, STORE_SPECS[store]))
+          plain.map((p) => sealRow(p.row, STORE_SPECS[store]))
         );
         const tx = database.transaction(store, "readwrite");
-        await Promise.all([
-          ...sealed.map((r) => tx.store.put(r as never)),
-          tx.done,
-        ]);
-        sealedCount += sealed.length;
+        for (let i = 0; i < sealed.length; i++) {
+          const fresh = await tx.store.get(plain[i].key as string);
+          if (fresh && !isSealed(fresh)) {
+            await tx.store.put(sealed[i] as never);
+            sealedCount += 1;
+          }
+        }
+        await tx.done;
         if (plain.length < CHUNK) break;
       }
     }

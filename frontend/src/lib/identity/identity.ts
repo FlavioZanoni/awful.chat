@@ -248,6 +248,17 @@ export async function restoreIdentity(
   const { privateKey, publicKey } = deriveKeypairFromMnemonic(mnemonic);
   const did = publicKeyToDid(publicKey);
 
+  // Restoring a DIFFERENT identity over this device: the stored rows are
+  // sealed under the old identity's key and can never decrypt under the new
+  // one - every read would fail forever. They are also not the new
+  // account's data to keep. Wipe; restoring the SAME identity (re-imported
+  // phrase) keeps local history, the derived key matches.
+  const existing = await getKeypairRecord();
+  if (existing && existing.did !== did) {
+    const { wipeLocalDatabase } = await import("../storage");
+    await wipeLocalDatabase();
+  }
+
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const aesKey = await AESFromPassword(password, salt);

@@ -6,6 +6,7 @@ import {
   openRow,
   isSealed,
   rowHasBytes,
+  beginPlaintextImport,
   STORE_SPECS,
 } from "./storage-crypto";
 
@@ -86,6 +87,30 @@ describe("storage at-rest crypto", () => {
     );
     await initStorageCrypto(new Uint8Array(32).fill(9));
     await expect(openRow(sealed, STORE_SPECS.messages)).rejects.toThrow();
+  });
+
+  it("a locked import window passes rows through plaintext, then the throw returns", async () => {
+    clearStorageCrypto();
+    const end = beginPlaintextImport();
+    const row = await sealRow(
+      { id: "p1", content: "imported before unlock" },
+      STORE_SPECS.messages
+    );
+    expect(isSealed(row)).toBe(false);
+    expect((row as { content?: string }).content).toBe("imported before unlock");
+    end();
+    await expect(sealRow({ id: "p2" }, STORE_SPECS.messages)).rejects.toThrow(
+      /locked/
+    );
+  });
+
+  it("openRows drops undecryptable rows instead of failing the query", async () => {
+    const good = await sealRow({ id: "g", content: "ok" }, STORE_SPECS.messages);
+    const bad = await sealRow({ id: "b", content: "broken" }, STORE_SPECS.messages);
+    (bad._enc.ct as ArrayBuffer) = bad._enc.ct.slice(0, 4); // truncate
+    const { openRows } = await import("./storage-crypto");
+    const out = await openRows<{ id: string }>([good, bad], STORE_SPECS.messages);
+    expect(out.map((r) => r.id)).toEqual(["g"]);
   });
 
   it("refuses to seal or open sealed rows while locked", async () => {

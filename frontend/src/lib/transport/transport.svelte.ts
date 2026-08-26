@@ -437,7 +437,12 @@ initFiles(_fileTransport);
 // the reactive map only ever filled from live messages, so a reload emptied
 // every card and name effect for anyone not currently online. Hydrate from
 // storage, but never overwrite what a live message already delivered.
-void getAllPeerProfiles()
+// Called from connect(), NOT at module scope: the module loads with the
+// unlock screen, and profile rows are sealed until the key is armed - the
+// module-scope version rejected on the first row, swallowed the error, and
+// never retried, emptying every offline peer's card again.
+function _hydratePeerProfileMeta(): void {
+  void getAllPeerProfiles()
   .then((profiles) => {
     const meta = new Map(transportState.peerProfileMeta);
     for (const p of profiles) {
@@ -457,6 +462,7 @@ void getAllPeerProfiles()
     transportState.peerProfileMeta = meta;
   })
   .catch(() => {});
+}
 
 const STATUS_RANK = { sending: 0, sent: 1, delivered: 2, read: 3 } as const;
 
@@ -2145,6 +2151,8 @@ function _scheduleConnectRetry(): void {
 
 export async function connect() {
   if (transportState.relayConnected) return;
+  // Post-unlock, so sealed profile rows are readable now.
+  _hydratePeerProfileMeta();
   // Fetch fresh short-lived TURN credentials for this session (best-effort;
   // falls back to bundled ICE servers if the relay doesn't issue them).
   refreshTurnCredentials().catch(() => {});

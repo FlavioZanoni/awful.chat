@@ -43,6 +43,27 @@ export interface StoreCryptoSpec {
 }
 
 let _key: CryptoKey | null = null;
+let _plaintextImportDepth = 0;
+
+/**
+ * Open a scoped window in which sealRow passes records through as PLAINTEXT
+ * when no key is armed, instead of throwing. Exists for exactly one caller:
+ * database import on a device that has not unlocked yet (QR device sync onto
+ * a fresh install, replace-mode backup restore) - there is no key to seal
+ * with because deriving it needs the password the user has not typed. The
+ * caller must mark the at-rest sweep as needed so the first unlock seals
+ * these rows. Everywhere else the no-key throw stands.
+ */
+export function beginPlaintextImport(): () => void {
+  _plaintextImportDepth += 1;
+  let ended = false;
+  return () => {
+    if (!ended) {
+      ended = true;
+      _plaintextImportDepth -= 1;
+    }
+  };
+}
 
 /** Derive and arm the storage key. Call on unlock, with the session's
  *  ed25519 private key scalar; the label separates this use from signing. */
@@ -109,6 +130,11 @@ export async function sealRow<T extends Record<string, unknown>>(
   record: T,
   spec: StoreCryptoSpec
 ): Promise<SealedRow> {
+  if (!_key && _plaintextImportDepth > 0) {
+    // Locked import: the row lands plaintext (legacy layout) and the
+    // at-rest sweep seals it on the first unlock.
+    return record as unknown as SealedRow;
+  }
   const key = requireKey();
   const out: Record<string, unknown> = {};
   const rest: Record<string, unknown> = {};
@@ -169,11 +195,26 @@ export function rowHasBytes(row: unknown, field: string): boolean {
   return !!(row as Record<string, unknown>)[field];
 }
 
+/** Open many rows, DROPPING the ones that fail to decrypt (truncated blob,
+ *  row sealed under a different identity's key) instead of failing the whole
+ *  query - one corrupt row must degrade to one missing row, not a blank app. */
 export async function openRows<T>(
   rows: unknown[],
   spec: StoreCryptoSpec
 ): Promise<T[]> {
-  return Promise.all(rows.map((r) => openRow<T>(r, spec)));
+  const settled = await Promise.allSettled(
+    rows.map((r) => openRow<T>(r, spec))
+  );
+  const out: T[] = [];
+  let dropped = 0;
+  for (const s of settled) {
+    if (s.status === "fulfilled") out.push(s.value);
+    else dropped += 1;
+  }
+  if (dropped > 0) {
+    console.warn(`[storage] dropped ${dropped} undecryptable row(s)`);
+  }
+  return out;
 }
 
 // ── per-store specs ──────────────────────────────────────────────────────────
@@ -206,6 +247,14 @@ export const STORE_SPECS = {
   },
   pending: {
     clear: ["id", "to"],
+  },
+  // Yjs updates ARE channel content; only watermarks (pure sync counters,
+  // needed clear for digest sweeps) and the identity store (already under
+  // the password's PBKDF2 key) stay outside this list. A NEW STORE added to
+  // the schema must be added here too, or it ships plaintext by omission.
+  yjsDocs: {
+    clear: ["id"],
+    bytes: ["update"],
   },
 } as const satisfies Record<string, StoreCryptoSpec>;
 

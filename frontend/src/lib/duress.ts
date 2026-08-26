@@ -17,7 +17,16 @@
  */
 
 const DURESS_KEY = "awful:duress:v1";
-const ITERATIONS = 100_000;
+// Same cost as the identity's PBKDF2 (identity.ts PBKDF2_ITERATIONS): a
+// cheaper duress check would make unlock timing reveal that a duress record
+// exists, and leave its hash 6x easier to brute-force than the real one.
+const ITERATIONS = 600_000;
+
+/** Every IndexedDB database this origin creates. The wipe must name them
+ *  explicitly for engines without indexedDB.databases(): awful-auth holds
+ *  the remembered REAL password, awful-share-target raw shared files -
+ *  precisely what must not survive a wipe. */
+const KNOWN_DBS = ["awful-chat", "awful-auth", "awful-share-target"];
 
 interface DuressRecord {
   salt: string; // base64
@@ -77,6 +86,17 @@ export async function setDuressPassword(password: string): Promise<void> {
       iterations: ITERATIONS,
     } satisfies DuressRecord)
   );
+  // A remembered password auto-unlocks past the duress screen - the coerced
+  // user would never get to type anything. The two features are mutually
+  // exclusive on a device.
+  try {
+    const { clearRememberedPassword } = await import(
+      "./identity/remembered-password"
+    );
+    await clearRememberedPassword();
+  } catch {
+    /* nothing remembered */
+  }
 }
 
 export function clearDuressPassword(): void {
@@ -106,26 +126,8 @@ export async function isDuressPassword(password: string): Promise<boolean> {
  * Never returns.
  */
 export async function executeDuressWipe(): Promise<never> {
-  const jobs: Promise<unknown>[] = [];
-
-  try {
-    // databases() lists everything (share-target's DB included); the fixed
-    // name is the fallback for browsers without it.
-    const dbs = (await indexedDB.databases?.()) ?? [{ name: "awful-chat" }];
-    for (const { name } of dbs) {
-      if (name) {
-        jobs.push(
-          new Promise((resolve) => {
-            const req = indexedDB.deleteDatabase(name);
-            req.onsuccess = req.onerror = req.onblocked = () => resolve(null);
-          })
-        );
-      }
-    }
-  } catch {
-    // Fall through - storage clears below still run.
-  }
-
+  // Web storage first: even if a database delete ends up blocked, no trace
+  // that a duress password existed (or was typed) survives this line.
   try {
     localStorage.clear();
   } catch {
@@ -137,6 +139,38 @@ export async function executeDuressWipe(): Promise<never> {
     /* same */
   }
 
+  // Our own open connection would block deleteDatabase forever - boot
+  // already opened it to read the identity record before the unlock screen.
+  try {
+    const { closeDatabase } = await import("./storage");
+    closeDatabase();
+  } catch {
+    /* module not loaded: nothing holding the handle */
+  }
+
+  const jobs: Promise<unknown>[] = [];
+  // databases() where available, ALWAYS unioned with the known names - a
+  // listing that omits one must not save it.
+  const names = new Set<string>(KNOWN_DBS);
+  try {
+    for (const d of (await indexedDB.databases?.()) ?? []) {
+      if (d.name) names.add(d.name);
+    }
+  } catch {
+    /* fall back to the known list */
+  }
+  for (const name of names) {
+    jobs.push(
+      new Promise((resolve) => {
+        const req = indexedDB.deleteDatabase(name);
+        req.onsuccess = req.onerror = () => resolve(null);
+        // onblocked (another tab holds a connection) is NOT success: keep
+        // waiting - the delete completes the moment the holder closes, and
+        // the timeout below stops a wedged wipe from hanging forever.
+      })
+    );
+  }
+
   try {
     const keys = await caches.keys();
     jobs.push(...keys.map((k) => caches.delete(k)));
@@ -144,7 +178,12 @@ export async function executeDuressWipe(): Promise<never> {
     /* no Cache Storage access */
   }
 
-  await Promise.allSettled(jobs);
+  // Bounded wait: finish properly when unblocked, but never strand the
+  // user on a frozen screen if another tab pins a database open.
+  await Promise.race([
+    Promise.allSettled(jobs),
+    new Promise((r) => setTimeout(r, 5000)),
+  ]);
   // Replace, not assign: the wiping page must not sit in history.
   location.replace("/");
   return new Promise<never>(() => {});

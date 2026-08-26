@@ -43,9 +43,11 @@ group video.
 - **Multi-device**: several devices on one identity, QR device sync,
   encrypted backups, and optional biometric unlock (fingerprint or security
   key via WebAuthn PRF).
-- **Encrypted at rest**: the local database only ever holds AES-GCM
-  ciphertext keyed off your identity - locked, stolen, or forensically
-  carved, the disk is noise. An optional duress password typed at the
+- **Encrypted at rest**: every content-bearing record in the local database
+  is AES-GCM ciphertext keyed off your identity - locked, stolen, or
+  forensically carved, message bodies, files and profiles are noise. (Sync
+  bookkeeping - room codes, sender ids, lamport counters - stays readable;
+  it is what lets devices sync without decrypting anything.) An optional duress password typed at the
   unlock screen silently erases the device and shows a fresh install;
   your account survives elsewhere via the recovery phrase. This composes
   with, not replaces, your OS's full-disk encryption.
