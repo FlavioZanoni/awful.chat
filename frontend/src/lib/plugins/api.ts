@@ -36,12 +36,25 @@ export interface HostApi {
   // noteRoomActivity all live there, and parallel send paths are where this
   // codebase's historical bugs came from.
   sendCard(payload: unknown): Promise<string>; // returns cardId
-  sendUpdate(cardId: string, payload: unknown, opts?: { ephemeral?: boolean }): Promise<void>;
+  sendUpdate(
+    cardId: string,
+    payload: unknown,
+    opts?: { ephemeral?: boolean }
+  ): Promise<void>;
   roomCode(): string;
   selfDid(): string;
   peers(): Array<{ did: string; name: string }>;
+  onPeerDisconnect(
+    listener: (peer: { did: string; name: string }) => void
+  ): () => void;
+  onBeforeDisconnect(listener: () => void): () => void;
+  sendUpdateImmediately(cardId: string, payload: unknown): void;
+  cards(): Promise<Array<{ id: string; senderDid: string }>>;
   seededRandom(seed: string): () => number; // deterministic PRNG
-  storage: { get(k: string): Promise<unknown>; set(k: string, v: unknown): Promise<void> };
+  storage: {
+    get(k: string): Promise<unknown>;
+    set(k: string, v: unknown): Promise<void>;
+  };
 }
 
 export interface PluginDefinition {
@@ -58,7 +71,10 @@ export interface PluginDefinition {
    * rejected every update.
    */
   initialState?: (cardData: unknown) => unknown;
-  commands?: Record<string, (args: string, host: HostApi) => void | Promise<void>>;
+  commands?: Record<
+    string,
+    (args: string, host: HostApi) => void | Promise<void>
+  >;
 }
 
 // Internal message format: JSON stringified into content field

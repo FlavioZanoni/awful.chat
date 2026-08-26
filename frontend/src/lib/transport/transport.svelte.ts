@@ -68,14 +68,26 @@ import {
   verifyPeerBinding,
   verifySignature,
 } from "../messaging";
-import { bytesToBase64, sniffImageMime, encode, decode, normalizeAvatarUrl, normalizeNicknameColor } from "../utils";
+import {
+  bytesToBase64,
+  sniffImageMime,
+  encode,
+  decode,
+  normalizeAvatarUrl,
+  normalizeNicknameColor,
+} from "../utils";
 import { validateProfileMeta } from "../profile-meta";
 import {
   validatePluginId,
   validateCardPayload,
   validateUpdatePayload,
 } from "../plugins/validate";
-import { clearCardStates, evictCardState, foldUpdate, touchCardStates } from "../plugins/state.svelte";
+import {
+  clearCardStates,
+  evictCardState,
+  foldUpdate,
+  touchCardStates,
+} from "../plugins/state.svelte";
 import { humanizeMentions, mentionsMe } from "../mentions";
 import { profileStore } from "../profile.svelte";
 import { getPlugin } from "../plugins/registry";
@@ -214,7 +226,19 @@ interface TransportState {
   /** User-picked nickname colors, keyed like peerNames (by DID). */
   peerColors: Map<string, string>;
   /** Profile metadata: banners, tags, bios, name effects; keyed by DID. */
-  peerProfileMeta: Map<string, { bannerUrl?: string; tagText?: string; tagTextColor?: string; tagChipColor?: string; bio?: string; nameEffect?: string; gradient2?: string; gradient3?: string }>;
+  peerProfileMeta: Map<
+    string,
+    {
+      bannerUrl?: string;
+      tagText?: string;
+      tagTextColor?: string;
+      tagChipColor?: string;
+      bio?: string;
+      nameEffect?: string;
+      gradient2?: string;
+      gradient3?: string;
+    }
+  >;
   error: string | null;
   callPeerIds: Set<string>;
   callPeerRooms: Map<string, string>; // peerId -> roomCode they're calling in
@@ -291,13 +315,32 @@ let _connectPromise: Promise<void> | null = null;
 
 // Ephemeral message flood cap: ~4 per second per plugin per sender.
 // Key: "{pluginId}|{senderId}", value: { count, resetAt }
-const _ephemeralFloodTrack = new Map<string, { count: number; resetAt: number }>();
+const _ephemeralFloodTrack = new Map<
+  string,
+  { count: number; resetAt: number }
+>();
 const EPHEMERAL_FLOOD_LIMIT = 4;
 const EPHEMERAL_FLOOD_WINDOW = 1000; // milliseconds
 
 const BATCH_SIZE = 20;
 export const MAX_PERSISTED_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const _peerIdToDid = new Map<string, string>();
+const _peerDisconnectListeners = new Set<(peer: { did: string }) => void>();
+const _beforeDisconnectListeners = new Set<() => void>();
+
+/** Subscribe to confirmed transport departures. */
+export function onPeerDisconnect(
+  listener: (peer: { did: string }) => void
+): () => void {
+  _peerDisconnectListeners.add(listener);
+  return () => _peerDisconnectListeners.delete(listener);
+}
+
+/** Run synchronous last-chance work before this browser tears down transport. */
+export function onBeforeDisconnect(listener: () => void): () => void {
+  _beforeDisconnectListeners.add(listener);
+  return () => _beforeDisconnectListeners.delete(listener);
+}
 
 /** Dev-only counters. Presence bugs are invisible without them: everything
  *  looks connected while a profile is quietly rejected. */
@@ -477,6 +520,13 @@ if (typeof window !== "undefined") {
     // when we come back. Best effort: an unloading page gets no async time,
     // but the peers that do hear it recover instantly instead of waiting for
     // the reconcile to notice.
+    for (const listener of _beforeDisconnectListeners) {
+      try {
+        listener();
+      } catch {
+        /* unloading must continue */
+      }
+    }
     _transport.disconnect();
   };
   window.addEventListener("pagehide", onUnload);
@@ -915,7 +965,10 @@ async function _pushMissingTo(
   let curBytes = 0;
   for (const m of enriched) {
     const sz = sizeOf(m);
-    if (cur.length && (cur.length >= BATCH_SIZE || curBytes + sz > MAX_BATCH_BYTES)) {
+    if (
+      cur.length &&
+      (cur.length >= BATCH_SIZE || curBytes + sz > MAX_BATCH_BYTES)
+    ) {
       batches.push(cur);
       cur = [];
       curBytes = 0;
@@ -1731,6 +1784,7 @@ _transport.on("connect", (peerId) => {
 });
 
 _transport.on("disconnect", (peerId) => {
+  const did = peerIdToDid(peerId);
   _lastAppInbound.delete(peerId);
   _profileRepair.delete(peerId);
   // Same lifetime as the two above, and it was not being pruned. Deliberately
@@ -1739,6 +1793,7 @@ _transport.on("disconnect", (peerId) => {
   // away messages that a reconnect would otherwise replay.
   _lastDigestAt.delete(peerId);
   transportState.peers = _transport.peers();
+  for (const listener of _peerDisconnectListeners) listener({ did });
   _fileTransport.onPeerDisconnect(peerId);
 
   // Note: We intentionally do NOT delete the peerId->DID mapping here.
@@ -2728,6 +2783,40 @@ export async function sendUpdate(
   }
 
   noteRoomActivity(msg.roomCode, msg.timestamp);
+}
+
+/**
+ * Broadcast a signed plugin update without asynchronous work. This is only
+ * for page teardown, when awaiting a profile lookup would lose the message.
+ */
+export function sendUpdateImmediately(
+  pluginId: string,
+  cardId: string,
+  payload: unknown
+): void {
+  if (transportState.chatMode === "dm" || !transportState.roomCode) return;
+  if (!validatePluginId(pluginId).ok || !validateUpdatePayload(payload).ok)
+    return;
+  const roomCode = transportState.roomCode;
+  const msg = signMessage({
+    id: crypto.randomUUID(),
+    roomCode,
+    senderId: identityStore.did ?? _transport.selfId(),
+    senderName: "Anonymous",
+    timestamp: Date.now(),
+    lamport: lamportSend(roomCode),
+    type: MessageType.PluginUpdate,
+    content: JSON.stringify({ pluginId, cardId, data: payload }),
+    attachments: [],
+  });
+  _broadcastChatWire(messageToWire(msg), roomCode);
+  // The broadcast gets the departure to connected peers immediately. Keep a
+  // best-effort local copy too: after a refresh the sender must rebuild the
+  // same closed/left state without waiting for another peer's next digest.
+  void putMessage(msg)
+    .then(() => setWatermark(roomCode, msg.senderId, msg.lamport))
+    .then(() => markRoomSeen(roomCode, msg.lamport))
+    .catch(() => {});
 }
 
 export function requestFileDownload(
