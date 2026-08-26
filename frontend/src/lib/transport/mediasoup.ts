@@ -10,8 +10,7 @@ import { shouldBlockSfu } from "./faults";
  * message straight to transportState.error - so it says what it means to
  * somebody in a call rather than naming a component they have never heard of.
  */
-const SFU_UNREACHABLE =
-  "Video server unreachable - voice still works, retrying in the background";
+import { SFU_PUBLISH_UNAVAILABLE, SFU_UNREACHABLE } from "./types";
 
 // ── Message types (mirrored on the SFU server) ────────────────────────────────
 
@@ -177,6 +176,10 @@ export class MediasoupVideo implements VideoTransport {
 
       await this.createSendTransport();
       await this.createRecvTransport();
+      // A full handshake means any earlier "unreachable, retrying" banner
+      // is now stale - without this signal it sat on screen forever even
+      // after video quietly came back.
+      this.emit("healed");
     } catch (err) {
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
       throw err;
@@ -431,26 +434,20 @@ export class MediasoupVideo implements VideoTransport {
    * manual leave and rejoin.
    */
   private scheduleRejoin(expectedGeneration: number, attempt = 1): void {
-    const MAX_ATTEMPTS = 5;
     const delay = Math.min(2000 * 2 ** (attempt - 1), 30_000);
     setTimeout(() => {
       this.attemptRejoin(expectedGeneration).catch((err) => {
-        console.warn(
-          `[MediasoupVideo] rejoin attempt ${attempt}/${MAX_ATTEMPTS} failed:`,
-          err
-        );
-        if (attempt < MAX_ATTEMPTS) {
-          // join() bumps joinGeneration even when it fails, so chaining the
-          // ORIGINAL generation made every later rung bail silently. Re-read
-          // it; a manual rejoin still cancels the ladder because its open
-          // socket makes attemptRejoin a no-op.
-          this.scheduleRejoin(this.joinGeneration, attempt + 1);
-        } else {
-          this.emit(
-            "error",
-            new Error("Video reconnect failed - leave and rejoin the call")
-          );
-        }
+        console.warn(`[MediasoupVideo] rejoin attempt ${attempt} failed:`, err);
+        // No attempt cap: the banner promises "retrying in the background",
+        // and a 5-rung ladder that quit after a minute made that a lie for
+        // any outage longer than one - video stayed dead for the rest of
+        // the call. Every 30s forever costs nothing; leaving the call ends
+        // the ladder because attemptRejoin then resolves as a no-op.
+        // join() bumps joinGeneration even when it fails, so chaining the
+        // ORIGINAL generation made every later rung bail silently. Re-read
+        // it; a manual rejoin still cancels the ladder because its open
+        // socket makes attemptRejoin a no-op.
+        this.scheduleRejoin(this.joinGeneration, attempt + 1);
       });
     }, delay);
   }
@@ -549,9 +546,7 @@ export class MediasoupVideo implements VideoTransport {
     // Reached whenever the SFU was unavailable at join time (the call itself
     // survives that now), so name the actual cause rather than "Not joined".
     if (!this.sendTransport) {
-      throw new Error(
-        "The video server is unavailable - camera and screen share are off until it is back"
-      );
+      throw new Error(SFU_PUBLISH_UNAVAILABLE);
     }
 
     // stop any existing producer for this source

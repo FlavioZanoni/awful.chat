@@ -8,6 +8,7 @@ import { transportState, _transport } from "./transport.svelte";
 import { encode } from "../utils";
 import { MessageType } from "../types/message";
 import type { MediasoupVideo } from "./mediasoup";
+import { SFU_PUBLISH_UNAVAILABLE, SFU_UNREACHABLE } from "./types";
 
 let _video: MediasoupVideo | null = null;
 let _volume = 1;
@@ -148,6 +149,17 @@ _video.on("trackRemoved", (peerId, source) => {
 
   _video.on("error", (err) => {
     transportState.error = err.message;
+  });
+
+  // Video quietly healing must take its banner with it - only OUR banners,
+  // an unrelated error on screen is not this component's to clear.
+  _video.on("healed", () => {
+    if (
+      transportState.error === SFU_UNREACHABLE ||
+      transportState.error === SFU_PUBLISH_UNAVAILABLE
+    ) {
+      transportState.error = null;
+    }
   });
 }
 

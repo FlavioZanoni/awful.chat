@@ -115,6 +115,17 @@ export interface VoiceTransport {
 
 export type VideoSource = "camera" | "screen";
 
+/**
+ * User-facing SFU failure banners. They live HERE, not in mediasoup.ts,
+ * because that module is dynamically imported to stay out of the boot
+ * bundle - and the healed-handler must compare against them without
+ * pulling the whole SFU client in.
+ */
+export const SFU_UNREACHABLE =
+  "Video server unreachable - voice still works, retrying in the background";
+export const SFU_PUBLISH_UNAVAILABLE =
+  "The video server is unavailable - camera and screen share are off until it is back";
+
 export interface VideoEvents {
   trackAdded: (
     peerId: string,
@@ -130,6 +141,9 @@ export interface VideoEvents {
   transmissionEnded: (peerId: string) => void;
   /** Fired when output volume changes (0.0 to 1.0). */
   outputVolumeChanged: (volume: number) => void;
+  /** Fired when a full SFU handshake completes - any "unreachable,
+   *  retrying" banner on screen is stale from this moment. */
+  healed: () => void;
   /** Fired when someone starts watching your screen share transmission. */
   transmissionWatched: (peerId: string) => void;
   /** Fired when someone stops watching your screen share transmission. */
