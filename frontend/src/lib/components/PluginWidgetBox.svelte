@@ -6,8 +6,16 @@
   import { getCardState, onCardStateChange } from "$lib/plugins/state.svelte";
   import { isPluginEnabled, unpinWidget, type PinnedWidget } from "$lib/plugins/prefs.svelte";
   import { makeHostApi } from "$lib/plugins/host";
-  import { getMessage } from "$lib/storage";
+  import { getMessage, getPluginCardMessages } from "$lib/storage";
+  import { roomsStore } from "$lib/rooms.svelte";
+  import { MessageType } from "$lib/types/message";
   import type { Message } from "$lib/transport/transport.svelte";
+
+  interface Candidate {
+    cardId: string;
+    roomCode: string;
+    timestamp: number;
+  }
 
   let { pin }: { pin: PinnedWidget } = $props();
 
@@ -15,6 +23,16 @@
   let widgetComponent = $state<ComponentType | null>(null);
   let widgetState = $state<unknown>(undefined);
   let gone = $state(false);
+
+  // Singleton widgets pin the PLUGIN, not a card: when one party ends and a
+  // new one starts (a new card, maybe in another room), the strip follows.
+  // The pin's stored cardId is just the starting point (the slot list keys
+  // each box by pin.cardId, so `pin` never changes under a mounted box).
+  // svelte-ignore state_referenced_locally
+  let liveCardId = $state(pin.cardId);
+  // svelte-ignore state_referenced_locally
+  let liveRoomCode = $state(pin.roomCode);
+  let lastScan = 0;
 
   const manifest = $derived(getManifest(pin.pluginId));
 
@@ -33,14 +51,44 @@
           gone = true;
           return;
         }
-        const msg = card ?? (await getMessage(pin.cardId)) ?? null;
+        // ponytail: newest-card-wins across rooms, throttled to one scan per
+        // 5s of ticks. If you sit in an OLDER party while someone spins up a
+        // newer one elsewhere, the strip follows the newer one - the host
+        // cannot see plugin-private membership to do better.
+        if (plugin.singletonWidget && Date.now() - lastScan > 5000) {
+          lastScan = Date.now();
+          let newest: Candidate | null = null;
+          for (const room of [...roomsStore.rooms, ...roomsStore.dmRooms]) {
+            for (const msg of await getPluginCardMessages(room.roomCode)) {
+              if (msg.type !== MessageType.PluginCard) continue;
+              try {
+                const parsed = JSON.parse(msg.content) as { pluginId?: string };
+                if (parsed.pluginId !== pin.pluginId) continue;
+              } catch {
+                continue;
+              }
+              if (!newest || msg.timestamp > newest.timestamp)
+                newest = {
+                  cardId: msg.id,
+                  roomCode: room.roomCode,
+                  timestamp: msg.timestamp,
+                };
+            }
+          }
+          if (newest && newest.cardId !== liveCardId) {
+            liveCardId = newest.cardId;
+            liveRoomCode = newest.roomCode;
+            card = null;
+          }
+        }
+        const msg = card ?? (await getMessage(liveCardId)) ?? null;
         if (!msg) {
           // The card's room was deleted: the pin points at nothing.
           gone = true;
           return;
         }
         card = msg;
-        widgetState = await getCardState(pin.cardId, pin.roomCode, plugin);
+        widgetState = await getCardState(liveCardId, liveRoomCode, plugin);
         // Widgets are a STRIP, not a card: only a dedicated compact view
         // renders here. A plugin without one shows a plain label - falling
         // back to the chat card filled the sidebar with a full card, which
@@ -70,7 +118,7 @@
         <WidgetUi
           {card}
           cardState={widgetState}
-          host={makeHostApi(pin.pluginId, pin.roomCode)}
+          host={makeHostApi(pin.pluginId, liveRoomCode)}
         />
       {:else if card}
         <span class="truncate font-mono text-[11px] text-muted-foreground">
