@@ -136,15 +136,29 @@
 
 {#snippet OssTab()}
   <div class="flex flex-col gap-3">
-    <a
-      href="https://github.com/awful-org/awful.chat"
-      target="_blank"
-      rel="noopener noreferrer"
-      class="inline-flex items-center gap-2 self-start rounded-md border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground"
-    >
-      <Github class="size-4" />
-      awful-org/awful.chat
-    </a>
+    <div class="flex items-center gap-2">
+      <a
+        href="https://github.com/awful-org/awful.chat"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground"
+      >
+        <Github class="size-4" />
+        awful-org/awful.chat
+      </a>
+      <!-- Pre-1.0 there are no tags to link, so 0.x points at the releases
+           list; once versions ship the link lands on the exact release. -->
+      <a
+        href={__APP_VERSION__ === "0.0.0"
+          ? "https://github.com/awful-org/awful.chat/releases"
+          : `https://github.com/awful-org/awful.chat/releases/tag/v${__APP_VERSION__}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="font-mono text-xs text-muted-foreground hover:text-primary hover:underline"
+      >
+        v{__APP_VERSION__}
+      </a>
+    </div>
     <p class="text-xs font-mono text-muted-foreground leading-relaxed">
       Awful.chat is built entirely on open source. These are the projects doing
       the heavy lifting, and they deserve the credit.

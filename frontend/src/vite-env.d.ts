@@ -4,6 +4,9 @@
 /// <reference types="vite-plugin-pwa/info" />
 /// <reference lib="webworker" />
 
+/** Injected by vite define from package.json. */
+declare const __APP_VERSION__: string;
+
 declare module "virtual:pwa-register" {
   export function registerSW(options?: {
     onNeedRefresh?: () => void;

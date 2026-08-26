@@ -4,6 +4,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import path from "path";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 import { VitePWA } from "vite-plugin-pwa";
+import pkg from "./package.json";
 
 export default defineConfig(({ mode }) => ({
   // Read VITE_* vars from the repo-root .env so bare `pnpm dev` works
@@ -12,6 +13,8 @@ export default defineConfig(({ mode }) => ({
   envDir: "..",
   define: {
     global: "globalThis",
+    // The app's version, straight from package.json at build time.
+    __APP_VERSION__: JSON.stringify(pkg.version),
   },
   plugins: [
     tailwindcss(),

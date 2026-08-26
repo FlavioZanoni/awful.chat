@@ -3,8 +3,15 @@
   import { X } from "@lucide/svelte";
 
   const { needRefresh, updateServiceWorker } = useRegisterSW({
-    onRegisteredSW(swUrl, _) {
+    immediate: true,
+    onRegisteredSW(swUrl, registration) {
       console.log(`Service Worker at: ${swUrl}`);
+      // A long-lived PWA tab only checks for updates on navigation, which a
+      // PWA never does - without this poll an update went unseen until the
+      // next full reload, days later.
+      if (registration) {
+        setInterval(() => void registration.update(), 60 * 60 * 1000);
+      }
     },
     onRegisterError(error) {
       console.log("SW registration error", error);

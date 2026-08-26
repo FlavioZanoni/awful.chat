@@ -7,7 +7,18 @@ import { storeSharedPayload } from "$lib/share-target";
 declare let self: ServiceWorkerGlobalScope;
 
 clientsClaim();
-self.skipWaiting();
+
+// registerType is "prompt": the new worker WAITS until the user accepts the
+// reload (updateServiceWorker() posts SKIP_WAITING). The old unconditional
+// skipWaiting() activated instantly and, with clientsClaim, swapped the
+// precache under live pages - their old hashed chunks vanished, the next
+// lazy import failed, and the vite:preloadError handler force-reloaded the
+// app mid-call. That was the "sometimes it auto-refreshes".
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    void self.skipWaiting();
+  }
+});
 
 precacheAndRoute(
   (self as ServiceWorkerGlobalScope & { __WB_MANIFEST: any }).__WB_MANIFEST
