@@ -250,7 +250,8 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
       When a DM can't reach an offline contact, leave an encrypted copy at
       the relay for up to 48 hours - they collect it next time they open the
       app, no need to be online together. The relay only ever sees
-      ciphertext and delivery times, never content or who sent it.
+      ciphertext and delivery times, never content or who sent it. On by
+      default; turned off, DMs queue until you are both online together.
     </p>
     <Switch
       checked={mailboxPrefs.enabled}

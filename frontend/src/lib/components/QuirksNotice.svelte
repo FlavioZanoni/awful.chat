@@ -27,7 +27,7 @@
     {
       icon: Send,
       title: "DMs are delivered device to device",
-      body: "A direct message needs both people connected. If the other person is offline it stays queued as \"sending\" and goes out by itself the next time you are both online with the app open. Delivery and read receipts exist in DMs only, not in rooms.",
+      body: "A direct message travels straight between your devices when you are both online. If the other person is offline, an encrypted copy waits at the relay for up to 48 hours and they collect it next time they open the app - the relay only ever sees ciphertext and delivery times, never the content or who sent it. You can turn this off in Settings > Session, and then DMs simply queue until you are both online together. Delivery and read receipts exist in DMs only, not in rooms.",
     },
     {
       icon: RefreshCw,
@@ -52,7 +52,7 @@
     {
       icon: BellOff,
       title: "Nothing reaches you while the app is closed",
-      body: "There are no push notifications, because no server is holding your messages to wake you up. You receive things while the app is open and connected.",
+      body: "There are no push notifications: nothing wakes this device while the app is closed. Offline DMs wait for you (encrypted, at the relay) and room messages wait with your peers, but you only find out about any of it once you open the app and it connects.",
     },
     {
       icon: Video,

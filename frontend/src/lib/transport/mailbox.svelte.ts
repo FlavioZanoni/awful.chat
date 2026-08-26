@@ -1,8 +1,10 @@
 /**
  * Offline DM mailbox client: deposits sealed envelopes for offline peers
- * and collects ours on a timer. Opt-in per device - the relay learns
+ * and collects ours on a timer. On by default (delivery needs BOTH the
+ * sender depositing and the recipient collecting, so opt-in defaults made
+ * it dead in practice), with a per-device opt-out - the relay learns
  * delivery timing, padded sizes and the recipient mailbox (never content,
- * never the sender's identity), and that trade is the user's to make.
+ * never the sender's identity), and the Quirks tab says so.
  */
 
 import { ed25519 } from "@noble/curves/ed25519.js";
@@ -20,9 +22,11 @@ const API = import.meta.env.VITE_API_URL ?? "";
 const COLLECT_EVERY = 5 * 60 * 1000;
 
 export const mailboxPrefs = $state({
+  // Anything but an explicit "off" means on - including devices from the
+  // opt-in era that never touched the toggle.
   enabled:
-    typeof localStorage !== "undefined" &&
-    localStorage.getItem(OPTIN_KEY) === "1",
+    typeof localStorage === "undefined" ||
+    localStorage.getItem(OPTIN_KEY) !== "0",
 });
 
 export function setMailboxEnabled(on: boolean): void {
