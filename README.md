@@ -147,6 +147,12 @@ credentials (coturn REST convention) expiring after 12 hours. With
 `TURN_SECRET` unset the endpoint returns 204 and clients keep the static
 fallback, so this is safe to leave off until both sides are configured.
 
+## License
+
+[Apache 2.0](LICENSE). Community plugins in
+[awful-org/awfully-awesome](https://github.com/awful-org/awfully-awesome) are
+MIT.
+
 ---
 
 Run your own, read the code, trust no one's server, including ours.

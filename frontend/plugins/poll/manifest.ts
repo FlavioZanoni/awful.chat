@@ -6,7 +6,7 @@ export const manifest: PluginManifest = {
   description: "Vote on options to see live results.",
   icon: "lucide:chart-column",
   author: "awful.chat",
-  license: "MIT",
+  license: "Apache-2.0",
   version: "1.1.0",
   repository: "https://github.com/awful-org/awful.chat/tree/main/frontend/plugins/poll",
   apiVersion: 1,

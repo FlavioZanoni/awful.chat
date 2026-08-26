@@ -6,7 +6,7 @@ export const manifest: PluginManifest = {
   description: "Spin a wheel to settle what to play.",
   icon: "lucide:ferris-wheel",
   author: "awful.chat",
-  license: "MIT",
+  license: "Apache-2.0",
   version: "1.1.0",
   repository: "https://github.com/awful-org/awful.chat/tree/main/frontend/plugins/wheel",
   apiVersion: 1,

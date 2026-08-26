@@ -34,6 +34,11 @@
           url: "https://webtorrent.io",
         },
         {
+          name: "simple-peer",
+          what: "the WebRTC handshake voice calls ride on",
+          url: "https://github.com/feross/simple-peer",
+        },
+        {
           name: "mediasoup",
           what: "the SFU that routes video and screen share",
           url: "https://mediasoup.org",
@@ -42,6 +47,11 @@
           name: "coturn",
           what: "TURN relay for calls behind strict NATs",
           url: "https://github.com/coturn/coturn",
+        },
+        {
+          name: "ws",
+          what: "the SFU's websocket signalling",
+          url: "https://github.com/websockets/ws",
         },
       ],
     },
@@ -72,6 +82,11 @@
           name: "Vite",
           what: "build tooling and dev server",
           url: "https://vite.dev",
+        },
+        {
+          name: "vite-plugin-pwa + Workbox",
+          what: "the installable PWA and its offline cache",
+          url: "https://vite-pwa-org.netlify.app",
         },
         {
           name: "Tailwind CSS",
