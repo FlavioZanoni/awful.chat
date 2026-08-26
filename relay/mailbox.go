@@ -74,21 +74,25 @@ var mailboxIDRe = regexp.MustCompile(`^[0-9a-f]{1,32}$`)
 // single lock keeps the quota check race-free.
 var mailboxMu sync.Mutex
 
-// didToPubKey decodes did:key:z... (base58btc, multicodec 0xed 0x01) to the
-// raw ed25519 public key.
+// didToPubKey decodes a did:key to the raw ed25519 public key. The app's
+// identity layer encodes WITHOUT the multibase 'z' (did:key:<base58> of
+// 0xed01||pub) - requiring the spec's z-form made every real client's
+// collect/ack fail 401. Accept both, disambiguating by decode: 'z' is a
+// valid base58 character, so only a successful 34-byte 0xed01 decode says
+// which form this is.
 func didToPubKey(did string) (ed25519.PublicKey, error) {
-	const prefix = "did:key:z"
+	const prefix = "did:key:"
 	if !strings.HasPrefix(did, prefix) {
 		return nil, fmt.Errorf("not a did:key")
 	}
-	raw, err := base58.Decode(did[len(prefix):])
-	if err != nil {
-		return nil, err
+	body := did[len(prefix):]
+	for _, s := range []string{body, strings.TrimPrefix(body, "z")} {
+		raw, err := base58.Decode(s)
+		if err == nil && len(raw) == 34 && raw[0] == 0xed && raw[1] == 0x01 {
+			return ed25519.PublicKey(raw[2:]), nil
+		}
 	}
-	if len(raw) != 34 || raw[0] != 0xed || raw[1] != 0x01 {
-		return nil, fmt.Errorf("not an ed25519 did:key")
-	}
-	return ed25519.PublicKey(raw[2:]), nil
+	return nil, fmt.Errorf("not an ed25519 did:key")
 }
 
 func mailboxIDForDid(did string) string {

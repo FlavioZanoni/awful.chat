@@ -14,6 +14,8 @@ import (
 	"github.com/mr-tron/base58"
 )
 
+// testDid uses the APP's did form: no multibase 'z'. The spec z-form is
+// covered separately in TestDidBothForms.
 func testDid(t *testing.T) (string, ed25519.PrivateKey) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -21,7 +23,24 @@ func testDid(t *testing.T) (string, ed25519.PrivateKey) {
 		t.Fatal(err)
 	}
 	raw := append([]byte{0xed, 0x01}, pub...)
-	return "did:key:z" + base58.Encode(raw), priv
+	return "did:key:" + base58.Encode(raw), priv
+}
+
+func TestDidBothForms(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	raw := append([]byte{0xed, 0x01}, pub...)
+	for _, did := range []string{
+		"did:key:" + base58.Encode(raw),
+		"did:key:z" + base58.Encode(raw),
+	} {
+		got, err := didToPubKey(did)
+		if err != nil || !bytes.Equal(got, pub) {
+			t.Fatalf("%s: %v", did, err)
+		}
+	}
+	if _, err := didToPubKey("did:key:zzzz"); err == nil {
+		t.Fatal("garbage did accepted")
+	}
 }
 
 func authFields(priv ed25519.PrivateKey) (int64, string) {
