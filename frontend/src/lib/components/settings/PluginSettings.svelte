@@ -30,9 +30,22 @@
                 <span class="text-xs font-mono font-semibold"
                   >{registered.manifest.name}</span
                 >
-                <span class="text-xs font-mono text-muted-foreground"
-                  >v{registered.manifest.apiVersion}</span
-                >
+                {#if registered.manifest.version}
+                  <!-- The plugin's own version - v{apiVersion} here showed a
+                       constant "v1" for everything. -->
+                  <span class="text-xs font-mono text-muted-foreground"
+                    >v{registered.manifest.version}</span
+                  >
+                {/if}
+                {#if registered.manifest.repository}
+                  <a
+                    href={registered.manifest.repository}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-xs font-mono text-muted-foreground hover:text-primary hover:underline"
+                    >source</a
+                  >
+                {/if}
               </div>
               <p class="text-xs font-mono text-muted-foreground truncate">
                 {registered.manifest.description}

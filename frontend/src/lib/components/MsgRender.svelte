@@ -555,11 +555,24 @@
         class="inline-block min-w-[min(38rem,100%)] min-h-24 max-w-full rounded-lg border border-primary/25 bg-primary/[0.04] px-3 py-2.5"
       >
         <div class="mb-1.5 flex items-center justify-end">
-          <span class="font-mono text-[10px] text-muted-foreground">
-            {pluginManifest?.name ?? pluginCardPluginId}{pluginManifest?.version
-              ? ` v${pluginManifest.version}`
-              : ""}
-          </span>
+          {#if pluginManifest?.repository}
+            <a
+              href={pluginManifest.repository}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="font-mono text-[10px] text-muted-foreground hover:text-primary hover:underline"
+            >
+              {pluginManifest.name}{pluginManifest.version
+                ? ` v${pluginManifest.version}`
+                : ""}
+            </a>
+          {:else}
+            <span class="font-mono text-[10px] text-muted-foreground">
+              {pluginManifest?.name ?? pluginCardPluginId}{pluginManifest?.version
+                ? ` v${pluginManifest.version}`
+                : ""}
+            </span>
+          {/if}
         </div>
         <PluginCardUi
           card={msg}

@@ -10,6 +10,9 @@ export interface PluginManifest {
   license?: string; // one line, shown in settings
   /** Shown on the card header and in settings, e.g. "1.2.0". */
   version?: string;
+  /** https URL of the plugin's source repository. Linked from the card
+   *  header and the settings list. */
+  repository?: string;
   /** An emoji, or a lucide icon as "lucide:<kebab-name>" (e.g. "lucide:dices"). */
   icon: string;
   apiVersion: 1;

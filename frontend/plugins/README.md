@@ -37,6 +37,7 @@ export const manifest: PluginManifest = {
   author: "you",          // optional, shown in the plugins settings list
   license: "MIT",         // optional, shown next to the author
   version: "1.0.0",       // optional, shown on the card header and in settings
+  repository: "https://github.com/you/your-plugin", // optional, linked from both
   apiVersion: 1,
   commands: [{ name: "wheel", usage: "/wheel option1, option2, ..." }],
 };

@@ -2428,7 +2428,6 @@ function _disconnectWithoutBroadcasting(): void {
  */
 function _broadcastChatWire(wire: WireChatMessage, roomCode: string): void {
   _transport.broadcast(encode(wire), roomCode);
-  const members = new Set(transportState.roomUsers);
   const batch = encode({
     type: MessageType.SyncBatch,
     roomCode,
@@ -2436,6 +2435,14 @@ function _broadcastChatWire(wire: WireChatMessage, roomCode: string): void {
     batchIndex: 0,
     totalBatches: 1,
   });
+  // DM rooms have no roomUsers roster - the direct copy goes to the one peer
+  // the conversation is with (plugin cards and files ride this path too).
+  if (roomCode.startsWith("dm-")) {
+    const pid = transportState.activeDmPeerId;
+    if (pid) _transport.send(pid, batch).catch(() => {});
+    return;
+  }
+  const members = new Set(transportState.roomUsers);
   for (const pid of _transport.peers()) {
     const did = _peerIdToDid.get(pid);
     if (!did || !members.has(did)) continue;
@@ -2621,14 +2628,11 @@ export async function sendFiles(
 // ponytail: sendCard duplicates the send pipeline (signing, lamport, putMessage,
 // setWatermark, appendSorted, markRoomSeen, noteRoomActivity) without sharing
 // it with sendMessage. This is debt: generalize to a _sendChatMessage(type, ...)
-// path. DMs are banned because plugin state is per-room; extend if needed.
+// path.
 export async function sendCard(
   pluginId: string,
   payload: unknown
 ): Promise<string> {
-  if (transportState.chatMode === "dm") {
-    throw new Error("Plugin cards not supported in DMs");
-  }
   if (!transportState.roomCode) {
     throw new Error("Not in a room");
   }
@@ -2647,7 +2651,12 @@ export async function sendCard(
   const profile = await getOwnProfile();
   const senderName = profile?.nickname?.trim() || "Anonymous";
   const myId = identityStore.did ?? _transport.selfId();
-  const lamport = lamportSend(transportState.roomCode);
+  const ts = Date.now();
+  // Same rule as files: DM rooms order by wall-clock ms, a room-counter
+  // lamport would file the card before the whole conversation.
+  const lamport = transportState.roomCode.startsWith("dm-")
+    ? await nextDmLamport(transportState.roomCode, ts)
+    : lamportSend(transportState.roomCode);
 
   const cardId = crypto.randomUUID();
   const content = JSON.stringify({ pluginId, data: payload });
@@ -2657,7 +2666,7 @@ export async function sendCard(
     roomCode: transportState.roomCode,
     senderId: myId,
     senderName,
-    timestamp: Date.now(),
+    timestamp: ts,
     lamport,
     type: MessageType.PluginCard,
     content,
@@ -2686,9 +2695,6 @@ export async function sendUpdate(
   payload: unknown,
   opts: { ephemeral?: boolean } = {}
 ): Promise<void> {
-  if (transportState.chatMode === "dm") {
-    throw new Error("Plugin updates not supported in DMs");
-  }
   if (!transportState.roomCode) {
     throw new Error("Not in a room");
   }
@@ -2735,7 +2741,11 @@ export async function sendUpdate(
   }
 
   // Persisted updates
-  const lamport = lamportSend(transportState.roomCode);
+  const updateTs = Date.now();
+  // DM rooms order by wall-clock ms, same as files and cards.
+  const lamport = transportState.roomCode.startsWith("dm-")
+    ? await nextDmLamport(transportState.roomCode, updateTs)
+    : lamportSend(transportState.roomCode);
   const content = JSON.stringify({ pluginId, cardId, data: payload });
 
   let msg: Message = {
@@ -2743,7 +2753,7 @@ export async function sendUpdate(
     roomCode: transportState.roomCode,
     senderId: myId,
     senderName,
-    timestamp: Date.now(),
+    timestamp: updateTs,
     lamport,
     type: MessageType.PluginUpdate,
     content,

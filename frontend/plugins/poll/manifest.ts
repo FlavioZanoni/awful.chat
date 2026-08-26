@@ -8,6 +8,7 @@ export const manifest: PluginManifest = {
   author: "awful.chat",
   license: "MIT",
   version: "1.1.0",
+  repository: "https://github.com/awful-org/awful.chat/tree/main/frontend/plugins/poll",
   apiVersion: 1,
   commands: [{ name: "poll", usage: "/poll Question? Option A, Option B" }],
 };

@@ -25,6 +25,7 @@
     Info,
     Heart,
     Puzzle,
+    Github,
   } from "@lucide/svelte";
 
   import ProfileSettings from "./settings/ProfileSettings.svelte";
@@ -135,6 +136,15 @@
 
 {#snippet OssTab()}
   <div class="flex flex-col gap-3">
+    <a
+      href="https://github.com/awful-org/awful.chat"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="inline-flex items-center gap-2 self-start rounded-md border border-border px-3 py-1.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground"
+    >
+      <Github class="size-4" />
+      awful-org/awful.chat
+    </a>
     <p class="text-xs font-mono text-muted-foreground leading-relaxed">
       Awful.chat is built entirely on open source. These are the projects doing
       the heavy lifting, and they deserve the credit.
