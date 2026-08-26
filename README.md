@@ -43,6 +43,12 @@ group video.
 - **Multi-device**: several devices on one identity, QR device sync,
   encrypted backups, and optional biometric unlock (fingerprint or security
   key via WebAuthn PRF).
+- **Encrypted at rest**: the local database only ever holds AES-GCM
+  ciphertext keyed off your identity - locked, stolen, or forensically
+  carved, the disk is noise. An optional duress password typed at the
+  unlock screen silently erases the device and shows a fresh install;
+  your account survives elsewhere via the recovery phrase. This composes
+  with, not replaces, your OS's full-disk encryption.
 - **Installable PWA**: opens offline with your full history; sending waits
   for peers.
 
