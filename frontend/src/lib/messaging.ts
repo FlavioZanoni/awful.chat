@@ -37,7 +37,7 @@ type Signable = Pick<
   | "reactionOp"
   | "replyTo"
   | "meta"
-> & { sigV?: number };
+> & { sigV?: number; type?: Message["type"]; roomCode?: string };
 
 /**
  * v2 canonical form - additionally covers reaction fields, the replied-to
@@ -62,8 +62,36 @@ export function canonicalContentV2(msg: Signable): string {
   ]);
 }
 
+/**
+ * v3 canonical form - additionally covers `type` and `roomCode`. Without
+ * them a relaying peer could flip a signed Text into a PluginUpdate, or
+ * replay one room's signed history into another room's sync batch, with the
+ * signature still verifying. The wire carries no roomCode (rooms are
+ * topic-derived), so verifiers reconstruct this canonical with the
+ * AUTHENTICATED room they are filing the message under.
+ */
+export function canonicalContentV3(msg: Signable): string {
+  return JSON.stringify([
+    3,
+    msg.type ?? null,
+    msg.roomCode ?? null,
+    msg.id,
+    msg.senderId,
+    msg.lamport,
+    msg.content,
+    msg.reactionTo ?? null,
+    msg.reactionEmoji ?? null,
+    msg.reactionOp ?? null,
+    msg.replyTo?.id ?? null,
+    msg.meta?.files?.map(
+      (f) => `${f.infoHash}:${f.size}:${f.mimeType}:${f.filename}`
+    ) ?? null,
+  ]);
+}
+
 /** Pick the canonical form matching the message's signature version. */
 export function canonicalFor(msg: Signable): string {
+  if (msg.sigV === 3) return canonicalContentV3(msg);
   return msg.sigV === 2 ? canonicalContentV2(msg) : canonicalContent(msg);
 }
 
@@ -77,8 +105,8 @@ export function canonicalFor(msg: Signable): string {
  */
 export function signMessage(message: Message): Message {
   const { privateKey, did } = requireSession();
-  const sig = ed25519.sign(utf8(canonicalContentV2(message)), privateKey);
-  return { ...message, senderDid: did, sig: hex(sig), sigV: 2 };
+  const sig = ed25519.sign(utf8(canonicalContentV3(message)), privateKey);
+  return { ...message, senderDid: did, sig: hex(sig), sigV: 3 };
 }
 
 /**

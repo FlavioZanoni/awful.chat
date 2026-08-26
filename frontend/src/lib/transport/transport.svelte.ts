@@ -62,6 +62,7 @@ import { requireSession } from "../identity/identity";
 import { deviceKeySeed } from "./device-key";
 import { looksLikeDid, looksLikePeerId } from "../identity/identity-utils";
 import {
+  canonicalContentV3,
   canonicalFor,
   signMessage,
   signPeerBinding,
@@ -100,6 +101,8 @@ import {
   parseDmEnvelope,
 } from "./dm-codec";
 import {
+  dmConversationCodeAsync,
+  dmPeerDid,
   ensureDmRoomForPeer,
   flushQueuedDmForPeer,
   joinPhonebookDmRooms,
@@ -1002,14 +1005,35 @@ async function _pushMissingTo(
 
 async function _handleSyncBatch(
   roomCode: string,
-  messages: WireChatMessage[]
+  messages: WireChatMessage[],
+  fromPeerId?: string
 ): Promise<void> {
   // Bind incoming history to the room named in the (signed-message-bearing)
   // batch, and only if we actually joined it - a peer cannot inject history
   // into whatever room the receiver currently has open.
   if (!messages.length || !roomCode || !_transport.rooms().includes(roomCode))
     return;
-  const verdicts = await Promise.all(messages.map(_verifyIncoming));
+  // DM conversations: only the counterparty - or another of OUR OWN paired
+  // devices (same DID, which the counterparty-derived code can never match) -
+  // may relay this history. The room code is derived from the two DIDs, so
+  // it is checkable against the AUTHENTICATED sender; within it, unsigned
+  // mirrored rows are fine.
+  let allowUnsigned = false;
+  if (roomCode.startsWith("dm-")) {
+    if (!fromPeerId) return;
+    const fromDid = dmPeerDid(fromPeerId);
+    const isOwnDevice = !!fromDid && fromDid === identityStore.did;
+    if (!isOwnDevice) {
+      const expected = await dmConversationCodeAsync(fromPeerId).catch(
+        () => null
+      );
+      if (expected !== roomCode) return;
+    }
+    allowUnsigned = true;
+  }
+  const verdicts = await Promise.all(
+    messages.map((m) => _verifyIncoming(m, { room: roomCode, allowUnsigned }))
+  );
   const verified = messages.filter((_, i) => verdicts[i]);
   if (verified.length < messages.length) {
     console.warn(
@@ -1536,23 +1560,38 @@ function _broadcastLeaveRoom(): Promise<void> {
 }
 
 /**
- * Authenticate an incoming chat message.
- * A signed message must verify (and senderDid must match the claimed
- * did:key senderId) or it is dropped. Unsigned messages are accepted:
- * history predating signing and DM messages mirrored by the receiver are
- * stored without a sig, and rejecting them silently destroys sync.
- * ponytail: unsigned did:key claims are still spoofable - tighten to
- * mandatory signatures once legacy history has aged out.
+ * Authenticate an incoming chat message. Signatures are MANDATORY: an
+ * unsigned message let any connected peer claim any senderId. The one
+ * exemption is `allowUnsigned`, which sync passes for a DM conversation
+ * relayed by its authenticated counterparty - mirrored DM rows are
+ * legitimately unsigned (their authenticity came from the encrypted
+ * envelope when they first arrived). Pre-signing room history no longer
+ * relays; local copies are untouched, and the rejectedFloor machinery in
+ * _handleSyncBatch keeps watermarks honest about what was refused.
  */
-async function _verifyIncoming(wire: WireChatMessage): Promise<boolean> {
-  if (!wire.sig) return true;
-  // A signature MUST use the v2 canonical form (which covers reaction/reply/
-  // file fields). The weak v1 form left those unsigned, so accepting a v1 sig
-  // would let a relay swap an infoHash/emoji on a signed message undetected.
-  if (wire.sigV !== 2) return false;
+async function _verifyIncoming(
+  wire: WireChatMessage,
+  opts: { room?: string | null; allowUnsigned?: boolean } = {}
+): Promise<boolean> {
+  if (!wire.sig) return opts.allowUnsigned === true;
+  // v1 sigs stay rejected: that canonical left reaction/reply/file fields
+  // unsigned, so a relay could swap an infoHash/emoji undetected.
+  if (wire.sigV !== 2 && wire.sigV !== 3) return false;
   if (wire.senderId.startsWith("did:key:") && wire.senderDid !== wire.senderId)
     return false;
   if (!wire.senderDid) return false;
+  if (wire.sigV === 3) {
+    // v3 binds type and room. The wire carries no roomCode, so the canonical
+    // is reconstructed with the AUTHENTICATED room this message is being
+    // filed under - a message signed for another room (or with its type
+    // flipped in transit) fails verification here.
+    if (!opts.room) return false;
+    return verifySignature(
+      wire.senderDid,
+      wire.sig,
+      canonicalContentV3({ ...wire, roomCode: opts.room })
+    );
+  }
   return verifySignature(wire.senderDid, wire.sig, canonicalFor(wire));
 }
 
@@ -2077,7 +2116,7 @@ _transport.on("message", (peerId, data, room) => {
         // Wire-only ephemeral messages: verify, fold to card state, but never persist.
         // No watermark, lamport, or storage side effects.
         const ephemeralMsg = msg as WirePluginEphemeral;
-        _verifyIncoming(ephemeralMsg as unknown as WireChatMessage)
+        _verifyIncoming(ephemeralMsg as unknown as WireChatMessage, { room })
           .then((ok) => {
             if (!ok) {
               console.warn(
@@ -2131,7 +2170,7 @@ _transport.on("message", (peerId, data, room) => {
         _handleDigest(peerId, msg.roomCode, msg.watermarks).catch(() => {});
         break;
       case MessageType.SyncBatch:
-        _handleSyncBatch(msg.roomCode, msg.messages).catch(() => {});
+        _handleSyncBatch(msg.roomCode, msg.messages, peerId).catch(() => {});
         break;
       case MessageType.SyncComplete:
         _handleSyncComplete(peerId, msg.roomCode);
@@ -2154,7 +2193,7 @@ _transport.on("message", (peerId, data, room) => {
           );
           break;
         }
-        _verifyIncoming(msg)
+        _verifyIncoming(msg, { room })
           .then((ok) => {
             if (ok) _handleChatMessage(msg, room, peerId).catch(() => {});
             else
@@ -2790,8 +2829,11 @@ export async function sendUpdate(
       content,
     };
 
-    // Sign the ephemeral message (cast to Message-compatible shape for signMessage)
-    const signed = signMessage(wire as any);
+    // Sign the ephemeral message (cast to Message-compatible shape). The
+    // wire itself carries no roomCode, but the v3 canonical covers it -
+    // the receiver reconstructs it from the topic - so it must be present
+    // AT SIGNING or every ephemeral fails verification.
+    const signed = signMessage({ ...wire, roomCode } as unknown as Message);
     wire = signed as any as WirePluginEphemeral;
     _transport.broadcast(encode(wire), roomCode);
     // Wire-only: no storage, no watermark, no visibleMessages, no noteRoomActivity

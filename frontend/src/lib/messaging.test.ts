@@ -3,6 +3,7 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
   canonicalContent,
+  canonicalContentV2,
   computeSharedSecret,
   encryptForRecipient,
   signMessage,
@@ -77,7 +78,36 @@ describe("sign / verify", () => {
     expect(canonicalContent(a)).toBe(canonicalContent(b));
   });
 
-  it("covers reaction fields in v2 signatures", async () => {
+  it("covers type and roomCode in v3 signatures", async () => {
+    const signed = signMessage(makeMessage());
+    expect(signed.sigV).toBe(3);
+    expect(await verifyMessage(signed)).toBe(true);
+    // A relaying peer flipping the type (Text -> PluginUpdate) or replaying
+    // the message into another room must break the signature.
+    expect(
+      await verifyMessage({ ...signed, type: MessageType.PluginUpdate })
+    ).toBe(false);
+    expect(await verifyMessage({ ...signed, roomCode: "other-room" })).toBe(
+      false
+    );
+  });
+
+  it("still verifies v2 signatures (pre-v3 history)", async () => {
+    const msg = makeMessage();
+    const session = requireSession();
+    const sig = hex(
+      ed25519.sign(utf8(canonicalContentV2(msg)), session.privateKey)
+    );
+    const v2 = { ...msg, senderDid: session.did, sig, sigV: 2 };
+    expect(await verifyMessage(v2)).toBe(true);
+    // v2 never covered type/room - documents exactly what v3 closes.
+    expect(
+      await verifyMessage({ ...v2, type: MessageType.PluginUpdate })
+    ).toBe(true);
+    expect(await verifyMessage({ ...v2, content: "evil" })).toBe(false);
+  });
+
+  it("covers reaction fields in signatures", async () => {
     const signed = signMessage(
       makeMessage({
         type: MessageType.Reaction,
@@ -87,7 +117,6 @@ describe("sign / verify", () => {
         reactionOp: "add",
       })
     );
-    expect(signed.sigV).toBe(2);
     expect(await verifyMessage(signed)).toBe(true);
     expect(await verifyMessage({ ...signed, reactionEmoji: "💀" })).toBe(false);
     expect(await verifyMessage({ ...signed, reactionOp: "remove" })).toBe(
@@ -96,7 +125,7 @@ describe("sign / verify", () => {
     expect(await verifyMessage({ ...signed, reactionTo: "other" })).toBe(false);
   });
 
-  it("covers file meta (infoHash) in v2 signatures", async () => {
+  it("covers file meta (infoHash) in signatures", async () => {
     const meta = {
       files: [
         { filename: "a.png", mimeType: "image/png", size: 10, infoHash: "aa" },

@@ -152,7 +152,7 @@ export function dmPeerDid(peerIdOrDid: string): string | null {
   return looksLikeDid(resolved) ? resolved : null;
 }
 
-async function dmConversationCodeAsync(
+export async function dmConversationCodeAsync(
   peerIdOrDid: string
 ): Promise<string | null> {
   const selfDid = identityStore.did ?? _transport.selfId();
