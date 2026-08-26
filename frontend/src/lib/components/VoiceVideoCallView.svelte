@@ -1361,6 +1361,7 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
           pluginId={pt.pluginId!}
           cardId={pt.cardId!}
           roomCode={pt.pluginRoomCode!}
+          chromeVisible={dockedControls || controlsVisible}
         />
       </div>
     {/each}
@@ -1676,6 +1677,14 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
       {/if}
     </div>
 
+    <!-- Same visibility rule as the call controls: parked while docked
+         (windowed), fade-on-idle in fullscreen. -->
+    <div
+      class={cn(
+        "transition-all duration-300",
+        !dockedControls && !controlsVisible && "opacity-0 pointer-events-none"
+      )}
+    >
     <Tip text={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
       {#snippet children(props)}
     <!-- Worth showing only when it changes anything: some tile with
@@ -1724,6 +1733,7 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     </button>
       {/snippet}
     </Tip>
+    </div>
 
     <!-- Both menus live inside the panel on purpose. The panel is the element
          handed to requestFullscreen, and only the fullscreen element's own

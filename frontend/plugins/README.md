@@ -108,7 +108,10 @@ optional components on the definition, all receive the same
   pointer-events-none layer (clicking the tile focuses it, like any
   stream) - give your interactive controls `pointer-events-auto`, and
   know the mount is PERSISTENT: it survives focus changes and filters, so
-  an iframe never reloads mid-call.
+  an iframe never reloads mid-call. Call tiles receive one extra prop,
+  `chromeVisible` - it mirrors the call's own controls (shown while the
+  mouse moves over the call section, hidden on idle in fullscreen); gate
+  your control overlays on it so all chrome moves together.
 
 For playback plugins, `host.setNowPlaying({...})` puts the track on the
 OS media surface (lock screen, media keys, headsets); the host owns

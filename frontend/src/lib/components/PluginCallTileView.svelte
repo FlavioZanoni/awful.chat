@@ -10,7 +10,15 @@
     pluginId,
     cardId,
     roomCode,
-  }: { pluginId: string; cardId: string; roomCode: string } = $props();
+    chromeVisible = true,
+  }: {
+    pluginId: string;
+    cardId: string;
+    roomCode: string;
+    /** Mirrors the call's controls visibility (mouse moving over the call
+     *  section) so plugin controls appear and hide WITH the call chrome. */
+    chromeVisible?: boolean;
+  } = $props();
 
   let card = $state<Message | null>(null);
   let tileComponent = $state<ComponentType | null>(null);
@@ -39,7 +47,12 @@
 
 {#if tileComponent && card}
   {@const TileUi = tileComponent}
-  <TileUi {card} cardState={tileState} host={makeHostApi(pluginId, roomCode)} />
+  <TileUi
+    {card}
+    cardState={tileState}
+    host={makeHostApi(pluginId, roomCode)}
+    {chromeVisible}
+  />
 {:else}
   <div
     class="grid h-full w-full place-items-center font-mono text-xs text-muted-foreground"
