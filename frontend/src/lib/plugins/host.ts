@@ -15,10 +15,15 @@ import {
   transportState,
 } from "$lib/transport/transport.svelte";
 import { getPluginCardMessages } from "$lib/storage";
+import { setNowPlayingFor } from "./media-session";
 import { MessageType } from "$lib/types/message";
 
 export function makeHostApi(pluginId: string, roomCode: string): HostApi {
+  const nowPlayingToken = Symbol(pluginId);
   return {
+    setNowPlaying(info) {
+      setNowPlayingFor(nowPlayingToken, info);
+    },
     async sendCard(payload) {
       const { sendCard } = await import("$lib/transport/transport.svelte");
       return sendCard(pluginId, payload);

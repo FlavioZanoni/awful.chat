@@ -96,6 +96,8 @@ export function notifyMessage(opts: {
   tag: string;
   /** The conversation this message belongs to is the one on screen. */
   viewingConversation?: boolean;
+  /** Where a click (or inline reply) should land. */
+  data?: { roomCode: string; dmPeerDid?: string };
 }): void {
   // The sound has its own rule, separate from the notification's hidden-only
   // one: it also plays while the app is visible but the message landed in
@@ -114,24 +116,56 @@ export function notifyMessage(opts: {
   if (Notification.permission !== "granted") return;
   if (typeof document !== "undefined" && !document.hidden) return;
 
-  try {
-    const notification = new Notification(opts.title, {
-      body: opts.body.slice(0, 180),
-      tag: opts.tag,
-      icon: "/pwa-192x192.png",
-      badge: "/pwa-64x64.png",
-      silent: false,
-    });
-    notification.onclick = () => {
-      try {
-        window.focus();
-      } catch {}
-      notification.close();
-    };
-  } catch {
-    // Some browsers only allow notifications from a service worker context;
-    // failing to notify must never break message handling.
-  }
+  void (async () => {
+    // Through the service worker when there is one: that is what enables
+    // ACTION buttons (Open, inline Reply on Android) and is the only way
+    // notifications work at all on Android. The page-Notification fallback
+    // keeps browsers without an active registration covered.
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      if (reg?.showNotification) {
+        await reg.showNotification(opts.title, {
+          body: opts.body.slice(0, 180),
+          tag: opts.tag,
+          icon: "/pwa-192x192.png",
+          badge: "/pwa-64x64.png",
+          silent: false,
+          data: opts.data,
+          // `type: "text"` (inline reply) is real but missing from the TS
+          // lib; browsers without support show a plain button instead.
+          actions: [
+            { action: "open", title: "Open" },
+            {
+              action: "reply",
+              title: "Reply",
+              type: "text",
+              placeholder: "Reply...",
+            },
+          ],
+        } as NotificationOptions);
+        return;
+      }
+    } catch {
+      // fall through to the page notification
+    }
+    try {
+      const notification = new Notification(opts.title, {
+        body: opts.body.slice(0, 180),
+        tag: opts.tag,
+        icon: "/pwa-192x192.png",
+        badge: "/pwa-64x64.png",
+        silent: false,
+      });
+      notification.onclick = () => {
+        try {
+          window.focus();
+        } catch {}
+        notification.close();
+      };
+    } catch {
+      // Failing to notify must never break message handling.
+    }
+  })();
 }
 
 /** Mirror the unread total onto the installed app icon. */

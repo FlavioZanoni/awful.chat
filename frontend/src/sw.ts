@@ -3,6 +3,7 @@
 import { clientsClaim } from "workbox-core";
 import { precacheAndRoute, matchPrecache } from "workbox-precaching";
 import { storeSharedPayload } from "$lib/share-target";
+import { storeNotifyIntent } from "$lib/notify-intents";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -14,6 +15,42 @@ clientsClaim();
 // precache under live pages - their old hashed chunks vanished, the next
 // lazy import failed, and the vite:preloadError handler force-reloaded the
 // app mid-call. That was the "sometimes it auto-refreshes".
+// Notification clicks and inline replies. The intent is WRITTEN to
+// IndexedDB first - the app may be closed, or open but locked - and the
+// app drains it after unlock; the postMessage below is just the "check
+// now" nudge for a window that is already alive.
+self.addEventListener("notificationclick", (event) => {
+  const data = event.notification.data as
+    | { roomCode?: string; dmPeerDid?: string }
+    | undefined;
+  const reply = (event as NotificationEvent & { reply?: string }).reply;
+  event.notification.close();
+  event.waitUntil(
+    (async () => {
+      if (data?.roomCode) {
+        await storeNotifyIntent({
+          kind: event.action === "reply" && reply ? "reply" : "open",
+          roomCode: data.roomCode,
+          dmPeerDid: data.dmPeerDid,
+          text: reply ?? "",
+          ts: Date.now(),
+        }).catch(() => {});
+      }
+      const wins = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      const win = wins[0] as WindowClient | undefined;
+      if (win) {
+        await win.focus().catch(() => {});
+        win.postMessage({ type: "notify-intent" });
+      } else if (event.action !== "reply") {
+        await self.clients.openWindow("/app").catch(() => {});
+      }
+    })()
+  );
+});
+
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
     void self.skipWaiting();

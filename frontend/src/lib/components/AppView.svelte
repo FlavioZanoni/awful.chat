@@ -101,6 +101,23 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
     import("$lib/transport/mailbox.svelte")
       .then(({ startMailboxCollector }) => startMailboxCollector())
       .catch(() => {});
+    void drainNotifyIntents_();
+    // OS-launched backup files (file_handlers) park in launch-file.ts; the
+    // restore flow in Settings > Data consumes them when opened.
+    import("$lib/launch-file")
+      .then(({ initLaunchQueue }) =>
+        initLaunchQueue(() => {
+          void import("$lib/transport/transport.svelte").then(
+            ({ _transport }) =>
+              _transport.announce({
+                type: "app-warning",
+                message:
+                  "Backup file received - open Settings > Data to restore it.",
+              })
+          );
+        })
+      )
+      .catch(() => {});
     const roomsReady = loadRooms();
     loadProfile();
     if (pendingRoomCode) {
@@ -269,6 +286,49 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
       handleLeave();
     }
   }
+
+  // What the user did on a NOTIFICATION - clicked it, or typed an inline
+  // reply on Android - lands here. The service worker wrote the intent to
+  // IndexedDB (the app may have been closed or locked at the time); this
+  // drains it: navigate to the conversation, and send the reply through the
+  // exact same path the composer uses.
+  let drainingIntents = false;
+  async function drainNotifyIntents_() {
+    if (drainingIntents || !identityStore.isUnlocked) return;
+    drainingIntents = true;
+    try {
+      const { drainNotifyIntents } = await import("$lib/notify-intents");
+      const intents = await drainNotifyIntents();
+      for (const it of intents) {
+        if (it.dmPeerDid) await handleSelectDm(it.dmPeerDid);
+        else await handleSelectRoom(it.roomCode);
+        if (it.kind === "reply" && it.text.trim()) {
+          const { sendMessage } = await import(
+            "$lib/transport/transport.svelte"
+          );
+          await sendMessage(it.text.trim());
+        }
+      }
+    } catch (err) {
+      console.warn("[notify] intent drain failed:", err);
+    } finally {
+      drainingIntents = false;
+    }
+  }
+
+  $effect(() => {
+    if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
+    const onMsg = (e: MessageEvent) => {
+      if (e.data?.type === "notify-intent") void drainNotifyIntents_();
+    };
+    const onFocus = () => void drainNotifyIntents_();
+    navigator.serviceWorker.addEventListener("message", onMsg);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", onMsg);
+      window.removeEventListener("focus", onFocus);
+    };
+  });
 
   async function handleSelectRoom(code: string) {
     const room = roomsStore.rooms.find((r) => r.roomCode === code);

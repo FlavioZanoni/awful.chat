@@ -100,6 +100,14 @@ export default defineConfig(({ mode }) => ({
         // Share targets and web+awfl links should surface the running app
         // instead of opening a second copy of it.
         launch_handler: { client_mode: ["navigate-existing", "auto"] },
+        // Double-clicking a backup file opens the app straight into the
+        // restore flow (consumed via launchQueue in AppView).
+        file_handlers: [
+          {
+            action: "/app",
+            accept: { "application/awful-backup": [".awfulbackup"] },
+          },
+        ],
         shortcuts: [
           {
             name: "New room",

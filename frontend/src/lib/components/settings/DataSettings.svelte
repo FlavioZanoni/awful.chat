@@ -105,11 +105,8 @@
     }
   }
 
-  async function handleFilePicked(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = ""; // let the same file be picked again after a cancel
-    if (!file) return;
+  // globalThis.File: the lucide icon import named File shadows the DOM type.
+  async function processBackupFile(file: globalThis.File) {
     backupError = null;
     backupBusy = true;
     try {
@@ -122,6 +119,24 @@
       backupBusy = false;
     }
   }
+
+  async function handleFilePicked(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ""; // let the same file be picked again after a cancel
+    if (!file) return;
+    await processBackupFile(file);
+  }
+
+  // A backup the OS launched us with (file_handlers) is waiting in
+  // launch-file.ts - treat it exactly like a picked file.
+  $effect(() => {
+    if (activeTab !== "data") return;
+    void import("$lib/launch-file").then(({ takePendingBackupFile }) => {
+      const file = takePendingBackupFile();
+      if (file) void processBackupFile(file);
+    });
+  });
 
   async function handleApply(mode: "add" | "replace") {
     if (!pendingBackup) return;
@@ -431,7 +446,7 @@
     <input
       bind:this={fileInput}
       type="file"
-      accept="application/json,.json"
+      accept="application/json,.json,.awfulbackup"
       class="hidden"
       onchange={handleFilePicked}
     />

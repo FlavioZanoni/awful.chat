@@ -1031,7 +1031,10 @@ export async function downloadBackup(): Promise<void> {
   const stamp = new Date().toISOString().slice(0, 10);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `awful-backup-${stamp}.json`;
+  // A dedicated extension so the OS can hand backups straight to the app
+  // (manifest file_handlers); the content is still plain JSON and the
+  // restore picker keeps accepting old .json exports.
+  a.download = `awful-backup-${stamp}.awfulbackup`;
   document.body.appendChild(a);
   a.click();
   a.remove();

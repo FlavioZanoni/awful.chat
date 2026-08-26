@@ -1685,6 +1685,7 @@ async function _handleChatMessage(
         body: `${msg.senderName}: ${body}`,
         tag: `room:${msg.roomCode}`,
         viewingConversation: transportState.uiRoomCode === msg.roomCode,
+        data: { roomCode: msg.roomCode },
       });
     } catch (err) {
       console.warn("[chat] notification failed:", err);
@@ -1929,6 +1930,7 @@ function _handleDmChat(
           body: humanizeMentions(msg.content, resolveMentionDisplayName),
           tag: `dm:${roomCode}`,
           viewingConversation: transportState.uiRoomCode === roomCode,
+          data: { roomCode, dmPeerDid: senderDid },
         });
       }
       if (isViewingThisDm) {

@@ -53,6 +53,26 @@ export interface HostApi {
   onBeforeDisconnect(listener: () => void): () => void;
   sendUpdateImmediately(cardId: string, payload: unknown): void;
   cards(): Promise<Array<{ id: string; senderDid: string }>>;
+  /**
+   * Put the plugin's playback on the OS media surface (lock screen, media
+   * keys, headsets). The host owns navigator.mediaSession and arbitrates:
+   * the latest claimer wins, and null releases only your own claim. Call
+   * from the surface that RENDERS the playback, clear on unmount. The
+   * handlers should fire your SYNCED actions - a lock-screen pause pauses
+   * the party for everyone, like the in-tile controls.
+   */
+  setNowPlaying(
+    info: {
+      title: string;
+      artist?: string;
+      artworkUrl?: string;
+      playing: boolean;
+      onPlay?: () => void;
+      onPause?: () => void;
+      onNext?: () => void;
+      onPrevious?: () => void;
+    } | null
+  ): void;
   seededRandom(seed: string): () => number; // deterministic PRNG
   storage: {
     get(k: string): Promise<unknown>;

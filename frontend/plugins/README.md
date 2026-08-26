@@ -110,6 +110,12 @@ optional components on the definition, all receive the same
   know the mount is PERSISTENT: it survives focus changes and filters, so
   an iframe never reloads mid-call.
 
+For playback plugins, `host.setNowPlaying({...})` puts the track on the
+OS media surface (lock screen, media keys, headsets); the host owns
+`navigator.mediaSession` and arbitrates between plugins - latest claimer
+wins, null releases your claim. Call it from the surface that RENDERS
+playback and make the handlers fire your SYNCED actions.
+
 **Updates** attach to a card. `host.sendUpdate(cardId, data)` persists and
 replays; `{ ephemeral: true }` sends live-only (cursors, ticks) and is capped
 at ~4 per second per sender. Your `reduce(state, update, ctx)` folds them:
