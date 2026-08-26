@@ -108,17 +108,11 @@
        their top edges peeking; hovering the stack fans them out to full
        strips and reveals the empty dotted slots. -->
   <div class="group/stack shrink-0 border-t border-sidebar-border pt-2">
-    {#each pluginPrefs.pinnedWidgets as pin, i (pin.cardId)}
-      <div
-        class="relative transition-all duration-200 {i > 0
-          ? '-mt-7 group-hover/stack:mt-0'
-          : ''}"
-        style="z-index: {30 - i}"
-      >
-        <PluginWidgetBox {pin} />
-      </div>
-    {/each}
-
+    <!-- Slots ABOVE the pins, pins at the bottom: this block sits at the
+         sidebar's bottom, so anything that grows BELOW a pin shoves the pin
+         upward exactly as the cursor reaches its controls. With the slots on
+         top, hover-growth expands into the free space above and the pinned
+         strips never move under the pointer. -->
     {#each Array.from({ length: emptySlots }) as _, i (i)}
       {@const alwaysOpen = pluginPrefs.pinnedWidgets.length === 0 && i === 0}
       <!-- Height-animated, not display-swapped: a display swap cannot
@@ -184,5 +178,17 @@
         {/if}
       </div>
     {/if}
+
+    {#each pluginPrefs.pinnedWidgets as pin, i (pin.cardId)}
+      <div
+        class="relative transition-all duration-200 {i > 0
+          ? '-mt-7 group-hover/stack:mt-0'
+          : ''}"
+        style="z-index: {30 - i}"
+      >
+        <PluginWidgetBox {pin} />
+      </div>
+    {/each}
+
   </div>
 {/if}
