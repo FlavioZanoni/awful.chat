@@ -29,6 +29,7 @@ import {
 } from "./identity";
 import { deleteWebAuthnRecord, requestPersistentStorage } from "../storage";
 import { clearRememberedPassword } from "./remembered-password";
+import { isDuressPassword, executeDuressWipe } from "../duress";
 
 interface IdentityStore {
   /** True when the private key is held in memory and signing is available. */
@@ -172,6 +173,12 @@ export async function unlock(password: string): Promise<void> {
   identityStore.loading = true;
   identityStore.error = null;
   try {
+    // The duress check runs FIRST and costs one PBKDF2 - the same order of
+    // work a real unlock does, so nothing observable distinguishes the two
+    // until the wipe lands. executeDuressWipe never returns.
+    if (await isDuressPassword(password)) {
+      await executeDuressWipe();
+    }
     await unlockIdentity(password);
     // Re-read the keypair record for public key and did
     const keypair = await getIdentity();

@@ -15,6 +15,12 @@ import {
   identityStore,
   removeWebAuthn,
 } from "$lib/identity/identity.svelte";
+import { unlockIdentity } from "$lib/identity/identity";
+import {
+  clearDuressPassword,
+  hasDuressPassword,
+  setDuressPassword,
+} from "$lib/duress";
 
 interface Props {
   isMobile?: boolean;
@@ -39,6 +45,41 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
   let biometricError = $state<string | null>(null);
   let biometricSuccess = $state(false);
   let confirmRemoveBiometric = $state(false);
+
+  let duressEnabled = $state(hasDuressPassword());
+  let duressPassword = $state("");
+  let duressError = $state<string | null>(null);
+  let duressLoading = $state(false);
+
+  async function saveDuress() {
+    duressError = null;
+    duressLoading = true;
+    try {
+      // The duress password must differ from the real one, or the user
+      // wipes their device on a normal unlock. The only way to know is to
+      // try it against the mnemonic: success means "same password", reject.
+      let matchesReal = false;
+      try {
+        await unlockIdentity(duressPassword);
+        matchesReal = true; // re-unlocked with the same identity: harmless
+      } catch {
+        matchesReal = false;
+      }
+      if (matchesReal) {
+        duressError = "That is your unlock password - pick a different one.";
+        return;
+      }
+      if (duressPassword.length < 4) {
+        duressError = "Too short - it has to survive being typed under stress.";
+        return;
+      }
+      await setDuressPassword(duressPassword);
+      duressPassword = "";
+      duressEnabled = true;
+    } finally {
+      duressLoading = false;
+    }
+  }
 
   const canEnrollBiometrics = $derived(
     !identityStore.hasWebAuthn &&
@@ -188,6 +229,58 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
       {/if}
     </div>
   {/if}
+
+<!-- Duress Section -->
+<div
+  class="flex flex-col gap-4 p-4 bg-muted/30 rounded-lg border border-border/50"
+>
+  <div class="flex items-center gap-2">
+    <div class="w-1 h-4 bg-orange-500 rounded-full"></div>
+    <Label
+      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      >Duress password</Label
+    >
+  </div>
+  <p class="text-xs text-muted-foreground font-mono">
+    Entering this password at the unlock screen instead of your real one
+    silently and permanently erases this device's data - messages, files,
+    identity - and shows the fresh-install screen. Your account survives on
+    other devices and through your recovery phrase.
+  </p>
+  {#if duressEnabled}
+    <p class="text-xs text-green-500 font-mono">A duress password is set</p>
+    <Button
+      variant="outline"
+      class="w-full font-mono text-xs"
+      onclick={() => {
+        clearDuressPassword();
+        duressEnabled = false;
+      }}
+    >
+      Remove duress password
+    </Button>
+  {:else}
+    <Input
+      type="password"
+      bind:value={duressPassword}
+      placeholder="Duress password"
+      class="bg-background border-input font-mono focus-visible:ring-ring text-sm {duressError
+        ? 'border-destructive'
+        : ''}"
+    />
+    {#if duressError}
+      <p class="text-xs text-destructive font-mono">{duressError}</p>
+    {/if}
+    <Button
+      variant="outline"
+      class="w-full font-mono text-xs"
+      disabled={duressPassword.length === 0 || duressLoading}
+      onclick={saveDuress}
+    >
+      {duressLoading ? "Setting..." : "Set duress password"}
+    </Button>
+  {/if}
+</div>
 
 <!-- Sync Section -->
 <div
