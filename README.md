@@ -113,7 +113,8 @@ cd relay && go test ./...   # rendezvous registry + TURN credentials
 
 `docker-compose.dokploy.yml` runs relay + sfu + coturn + frontend behind
 Traefik. One VPS is enough; give it swap before the first deploy, the
-frontend build is memory-hungry.
+frontend build is memory-hungry. Copy [.env.example](.env.example) to `.env`
+as a starting point.
 
 | Variable | Required | What it is |
 | --- | --- | --- |
@@ -121,6 +122,7 @@ frontend build is memory-hungry.
 | `ANNOUNCED_IP` | yes | the server's public IP (SFU and coturn announce it) |
 | `VITE_API_URL` | yes | relay API origin, e.g. `https://relay.<domain>` |
 | `VITE_RELAY_MULTIADDR` | yes | the relay's libp2p multiaddr shown on boot |
+| `VITE_SFU_URL` | no | SFU websocket URL, defaults to `/sfu` on the app origin |
 | `KLIPY_API_KEY` | no | enables the GIF picker (klipy.co) |
 | `PLUGIN_SOURCES` | no | plugins fetched at build time, see the [plugin guide](frontend/plugins/README.md) |
 | `TURN_SECRET` | no | switches TURN to short-lived credentials (below) |
