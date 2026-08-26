@@ -21,6 +21,15 @@
   function close() {
     needRefresh.set(false);
   }
+
+  // The reload is not instant: skip-waiting -> activate -> controlling ->
+  // location.reload(), and on a slow connection that chain takes seconds
+  // with zero visible effect - which reads as a dead button.
+  let updating = $state(false);
+  function update() {
+    updating = true;
+    void updateServiceWorker();
+  }
 </script>
 
 {#if $needRefresh}
@@ -30,10 +39,11 @@
   >
     <span>New version available</span>
     <button
-      class="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 cursor-pointer"
-      onclick={() => updateServiceWorker()}
+      class="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 cursor-pointer disabled:cursor-default disabled:opacity-70"
+      onclick={update}
+      disabled={updating}
     >
-      Reload
+      {#if updating}<span class="animate-pulse">Updating...</span>{:else}Reload{/if}
     </button>
     <button
       class="text-muted-foreground hover:text-foreground cursor-pointer"
