@@ -148,6 +148,16 @@
           what: "the language the frontend is written in",
           url: "https://www.typescriptlang.org",
         },
+        {
+          name: "nginx",
+          what: "serves the frontend bundle",
+          url: "https://nginx.org",
+        },
+        {
+          name: "Traefik",
+          what: "routes a self-hosted instance's traffic",
+          url: "https://traefik.io/traefik",
+        },
       ],
     },
     {
