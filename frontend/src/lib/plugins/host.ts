@@ -7,7 +7,15 @@
 import type { HostApi } from "./api";
 import { seededRandom } from "$lib/utils";
 import { identityStore } from "$lib/identity/identity.svelte";
-import { transportState } from "$lib/transport/transport.svelte";
+import {
+  onBeforeDisconnect,
+  onPeerDisconnect,
+  peerIdToDid,
+  sendUpdateImmediately,
+  transportState,
+} from "$lib/transport/transport.svelte";
+import { getAllMessages } from "$lib/storage";
+import { MessageType } from "$lib/types/message";
 
 export function makeHostApi(pluginId: string, roomCode: string): HostApi {
   return {
@@ -22,10 +30,44 @@ export function makeHostApi(pluginId: string, roomCode: string): HostApi {
     roomCode: () => roomCode,
     selfDid: () => identityStore.did || "",
     peers: () =>
-      Array.from(transportState.peerNames).map(([did, name]) => ({
-        did,
-        name,
-      })),
+      transportState.peers.map((peerId) => {
+        const did = peerIdToDid(peerId);
+        return {
+          did,
+          name: transportState.peerNames.get(did) ?? did.slice(0, 12),
+        };
+      }),
+    onPeerDisconnect(listener) {
+      return onPeerDisconnect(({ did }) =>
+        listener({
+          did,
+          name: transportState.peerNames.get(did) ?? did.slice(0, 12),
+        })
+      );
+    },
+    onBeforeDisconnect,
+    sendUpdateImmediately(cardId, payload) {
+      sendUpdateImmediately(pluginId, cardId, payload);
+    },
+    async cards() {
+      const messages = await getAllMessages(roomCode);
+      return messages.flatMap((message) => {
+        if (message.type !== MessageType.PluginCard) return [];
+        try {
+          const payload = JSON.parse(message.content);
+          return payload.pluginId === pluginId
+            ? [
+                {
+                  id: message.id,
+                  senderDid: message.senderDid || message.senderId,
+                },
+              ]
+            : [];
+        } catch {
+          return [];
+        }
+      });
+    },
     seededRandom,
     // ponytail: localStorage-backed plugin storage, namespaced per plugin.
     // Move to IndexedDB when a plugin actually outgrows string-sized values.
