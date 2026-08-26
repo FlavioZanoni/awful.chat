@@ -1860,6 +1860,18 @@ _transport.on("disconnect", (peerId) => {
  * Split out of the message handler so a frame that arrived before the sender's
  * DID was bound can be replayed through exactly the same path.
  */
+/**
+ * Deliver a DM that arrived via the relay MAILBOX instead of a live stream.
+ * The sender is offline, so there is no peerId - the did stands in for it,
+ * which every downstream helper already tolerates (room codes hash DIDs,
+ * display names resolve DIDs). Authenticity was verified by the mailbox
+ * crypto (sender signature over the envelope, bound to us); the stream
+ * path's transport-level binding plays no part here.
+ */
+export function deliverMailboxDm(senderDid: string, payload: DmPayload): void {
+  _handleDmChat(senderDid, senderDid, { payload });
+}
+
 function _handleDmChat(
   peerId: string,
   senderDid: string,

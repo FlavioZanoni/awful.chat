@@ -21,6 +21,10 @@ import {
   hasDuressPassword,
   setDuressPassword,
 } from "$lib/duress";
+import {
+  mailboxPrefs,
+  setMailboxEnabled,
+} from "$lib/transport/mailbox.svelte";
 
 interface Props {
   isMobile?: boolean;
@@ -229,6 +233,31 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
       {/if}
     </div>
   {/if}
+
+<!-- Offline inbox Section -->
+<div
+  class="flex flex-col gap-4 p-4 bg-muted/30 rounded-lg border border-border/50"
+>
+  <div class="flex items-center gap-2">
+    <div class="w-1 h-4 bg-violet-500 rounded-full"></div>
+    <Label
+      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      >Offline inbox</Label
+    >
+  </div>
+  <div class="flex items-start justify-between gap-3">
+    <p class="text-xs text-muted-foreground font-mono">
+      When a DM can't reach an offline contact, leave an encrypted copy at
+      the relay for up to 48 hours - they collect it next time they open the
+      app, no need to be online together. The relay only ever sees
+      ciphertext and delivery times, never content or who sent it.
+    </p>
+    <Switch
+      checked={mailboxPrefs.enabled}
+      onCheckedChange={(on) => setMailboxEnabled(on)}
+    />
+  </div>
+</div>
 
 <!-- Duress Section -->
 <div

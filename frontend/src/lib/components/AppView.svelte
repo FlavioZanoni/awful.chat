@@ -97,6 +97,10 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
     if (!identityStore.isUnlocked || bootstrapped) return;
     bootstrapped = true;
     connect();
+    // Offline DMs deposited at the relay while we were away (opt-in).
+    import("$lib/transport/mailbox.svelte")
+      .then(({ startMailboxCollector }) => startMailboxCollector())
+      .catch(() => {});
     const roomsReady = loadRooms();
     loadProfile();
     if (pendingRoomCode) {

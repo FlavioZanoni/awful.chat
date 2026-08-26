@@ -285,7 +285,16 @@ export async function sendDirectMessage(
   if (isOnline) {
     delivered = await _transport.send(resolvedPeerId!, envelope);
   }
-  if (!delivered) queueDmMessage(peerDid, envelope, id);
+  if (!delivered) {
+    queueDmMessage(peerDid, envelope, id);
+    // Opt-in relay mailbox: a sealed copy waits for the offline peer so
+    // delivery does not require both of you online at once. Best-effort -
+    // the queue above keeps retrying P2P either way.
+    if (peerDid.startsWith("did:")) {
+      const { depositDmToMailbox } = await import("./mailbox.svelte");
+      void depositDmToMailbox(peerDid, envelope);
+    }
+  }
 
   const mySenderId = identityStore.did ?? _transport.selfId();
   let msg: Message = {

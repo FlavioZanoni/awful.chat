@@ -60,6 +60,11 @@ services:
       - traefik.http.routers.steam.tls=true
       - traefik.http.routers.steam.tls.certresolver=letsencrypt
       - traefik.http.routers.steam.service=relay-api-service
+      - traefik.http.routers.mailbox.rule=Host(`relay.${DOMAIN}`) && PathPrefix(`/mailbox`)
+      - traefik.http.routers.mailbox.entrypoints=websecure
+      - traefik.http.routers.mailbox.tls=true
+      - traefik.http.routers.mailbox.tls.certresolver=letsencrypt
+      - traefik.http.routers.mailbox.service=relay-api-service
 
   sfu:
     build:

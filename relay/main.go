@@ -341,6 +341,10 @@ func main() {
 		mux.HandleFunc("/klipy/trending", handleKlipyTrending)
 		mux.HandleFunc("/turn-credentials", handleTurnCredentials)
 		mux.HandleFunc("/plugin-proxy", handlePluginProxy)
+		mux.HandleFunc("/mailbox/deposit", handleMailboxDeposit)
+		mux.HandleFunc("/mailbox/collect", handleMailboxCollect)
+		mux.HandleFunc("/mailbox/ack", handleMailboxAck)
+		startMailboxSweeper()
 		log.Printf("[http] Starting API server on port %s", apiPort)
 		server := &http.Server{
 			Addr:              ":" + apiPort,

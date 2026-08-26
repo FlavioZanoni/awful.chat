@@ -1,0 +1,291 @@
+package main
+
+// Offline DM mailbox: store-and-forward for end-to-end encrypted blobs.
+//
+// The relay NEVER sees plaintext or sender identity. A sender seals the DM
+// envelope to the recipient's key client-side (ephemeral-static ECDH, so no
+// prior handshake and nothing in the blob names the sender) and deposits it
+// under the recipient's mailbox id = SHA-256(recipient did). The recipient
+// collects by proving control of the did with an ed25519 signature over a
+// fresh timestamp, then acks; acked blobs are deleted immediately and
+// unclaimed ones expire after MailboxTTL.
+//
+// What the relay learns: recipient mailbox, deposit times, padded sizes,
+// depositor IP. What it cannot learn: content, sender identity.
+//
+// Kept deliberately small: DMs only, text-scale blobs (files ride WebTorrent
+// peer-to-peer and are never deposited), hard caps everywhere.
+
+import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mr-tron/base58"
+)
+
+const (
+	// One sealed text DM is a few hundred bytes; 16 KiB leaves room for
+	// padding buckets and replies-with-context while keeping the server
+	// footprint minimal. Anything bigger retries peer-to-peer instead.
+	mailboxMaxBlob = 16 * 1024
+	// Per-mailbox caps: count and total bytes.
+	mailboxMaxMsgs  = 100
+	mailboxMaxBytes = 512 * 1024
+	// Unclaimed blobs expire; the P2P offline queue still retries forever,
+	// so expiry only delays delivery until both sides co-online.
+	mailboxTTL = 48 * time.Hour
+	// Signed-timestamp freshness window for collect/ack.
+	mailboxAuthSkew = 2 * time.Minute
+)
+
+var mailboxDir = func() string {
+	if d := os.Getenv("MAILBOX_DIR"); d != "" {
+		return d
+	}
+	return "/app/data/mailbox"
+}()
+
+var mailboxBoxRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var mailboxIDRe = regexp.MustCompile(`^[0-9a-f]{1,32}$`)
+
+// mailboxMu serializes writes per process - deposit volume is tiny and a
+// single lock keeps the quota check race-free.
+var mailboxMu sync.Mutex
+
+// didToPubKey decodes did:key:z... (base58btc, multicodec 0xed 0x01) to the
+// raw ed25519 public key.
+func didToPubKey(did string) (ed25519.PublicKey, error) {
+	const prefix = "did:key:z"
+	if !strings.HasPrefix(did, prefix) {
+		return nil, fmt.Errorf("not a did:key")
+	}
+	raw, err := base58.Decode(did[len(prefix):])
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) != 34 || raw[0] != 0xed || raw[1] != 0x01 {
+		return nil, fmt.Errorf("not an ed25519 did:key")
+	}
+	return ed25519.PublicKey(raw[2:]), nil
+}
+
+func mailboxIDForDid(did string) string {
+	sum := sha256.Sum256([]byte(did))
+	return hex.EncodeToString(sum[:])
+}
+
+// verifyMailboxAuth checks the collect/ack proof: an ed25519 signature by
+// the did's key over "awful-mailbox:{unix-seconds}", fresh within the skew.
+func verifyMailboxAuth(did string, ts int64, sigB64 string) (string, error) {
+	if d := time.Since(time.Unix(ts, 0)); d > mailboxAuthSkew || d < -mailboxAuthSkew {
+		return "", fmt.Errorf("stale timestamp")
+	}
+	pub, err := didToPubKey(did)
+	if err != nil {
+		return "", err
+	}
+	sig, err := base64.StdEncoding.DecodeString(sigB64)
+	if err != nil {
+		return "", err
+	}
+	msg := []byte("awful-mailbox:" + strconv.FormatInt(ts, 10))
+	if !ed25519.Verify(pub, msg, sig) {
+		return "", fmt.Errorf("bad signature")
+	}
+	return mailboxIDForDid(did), nil
+}
+
+func mailboxCORS(w http.ResponseWriter, r *http.Request) bool {
+	h := corsHeaders(r)
+	h.Set("Access-Control-Allow-Methods", "POST,OPTIONS")
+	for k, v := range h {
+		w.Header()[k] = v
+	}
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return false
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if !isAllowedOrigin(r.Header.Get("Origin")) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+type mailboxEntry struct {
+	ID   string `json:"id"`
+	Blob string `json:"blob"` // base64
+	Ts   int64  `json:"ts"`   // deposit unix seconds
+}
+
+func boxPath(box string) string { return filepath.Join(mailboxDir, box) }
+
+// handleMailboxDeposit stores one sealed blob. Anonymous by design; only
+// rate limits and caps stand between it and abuse.
+func handleMailboxDeposit(w http.ResponseWriter, r *http.Request) {
+	if !mailboxCORS(w, r) {
+		return
+	}
+	if !pluginProxyAllow(clientIP(r)) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		return
+	}
+	var req struct {
+		Box  string `json:"box"`
+		Blob string `json:"blob"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, mailboxMaxBlob*2)).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if !mailboxBoxRe.MatchString(req.Box) {
+		http.Error(w, "bad mailbox", http.StatusBadRequest)
+		return
+	}
+	blob, err := base64.StdEncoding.DecodeString(req.Blob)
+	if err != nil || len(blob) == 0 || len(blob) > mailboxMaxBlob {
+		http.Error(w, "bad blob", http.StatusBadRequest)
+		return
+	}
+
+	mailboxMu.Lock()
+	defer mailboxMu.Unlock()
+	dir := boxPath(req.Box)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	entries, _ := os.ReadDir(dir)
+	var total int64
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil {
+			total += info.Size()
+		}
+	}
+	if len(entries) >= mailboxMaxMsgs || total+int64(len(blob)) > mailboxMaxBytes {
+		http.Error(w, "mailbox full", http.StatusInsufficientStorage)
+		return
+	}
+	id := strconv.FormatInt(time.Now().UnixNano(), 16)
+	if err := os.WriteFile(filepath.Join(dir, id), blob, 0o600); err != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMailboxCollect returns every pending blob for the proven did.
+func handleMailboxCollect(w http.ResponseWriter, r *http.Request) {
+	if !mailboxCORS(w, r) {
+		return
+	}
+	var req struct {
+		Did string `json:"did"`
+		Ts  int64  `json:"ts"`
+		Sig string `json:"sig"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	box, err := verifyMailboxAuth(req.Did, req.Ts, req.Sig)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	entries, _ := os.ReadDir(boxPath(box))
+	out := []mailboxEntry{}
+	for _, e := range entries {
+		if !mailboxIDRe.MatchString(e.Name()) {
+			continue
+		}
+		blob, err := os.ReadFile(filepath.Join(boxPath(box), e.Name()))
+		if err != nil {
+			continue
+		}
+		ts := int64(0)
+		if info, err := e.Info(); err == nil {
+			ts = info.ModTime().Unix()
+		}
+		out = append(out, mailboxEntry{
+			ID:   e.Name(),
+			Blob: base64.StdEncoding.EncodeToString(blob),
+			Ts:   ts,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleMailboxAck deletes collected blobs for the proven did.
+func handleMailboxAck(w http.ResponseWriter, r *http.Request) {
+	if !mailboxCORS(w, r) {
+		return
+	}
+	var req struct {
+		Did string   `json:"did"`
+		Ts  int64    `json:"ts"`
+		Sig string   `json:"sig"`
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	box, err := verifyMailboxAuth(req.Did, req.Ts, req.Sig)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	for _, id := range req.IDs {
+		if mailboxIDRe.MatchString(id) {
+			_ = os.Remove(filepath.Join(boxPath(box), id))
+		}
+	}
+	_ = os.Remove(boxPath(box)) // succeeds only when empty
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// startMailboxSweeper expires unclaimed blobs. Runs hourly; a restart
+// changes nothing because the state is plain files under the data volume.
+func startMailboxSweeper() {
+	go func() {
+		for {
+			cutoff := time.Now().Add(-mailboxTTL)
+			boxes, _ := os.ReadDir(mailboxDir)
+			removed := 0
+			for _, b := range boxes {
+				dir := filepath.Join(mailboxDir, b.Name())
+				entries, _ := os.ReadDir(dir)
+				for _, e := range entries {
+					if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
+						_ = os.Remove(filepath.Join(dir, e.Name()))
+						removed++
+					}
+				}
+				_ = os.Remove(dir) // only if empty
+			}
+			if removed > 0 {
+				log.Printf("[mailbox] expired %d blob(s)", removed)
+			}
+			time.Sleep(time.Hour)
+		}
+	}()
+}
