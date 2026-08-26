@@ -1677,12 +1677,14 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
       {/if}
     </div>
 
-    <!-- Same visibility rule as the call controls: parked while docked
-         (windowed), fade-on-idle in fullscreen. -->
+    <!-- Same visibility rule as plugin tile chrome: these corner buttons sit
+         OVER the video, so they only exist while the mouse is on the call
+         section (windowed) or the fullscreen chrome is up. -->
     <div
       class={cn(
         "transition-all duration-300",
-        !dockedControls && !controlsVisible && "opacity-0 pointer-events-none"
+        !(dockedControls ? panelMouse !== null : controlsVisible) &&
+          "opacity-0 pointer-events-none"
       )}
     >
     <Tip text={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
