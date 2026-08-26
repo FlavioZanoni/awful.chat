@@ -131,6 +131,26 @@
       ],
     },
     {
+      label: "Platform",
+      items: [
+        {
+          name: "Go",
+          what: "the language the relay is written in",
+          url: "https://go.dev",
+        },
+        {
+          name: "Node.js",
+          what: "runs the SFU",
+          url: "https://nodejs.org",
+        },
+        {
+          name: "TypeScript",
+          what: "the language the frontend is written in",
+          url: "https://www.typescriptlang.org",
+        },
+      ],
+    },
+    {
       label: "Device",
       items: [
         {
