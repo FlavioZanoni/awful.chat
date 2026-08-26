@@ -149,7 +149,9 @@
     const base = getStatusConfig(quality);
     if (quality === "failed" || quality === "degraded") return base;
     if (expectedCount === 0) {
-      return { ...getStatusConfig("connecting"), label: "Waiting for others" };
+      // Alone in the call is a HEALTHY state, not a pending one: everything
+      // is connected and ready, there is just nobody else yet - green.
+      return { ...getStatusConfig("p2p"), label: "Waiting for others" };
     }
     if (activeCount === 0) return getStatusConfig("connecting");
     if (activeCount < expectedCount) {
