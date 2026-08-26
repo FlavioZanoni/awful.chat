@@ -108,6 +108,20 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
     import("$lib/transport/mailbox.svelte")
       .then(({ startMailboxCollector }) => startMailboxCollector())
       .catch(() => {});
+    // Persistence IS requested at every unlock, but a denial was silent -
+    // and eviction on a denied origin is exactly how a phone loses its
+    // identity. Say it out loud, once per page load.
+    import("$lib/storage")
+      .then(async ({ requestPersistentStorage }) => {
+        if (await requestPersistentStorage()) return;
+        const { _transport } = await import("$lib/transport/transport.svelte");
+        _transport.announce({
+          type: "app-warning",
+          message:
+            "Storage is not protected - the browser may clear this app's data (identity included) when space runs low. See Settings > Data.",
+        });
+      })
+      .catch(() => {});
     // OS-launched backup files (file_handlers) park in launch-file.ts; the
     // restore flow in Settings > Data consumes them when opened.
     import("$lib/launch-file")
