@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { cardStates, foldComparator, foldUpdate } from "./state.svelte";
+import {
+  cardStates,
+  clearCardStates,
+  foldComparator,
+  foldUpdate,
+} from "./state.svelte";
 import type { PluginDefinition } from "./api";
 
 describe("foldComparator", () => {
@@ -68,10 +73,11 @@ describe("foldUpdate ordering", () => {
     lamport,
     data: id,
     ephemeral,
+    roomCode: "room-1",
   });
 
   it("folds in-order updates incrementally and advances the entry", () => {
-    cardStates.set("c1", { state: ["a"], last: { lamport: 1, senderId: "s", id: "a" } });
+    cardStates.set("c1", { state: ["a"], roomCode: "room-1", last: { lamport: 1, senderId: "s", id: "a" } });
     const out = foldUpdate("c1", recorder, upd("b", 2));
     expect(out).toEqual(["a", "b"]);
     expect(cardStates.get("c1")?.last?.lamport).toBe(2);
@@ -82,18 +88,61 @@ describe("foldUpdate ordering", () => {
     // Two concurrent spins: lamport 9 arrives AFTER 10 was already folded.
     // Folding it on top applies the wrong order (each client would keep its
     // own winner); the entry must be dropped so storage replays globally.
-    cardStates.set("c2", { state: ["ten"], last: { lamport: 10, senderId: "s", id: "ten" } });
+    cardStates.set("c2", { state: ["ten"], roomCode: "room-1", last: { lamport: 10, senderId: "s", id: "ten" } });
     const out = foldUpdate("c2", recorder, upd("nine", 9));
     expect(out).toBeUndefined();
     expect(cardStates.has("c2")).toBe(false);
   });
 
   it("ephemerals (lamport 0) fold without eviction and never move the cursor", () => {
-    cardStates.set("c3", { state: ["a"], last: { lamport: 5, senderId: "s", id: "a" } });
+    cardStates.set("c3", { state: ["a"], roomCode: "room-1", last: { lamport: 5, senderId: "s", id: "a" } });
     const out = foldUpdate("c3", recorder, upd("fx", 0, true));
     expect(out).toEqual(["a", "fx"]);
     expect(cardStates.get("c3")?.last?.lamport).toBe(5);
     expect(cardStates.has("c3")).toBe(true);
     cardStates.delete("c3");
+  });
+});
+
+describe("foldUpdate room binding", () => {
+  const recorder = {
+    id: "t",
+    name: "t",
+    version: "1",
+    initialState: () => [] as string[],
+    reduce: (s: unknown, u: { data: unknown }) => [
+      ...(s as string[]),
+      u.data as string,
+    ],
+  } as unknown as PluginDefinition;
+
+  it("refuses an update arriving from a different room than the card's", () => {
+    cardStates.set("c4", {
+      state: ["a"],
+      roomCode: "room-Y",
+      last: { lamport: 1, senderId: "s", id: "a" },
+    });
+    const out = foldUpdate("c4", recorder, {
+      id: "forged",
+      senderId: "attacker",
+      senderName: "A",
+      lamport: 2,
+      data: "forged",
+      roomCode: "room-X",
+    });
+    expect(out).toBeUndefined();
+    expect(cardStates.get("c4")?.state).toEqual(["a"]);
+    expect(cardStates.get("c4")?.last?.lamport).toBe(1);
+    cardStates.delete("c4");
+  });
+
+  it("clearCardStates(roomCode) leaves other rooms' entries alone", () => {
+    cardStates.set("cA", { state: 1, roomCode: "room-A", last: null });
+    cardStates.set("cB", { state: 2, roomCode: "room-B", last: null });
+    clearCardStates("room-A");
+    expect(cardStates.has("cA")).toBe(false);
+    expect(cardStates.get("cB")?.state).toBe(2);
+    clearCardStates();
+    expect(cardStates.size).toBe(0);
   });
 });

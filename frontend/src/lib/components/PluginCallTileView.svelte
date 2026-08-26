@@ -24,6 +24,10 @@
   let tileComponent = $state<ComponentType | null>(null);
   let tileState = $state<unknown>(undefined);
 
+  // One host per (plugin, room): a fresh host per render meant a fresh
+  // now-playing token per card-state tick, churning the OS media surface.
+  const hostApi = $derived(makeHostApi(pluginId, roomCode));
+
   // Same tick bridge as MsgRender/PluginWidgetBox: repaint when updates fold.
   let tick = $state(0);
   $effect(() => onCardStateChange(() => (tick += 1)));
@@ -50,7 +54,7 @@
   <TileUi
     {card}
     cardState={tileState}
-    host={makeHostApi(pluginId, roomCode)}
+    host={hostApi}
     {chromeVisible}
   />
 {:else}

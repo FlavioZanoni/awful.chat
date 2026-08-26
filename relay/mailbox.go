@@ -49,6 +49,15 @@ const (
 	mailboxTTL = 48 * time.Hour
 	// Signed-timestamp freshness window for collect/ack.
 	mailboxAuthSkew = 2 * time.Minute
+	// Hard ceiling on everything under mailboxDir combined. Per-IP limits
+	// mean nothing to a distributed depositor; without a global cap the
+	// shared data volume could be filled without bound.
+	mailboxGlobalMaxBytes = 256 << 20
+	// Deposit/collect/ack per-IP budgets. Deposits get their own bucket so a
+	// chatty plugin proxying data does not starve offline DMs (and vice
+	// versa); collect+ack were previously unlimited, a free CPU/verify sink.
+	mailboxDepositLimit = 10
+	mailboxAuthedLimit  = 30
 )
 
 var mailboxDir = func() string {
@@ -137,13 +146,29 @@ type mailboxEntry struct {
 
 func boxPath(box string) string { return filepath.Join(mailboxDir, box) }
 
+// mailboxTotalBytes walks every box. O(boxes) per deposit is fine at the
+// volumes the caps allow; callers hold mailboxMu.
+func mailboxTotalBytes() int64 {
+	var total int64
+	boxes, _ := os.ReadDir(mailboxDir)
+	for _, b := range boxes {
+		entries, _ := os.ReadDir(filepath.Join(mailboxDir, b.Name()))
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+	}
+	return total
+}
+
 // handleMailboxDeposit stores one sealed blob. Anonymous by design; only
 // rate limits and caps stand between it and abuse.
 func handleMailboxDeposit(w http.ResponseWriter, r *http.Request) {
 	if !mailboxCORS(w, r) {
 		return
 	}
-	if !pluginProxyAllow(clientIP(r)) {
+	if !rateAllow("mb:"+clientIP(r), mailboxDepositLimit) {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)
 		return
 	}
@@ -183,6 +208,10 @@ func handleMailboxDeposit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mailbox full", http.StatusInsufficientStorage)
 		return
 	}
+	if mailboxTotalBytes()+int64(len(blob)) > mailboxGlobalMaxBytes {
+		http.Error(w, "mailbox full", http.StatusInsufficientStorage)
+		return
+	}
 	id := strconv.FormatInt(time.Now().UnixNano(), 16)
 	if err := os.WriteFile(filepath.Join(dir, id), blob, 0o600); err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -194,6 +223,13 @@ func handleMailboxDeposit(w http.ResponseWriter, r *http.Request) {
 // handleMailboxCollect returns every pending blob for the proven did.
 func handleMailboxCollect(w http.ResponseWriter, r *http.Request) {
 	if !mailboxCORS(w, r) {
+		return
+	}
+	// Unlimited, these endpoints were a free signature-verification and
+	// ReadDir sink for anyone with curl. 30/min covers the 5-minute collect
+	// loop plus its acks many times over.
+	if !rateAllow("mba:"+clientIP(r), mailboxAuthedLimit) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
 		return
 	}
 	var req struct {
@@ -239,6 +275,10 @@ func handleMailboxAck(w http.ResponseWriter, r *http.Request) {
 	if !mailboxCORS(w, r) {
 		return
 	}
+	if !rateAllow("mba:"+clientIP(r), mailboxAuthedLimit) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		return
+	}
 	var req struct {
 		Did string   `json:"did"`
 		Ts  int64    `json:"ts"`
@@ -254,12 +294,17 @@ func handleMailboxAck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Under mailboxMu: the empty-directory Remove racing a concurrent
+	// deposit's ReadDir->WriteFile window turned that deposit into a
+	// spurious 500 (WriteFile into a just-removed directory).
+	mailboxMu.Lock()
 	for _, id := range req.IDs {
 		if mailboxIDRe.MatchString(id) {
 			_ = os.Remove(filepath.Join(boxPath(box), id))
 		}
 	}
 	_ = os.Remove(boxPath(box)) // succeeds only when empty
+	mailboxMu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -273,6 +318,9 @@ func startMailboxSweeper() {
 			removed := 0
 			for _, b := range boxes {
 				dir := filepath.Join(mailboxDir, b.Name())
+				// Same deposit-vs-remove race as ack: the empty-dir Remove
+				// must not land inside a deposit's quota-check window.
+				mailboxMu.Lock()
 				entries, _ := os.ReadDir(dir)
 				for _, e := range entries {
 					if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
@@ -281,6 +329,7 @@ func startMailboxSweeper() {
 					}
 				}
 				_ = os.Remove(dir) // only if empty
+				mailboxMu.Unlock()
 			}
 			if removed > 0 {
 				log.Printf("[mailbox] expired %d blob(s)", removed)

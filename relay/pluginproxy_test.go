@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"sync"
+	"sync/atomic"
+	"testing"
+)
 
 func TestSubstituteSecrets(t *testing.T) {
 	secrets := map[string]pluginSecret{
@@ -60,5 +64,27 @@ func TestPluginProxyEnvParsing(t *testing.T) {
 	}
 	if secrets["FOO"].value != "a=b" || secrets["FOO"].host != "" || len(secrets) != 2 {
 		t.Errorf("secrets parsed wrong: %v", secrets)
+	}
+}
+
+func TestRateAllowConcurrent(t *testing.T) {
+	// The sync.Map predecessor let N concurrent requests all read the same
+	// stale count and all pass; the mutexed window must admit exactly the
+	// limit no matter the concurrency.
+	const attempts = 100
+	var allowed int64
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rateAllow("test:concurrent", 10) {
+				atomic.AddInt64(&allowed, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if allowed != 10 {
+		t.Fatalf("admitted %d, want exactly 10", allowed)
 	}
 }

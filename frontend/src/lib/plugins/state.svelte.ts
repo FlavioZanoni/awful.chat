@@ -10,6 +10,11 @@ import { getAllMessages } from "$lib/storage";
 
 export interface CardStateEntry {
   state: unknown;
+  /** The room this state was built FOR. Updates arriving from any other
+   *  room are refused: a cardId in the payload is peer-supplied, and
+   *  without this check a member of room X could fold forged data into a
+   *  card living in room Y just by naming its id. */
+  roomCode: string;
   /** Fold-order key of the newest PERSISTED update included, null when the
    *  state was built before any update existed. Ephemerals never count: they
    *  are unordered by design (lamport 0) and live outside storage. */
@@ -90,6 +95,7 @@ export async function buildCardState(
       state: definition.initialState
         ? definition.initialState(cardData)
         : undefined,
+      roomCode,
       last: null,
     };
   }
@@ -130,6 +136,7 @@ export async function buildCardState(
   const newest = updates[updates.length - 1];
   return {
     state,
+    roomCode,
     last: newest
       ? { lamport: newest.lamport, senderId: newest.senderId, id: newest.id }
       : null,
@@ -151,6 +158,10 @@ export function foldUpdate(
     lamport: number;
     data: unknown;
     ephemeral?: boolean;
+    /** The AUTHENTICATED room the update arrived on (pubsub topic, never
+     *  the payload). A mismatch with the entry's room is a forgery or a
+     *  misroute and the fold is refused. */
+    roomCode: string;
   }
 ): unknown {
   if (!definition.reduce) {
@@ -159,6 +170,13 @@ export function foldUpdate(
   }
 
   const entry = cardStates.get(cardId);
+  if (entry && entry.roomCode !== update.roomCode) {
+    console.warn(
+      `[plugins] refused cross-room update for card ${cardId} ` +
+        `(arrived on ${update.roomCode}, card lives in ${entry.roomCode})`
+    );
+    return undefined;
+  }
   if (!entry) {
     // A build for this card may be mid-flight, reading storage from BEFORE
     // this update was put - dropping the fold here would freeze the card on
@@ -237,8 +255,17 @@ export async function getCardState(
 }
 
 /**
- * Clear all cached card states (on room switch or disconnect).
+ * Clear cached card states. With a roomCode, only that room's entries go -
+ * a room SWITCH must not wipe the state of pinned widgets and call tiles
+ * following cards in other rooms (their ephemerals dropped unrecoverably in
+ * the gap). Without one (disconnect), everything goes.
  */
-export function clearCardStates(): void {
-  cardStates.clear();
+export function clearCardStates(roomCode?: string): void {
+  if (roomCode === undefined) {
+    cardStates.clear();
+    return;
+  }
+  for (const [cardId, entry] of cardStates) {
+    if (entry.roomCode === roomCode) cardStates.delete(cardId);
+  }
 }

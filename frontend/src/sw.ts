@@ -44,7 +44,11 @@ self.addEventListener("notificationclick", (event) => {
       if (win) {
         await win.focus().catch(() => {});
         win.postMessage({ type: "notify-intent" });
-      } else if (event.action !== "reply") {
+      } else {
+        // Replies too: with no window alive, opening the app is the ONLY
+        // way the stored intent ever gets drained and sent - gating this
+        // on "not a reply" silently dropped replies typed while the app
+        // was fully closed.
         await self.clients.openWindow("/app").catch(() => {});
       }
     })()

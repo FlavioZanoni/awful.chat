@@ -6,8 +6,6 @@
 import type { PluginDefinition, PluginManifest } from "./api";
 import { validatePluginId } from "./validate";
 
-const PLUGIN_ID_RE = /^[a-z0-9-]{2,32}$/;
-
 interface ManifestModule {
   manifest: PluginManifest;
 }

@@ -93,6 +93,13 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
   let joiningRoom = $state(false);
   let bootstrapped = $state(false);
 
+  // Not folded into the bootstrap effect below: that one is once-per-page,
+  // while an intent stored DURING a lock must drain on the re-unlock too
+  // (unlocking an already-focused tab fires no focus/SW event to catch it).
+  $effect(() => {
+    if (identityStore.isUnlocked) void drainNotifyIntents_();
+  });
+
   $effect(() => {
     if (!identityStore.isUnlocked || bootstrapped) return;
     bootstrapped = true;
@@ -101,7 +108,6 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
     import("$lib/transport/mailbox.svelte")
       .then(({ startMailboxCollector }) => startMailboxCollector())
       .catch(() => {});
-    void drainNotifyIntents_();
     // OS-launched backup files (file_handlers) park in launch-file.ts; the
     // restore flow in Settings > Data consumes them when opened.
     import("$lib/launch-file")
@@ -306,6 +312,22 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
           const { sendMessage } = await import(
             "$lib/transport/transport.svelte"
           );
+          // sendMessage targets whatever conversation is ACTIVE, and the
+          // select above can be superseded (the user clicked elsewhere
+          // mid-drain, or the DM open lost a race and returned early).
+          // Verify the active conversation IS the intent's target before
+          // sending - a reply must never land in the wrong chat.
+          const activeDmDid =
+            peerIdToDid(transportState.activeDmPeerId ?? "") ||
+            transportState.activeDmPeerId;
+          const onTarget = it.dmPeerDid
+            ? transportState.chatMode === "dm" && activeDmDid === it.dmPeerDid
+            : transportState.chatMode !== "dm" &&
+              transportState.roomCode === it.roomCode;
+          if (!onTarget) {
+            console.warn("[notify] reply skipped: conversation changed");
+            continue;
+          }
           await sendMessage(it.text.trim());
         }
       }
@@ -856,7 +878,6 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
           />
         {/if}
       </div>
-      <ReloadPrompt />
       <InstallPrompt />
 
       <Dialog.Root bind:open={createJoinOpen}>
@@ -1230,6 +1251,12 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
       </Dialog.Portal>
     </Dialog.Root>
   {/if}
+
+  <!-- OUTSIDE the unlocked branch: this component registers the service
+       worker, and living inside {:else} made every lock/unlock cycle
+       re-register and leak another hourly update poller - the exact
+       duplicate-registration bug main.ts documents as fixed. -->
+  <ReloadPrompt />
 
   <TransportStatus />
 </QueryClientProvider>

@@ -102,6 +102,12 @@ export async function collectMailbox(): Promise<void> {
 
     const done: string[] = [];
     for (const entry of entries) {
+      // Decrypt/parse failures are POISON: deterministic, ack them away so
+      // they stop rotting in the box. Delivery failures are TRANSIENT (the
+      // classic one: the identity locked mid-drain, so the storage write
+      // threw) - the blob must stay in the box for the next tick, because
+      // an ack deletes the only copy.
+      let job: { senderDid: string; payload: unknown } | null = null;
       try {
         const { senderDid, envelope } = await openDmFromMailbox({
           blob: unb64(entry.blob),
@@ -109,15 +115,23 @@ export async function collectMailbox(): Promise<void> {
           selfPrivateKey: session.privateKey,
         });
         const parsed = parseDmEnvelope(envelope);
-        if (parsed?.type === "chat") {
-          deliverMailboxDm(senderDid, parsed.payload);
-        }
+        if (parsed?.type === "chat")
+          job = { senderDid, payload: parsed.payload };
       } catch (err) {
-        // Undecryptable or forged: log and fall through to the ack - a
-        // poison blob must not sit in the box being retried forever.
         console.warn("[mailbox] dropped blob:", err);
+        done.push(entry.id);
+        continue;
       }
-      done.push(entry.id);
+      try {
+        if (job)
+          await deliverMailboxDm(
+            job.senderDid,
+            job.payload as Parameters<typeof deliverMailboxDm>[1]
+          );
+        done.push(entry.id);
+      } catch (err) {
+        console.warn("[mailbox] delivery failed, keeping blob:", err);
+      }
     }
     if (done.length > 0) {
       await fetch(`${API}/mailbox/ack`, {

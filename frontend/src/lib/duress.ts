@@ -24,9 +24,16 @@ const ITERATIONS = 600_000;
 
 /** Every IndexedDB database this origin creates. The wipe must name them
  *  explicitly for engines without indexedDB.databases(): awful-auth holds
- *  the remembered REAL password, awful-share-target raw shared files -
- *  precisely what must not survive a wipe. */
-const KNOWN_DBS = ["awful-chat", "awful-auth", "awful-share-target"];
+ *  the remembered REAL password, awful-share-target raw shared files,
+ *  awful-notify typed notification replies and DM addressing - precisely
+ *  what must not survive a wipe. Adding a database anywhere in the app
+ *  means adding it HERE (duress.test.ts holds the list to that). */
+export const KNOWN_DBS = [
+  "awful-chat",
+  "awful-auth",
+  "awful-share-target",
+  "awful-notify",
+];
 
 interface DuressRecord {
   salt: string; // base64

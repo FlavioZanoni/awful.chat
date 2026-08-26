@@ -623,8 +623,26 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
             next[id] = null;
           }
         }
-        const a = JSON.stringify(next);
-        if (a !== JSON.stringify(pluginRects)) pluginRects = next;
+        // Shallow compare, not JSON.stringify: this runs every frame for
+        // the whole call, and serializing two objects per frame is real
+        // steady-state cost for a check that four number compares settle.
+        const prev = pluginRects;
+        const prevKeys = Object.keys(prev);
+        const changed =
+          prevKeys.length !== Object.keys(next).length ||
+          prevKeys.some((k) => {
+            const a = prev[k];
+            const b = next[k];
+            if (a === null || b === null) return a !== b;
+            return (
+              b === undefined ||
+              a.x !== b.x ||
+              a.y !== b.y ||
+              a.w !== b.w ||
+              a.h !== b.h
+            );
+          });
+        if (changed) pluginRects = next;
       }
       raf = requestAnimationFrame(measure);
     };
@@ -635,6 +653,19 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   const joinedPluginTileData = $derived(
     tiles.filter((t) => t.kind === "plugin" && joinedPluginTiles.has(t.id))
   );
+
+  // Joined ids whose card vanished (party closed, card replaced) would
+  // otherwise accumulate for the life of the call and be measured every
+  // frame above.
+  $effect(() => {
+    const live = new Set(
+      tiles.filter((t) => t.kind === "plugin").map((t) => t.id)
+    );
+    if (![...joinedPluginTiles].some((id) => !live.has(id))) return;
+    joinedPluginTiles = new Set(
+      [...joinedPluginTiles].filter((id) => live.has(id))
+    );
+  });
 
   // The name tag paints ABOVE the plugin's own controls (it lives in the
   // placeholder, they live in the floating layer) and the two share the

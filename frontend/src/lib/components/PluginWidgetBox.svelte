@@ -34,12 +34,16 @@
   // svelte-ignore state_referenced_locally
   let liveRoomCode = $state(pin.roomCode);
   let lastScan = 0;
+  let scanSeq = 0;
   let rescanTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => () => {
     if (rescanTimer) clearTimeout(rescanTimer);
   });
 
   const manifest = $derived(getManifest(pin.pluginId));
+  // One host per (plugin, room), not per render: a fresh host means a fresh
+  // now-playing token, churning the OS media surface on every state tick.
+  const hostApi = $derived(makeHostApi(pin.pluginId, liveRoomCode));
 
   // Same tick bridge as MsgRender: card state lives in a plain Map, this is
   // what repaints the box when votes/updates fold - including updates for
@@ -76,6 +80,7 @@
             );
         } else if (plugin.singletonWidget) {
           lastScan = Date.now();
+          const seq = ++scanSeq;
           const found: Candidate[] = [];
           for (const room of [...roomsStore.rooms, ...roomsStore.dmRooms]) {
             for (const msg of await getPluginCardMessages(room.roomCode)) {
@@ -96,7 +101,11 @@
           found.sort((a, b) => b.timestamp - a.timestamp);
           const selfDid = identityStore.did || "";
           let picked: Candidate | null = null;
-          for (const c of found) {
+          // Cap the widgetMine probes: each cache-miss getCardState folds a
+          // card's full update history, and a room spammed with stray cards
+          // must not turn every rescan into that N times over. The party
+          // you are in is in practice among the newest few cards anyway.
+          for (const c of found.slice(0, 8)) {
             if (plugin.widgetMine) {
               const state = await getCardState(c.cardId, c.roomCode, plugin);
               if (!plugin.widgetMine(state, selfDid)) continue;
@@ -104,6 +113,10 @@
             picked = c;
             break;
           }
+          // A newer scan may have started while this one awaited: the last
+          // writer would win regardless of staleness, silently un-following
+          // what the newer scan found.
+          if (seq !== scanSeq) return;
           if (picked && picked.cardId !== liveCardId) {
             liveCardId = picked.cardId;
             liveRoomCode = picked.roomCode;
@@ -147,7 +160,7 @@
         <WidgetUi
           {card}
           cardState={widgetState}
-          host={makeHostApi(pin.pluginId, liveRoomCode)}
+          host={hostApi}
         />
       {:else if card}
         <span class="truncate font-mono text-[11px] text-muted-foreground">

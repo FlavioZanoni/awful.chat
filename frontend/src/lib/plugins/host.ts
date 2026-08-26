@@ -54,7 +54,8 @@ export function makeHostApi(pluginId: string, roomCode: string): HostApi {
     },
     onBeforeDisconnect,
     sendUpdateImmediately(cardId, payload) {
-      sendUpdateImmediately(pluginId, cardId, payload);
+      // Same binding as sendUpdate: the card's room, never the open one.
+      sendUpdateImmediately(pluginId, cardId, payload, roomCode);
     },
     async cards() {
       // Card rows only - getAllMessages decrypted the ENTIRE room history

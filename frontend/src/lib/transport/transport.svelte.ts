@@ -1303,7 +1303,10 @@ function _handleCallPresence(
   const wasInCall = next.has(peerId);
   const theirRoom = roomNext.get(peerId);
 
-  if (inCall && roomCode) {
+  if (inCall && roomCode && _transport.rooms().includes(roomCode)) {
+    // Membership-gated like the handlers above: "in a call" for a room we
+    // never joined is unverifiable noise - at best meaningless, at worst a
+    // fake ring sound from any connected peer.
     next.add(peerId);
     roomNext.set(peerId, roomCode);
     _callPeerSeen.set(peerId, Date.now());
@@ -1386,11 +1389,13 @@ function _handleCallState(peerId: string, msg: WireCallState): void {
 }
 
 function _handleRoomName(msg: WireRoomName, room: string | null): void {
-  // The room this name is for, NOT the one on screen: we stay subscribed to
-  // every room we have joined, so applying it to the current room renamed
-  // whichever room you happened to be looking at.
-  const target = msg.roomCode ?? room;
+  // The AUTHENTICATED pubsub topic wins over anything in the message body.
+  // A direct send (legit: _sendRoomName welcomes a fresh joiner) may only
+  // name a room we have actually joined - same rule as _handleDigest, or a
+  // peer we merely DM with could rename any room by naming its code.
+  const target = room ?? msg.roomCode;
   if (!target) return;
+  if (room === null && !_transport.rooms().includes(target)) return;
   const trimmed = msg.name.trim().slice(0, 64);
   if (!trimmed) return;
   // A peer that joined from a bare invite link has no name yet and sends the
@@ -1473,8 +1478,13 @@ function _handleRoomUsersSync(
   msg: WireRoomUsersSync,
   room: string | null
 ): void {
-  const roomCode = msg.roomCode ?? room;
+  // Same trust rule as _handleRoomName: the topic is authenticated, the
+  // body is not, and a direct send may only describe a room we joined -
+  // otherwise any connected peer could stuff fabricated members into an
+  // arbitrary room's list (and its persisted participants).
+  const roomCode = room ?? msg.roomCode;
   if (!roomCode) return;
+  if (room === null && !_transport.rooms().includes(roomCode)) return;
   const participants = msg.participants;
   if (!Array.isArray(participants)) return;
   const selfDid = identityStore.did ?? _transport.selfId();
@@ -1630,6 +1640,8 @@ async function _handleChatMessage(
             senderName: msg.senderName,
             lamport: msg.lamport,
             data: payload.data,
+            // msg.roomCode is topic-derived (wireToMessage), never payload.
+            roomCode: msg.roomCode,
           });
         }
         touchCardStates();
@@ -1869,8 +1881,14 @@ _transport.on("disconnect", (peerId) => {
  * crypto (sender signature over the envelope, bound to us); the stream
  * path's transport-level binding plays no part here.
  */
-export function deliverMailboxDm(senderDid: string, payload: DmPayload): void {
-  _handleDmChat(senderDid, senderDid, { payload });
+export function deliverMailboxDm(
+  senderDid: string,
+  payload: DmPayload
+): Promise<void> {
+  // AWAITABLE on purpose: the mailbox collector must not ack (= delete the
+  // relay's only copy) until the local write actually settled - a locked
+  // identity mid-drain throws here instead of vanishing the message.
+  return _handleDmChatAsync(senderDid, senderDid, { payload });
 }
 
 function _handleDmChat(
@@ -1878,7 +1896,15 @@ function _handleDmChat(
   senderDid: string,
   envelope: { payload: DmPayload }
 ): void {
-  void (async () => {
+  void _handleDmChatAsync(peerId, senderDid, envelope).catch(console.error);
+}
+
+function _handleDmChatAsync(
+  peerId: string,
+  senderDid: string,
+  envelope: { payload: DmPayload }
+): Promise<void> {
+  return (async () => {
     const roomCode = await ensureDmRoomForPeer(peerId);
     if (!roomCode) return;
     _transport.joinRoom(roomCode);
@@ -1960,8 +1986,7 @@ function _handleDmChat(
     _transport
       .send(peerId, encodeDmAckEnvelope(envelope.payload.id))
       .catch(() => {});
-  })().catch(console.error);
-  return;
+  })();
 }
 
 _transport.on("message", (peerId, data, room) => {
@@ -2067,6 +2092,10 @@ _transport.on("message", (peerId, data, room) => {
             // too - the sender-side cap is no protection against a peer that
             // means us harm or a buggy build ticking every frame.
             try {
+              // Ephemerals are room-scoped by design: one arriving outside
+              // a room topic has no authenticated room to bind to, and an
+              // unbound fold is exactly the cross-room forgery hole.
+              if (room === null) return;
               const payload = JSON.parse(ephemeralMsg.content);
               if (!_checkEphemeralFloodCap(payload.pluginId, peerId)) return;
               void getPlugin(payload.pluginId).then((plugin) => {
@@ -2079,6 +2108,7 @@ _transport.on("message", (peerId, data, room) => {
                   lamport: ephemeralMsg.lamport,
                   data: payload.data,
                   ephemeral: true,
+                  roomCode: room,
                 });
               });
             } catch (err) {
@@ -2252,7 +2282,9 @@ export async function joinRoom(roomCode: string): Promise<boolean> {
     // so nothing from the old conversation is on screen under the new name.
     transportState.roomCode = roomCode;
     transportState.messages = [];
-    clearCardStates();
+    // Only the entered room's cache: wiping everything dropped in-flight
+    // ephemerals for pinned widgets and call tiles following OTHER rooms.
+    clearCardStates(roomCode);
     await _loadHistory(roomCode, stillCurrent);
     await _hydrateFileTransfersFromStorage(roomCode);
     if (!stillCurrent()) return false;
@@ -2815,6 +2847,7 @@ export async function sendUpdate(
         senderName: msg.senderName,
         lamport: msg.lamport,
         data: payload,
+        roomCode: msg.roomCode,
       });
     }
     touchCardStates();
@@ -2832,12 +2865,16 @@ export async function sendUpdate(
 export function sendUpdateImmediately(
   pluginId: string,
   cardId: string,
-  payload: unknown
+  payload: unknown,
+  targetRoom?: string
 ): void {
-  if (transportState.chatMode === "dm" || !transportState.roomCode) return;
+  // Bound to the host's room like sendUpdate: a teardown beacon fired while
+  // the user reads ANOTHER room (or a DM) must still land in the card's own
+  // room - hardcoding the open room misrouted or dropped it.
+  const roomCode = targetRoom ?? transportState.roomCode;
+  if (!roomCode || (!targetRoom && transportState.chatMode === "dm")) return;
   if (!validatePluginId(pluginId).ok || !validateUpdatePayload(payload).ok)
     return;
-  const roomCode = transportState.roomCode;
   const msg = signMessage({
     id: crypto.randomUUID(),
     roomCode,

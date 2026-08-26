@@ -228,7 +228,7 @@
         highlightedCode = html;
       })
       .catch(() => {
-        highlightedCode = `<pre><code>${asCodeBlock.code.replace(/</g, "&lt;")}</code></pre>`;
+        highlightedCode = `<pre><code>${escapeHtml(asCodeBlock.code)}</code></pre>`;
       });
   });
 
@@ -335,6 +335,12 @@
     setTimeout(() => {
       copiedCode = false;
     }, 1200);
+  }
+
+  // The shiki-failure fallback: escaping only "<" blocked tag injection but
+  // visibly mangled code containing "&"; full escaping matches escapeHtml.
+  function escapeForCodeFallback(code: string): string {
+    return escapeHtml(code);
   }
 
   function escapeHtml(text: string): string {
@@ -500,7 +506,7 @@
         {/if}
       </button>
       {@html highlightedCode ??
-        `<pre><code>${codeSegments.code.replace(/</g, "&lt;")}</code></pre>`}
+        `<pre><code>${escapeHtml(codeSegments.code)}</code></pre>`}
     </div>
     {#if codeSegments.after}
       <p class="whitespace-pre-wrap">{@html linkifyText(codeSegments.after)}</p>

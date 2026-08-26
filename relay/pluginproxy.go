@@ -60,8 +60,14 @@ func pluginProxyStore(key string, body []byte, contentType string) {
 
 // Per-client fixed-window rate limit. The Origin check only holds honest
 // browsers; without this the proxy is a free spender of the operator's API
-// quotas for anyone with curl.
-var pluginProxyRate sync.Map // ip -> rateEntry
+// quotas for anyone with curl. A plain map under a mutex, NOT sync.Map:
+// load-check-store on sync.Map was a TOCTOU where N concurrent requests all
+// read the same stale count and all passed.
+var (
+	rateMu    sync.Mutex
+	rateBy    = map[string]rateEntry{}
+	lastSweep time.Time
+)
 
 type rateEntry struct {
 	count   int
@@ -71,30 +77,47 @@ type rateEntry struct {
 const pluginProxyRateLimit = 10
 const pluginProxyRateWindow = time.Minute
 
-func pluginProxyAllow(ip string) bool {
+// rateAllow enforces a fixed window per key. Callers namespace the key
+// ("pp:"+ip, "mb:"+ip, ...) so hammering one feature cannot starve another.
+func rateAllow(key string, limit int) bool {
 	now := time.Now()
-	v, _ := pluginProxyRate.Load(ip)
-	e, ok := v.(rateEntry)
+	rateMu.Lock()
+	defer rateMu.Unlock()
+	// Expired windows would otherwise accumulate one entry per client IP
+	// forever; sweep opportunistically, at most once per window.
+	if now.Sub(lastSweep) > pluginProxyRateWindow {
+		lastSweep = now
+		for k, e := range rateBy {
+			if now.After(e.resetAt) {
+				delete(rateBy, k)
+			}
+		}
+	}
+	e, ok := rateBy[key]
 	if !ok || now.After(e.resetAt) {
-		pluginProxyRate.Store(ip, rateEntry{count: 1, resetAt: now.Add(pluginProxyRateWindow)})
+		rateBy[key] = rateEntry{count: 1, resetAt: now.Add(pluginProxyRateWindow)}
 		return true
 	}
-	if e.count >= pluginProxyRateLimit {
+	if e.count >= limit {
 		return false
 	}
 	e.count++
-	pluginProxyRate.Store(ip, e)
+	rateBy[key] = e
 	return true
 }
 
+func pluginProxyAllow(ip string) bool {
+	return rateAllow("pp:"+ip, pluginProxyRateLimit)
+}
+
 func clientIP(r *http.Request) string {
-	// Behind traefik the socket peer is traefik; the client is the first
-	// X-Forwarded-For hop, which traefik sets.
+	// Behind traefik the socket peer is traefik. Trust the LAST hop of
+	// X-Forwarded-For: traefik overwrites the header today, but if any
+	// front hop ever appends instead, the first entry is client-supplied
+	// and taking it would make every per-IP limit spoofable.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if first, _, ok := strings.Cut(xff, ","); ok {
-			return strings.TrimSpace(first)
-		}
-		return strings.TrimSpace(xff)
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[len(parts)-1])
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
