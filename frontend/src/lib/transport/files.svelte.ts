@@ -348,7 +348,7 @@ export async function _announceStoredFilesTo(peerId: string): Promise<void> {
 
 export async function _hydrateFileTransfersFromStorage(
   roomCode: string
-): Promise<void> {
+): Promise<Attachment[]> {
   const seedable = await getAttachmentsWithData(roomCode);
   const dedup = new Map<string, Attachment>();
   for (const attachment of seedable) {
@@ -379,12 +379,17 @@ export async function _hydrateFileTransfersFromStorage(
       blobURL,
     });
   }
+  return [...dedup.values()];
 }
 
 export async function _resumeAttachmentSeeding(
-  roomCode: string
+  roomCode: string,
+  prefetched?: Attachment[]
 ): Promise<void> {
-  const seedable = await getAttachmentsWithData(roomCode);
+  // `prefetched` skips a SECOND full decrypt pass when hydration just did
+  // one - hydrate + reseed each decrypting every image in the room doubled
+  // the heaviest work a room open does.
+  const seedable = prefetched ?? (await getAttachmentsWithData(roomCode));
   const dedup = new Map<string, Attachment>();
   for (const attachment of seedable) {
     if (!attachment.data) continue;
@@ -407,4 +412,18 @@ export async function _resumeAttachmentSeeding(
       _persistAttachmentStatusForInfoHash(entry.infoHash, "seeding")
     )
   );
+}
+
+/**
+ * Blob URLs + torrent re-seeding from ONE decrypt pass, meant to run in the
+ * BACKGROUND of a room open. Awaiting this in the open path froze the UI
+ * for as long as it takes to decrypt every stored image and re-hash it for
+ * WebTorrent - after a restart with a picture-heavy room, that read as the
+ * app being dead. Images now pop in as they hydrate instead.
+ */
+export async function _hydrateAndSeedAttachments(
+  roomCode: string
+): Promise<void> {
+  const rows = await _hydrateFileTransfersFromStorage(roomCode);
+  await _resumeAttachmentSeeding(roomCode, rows);
 }

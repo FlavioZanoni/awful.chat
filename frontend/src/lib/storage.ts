@@ -669,11 +669,17 @@ export async function getAttachmentsWithData(
   // and filtering on status made those images unrenderable forever.
   // rowHasBytes sees the bytes whether the row is sealed or legacy, and the
   // filter runs BEFORE decryption so no-data rows never cost a decrypt.
-  const all = await database.getAll("attachments");
-  return _openAll(
-    "attachments",
-    all.filter((a) => a.roomCode === roomCode && rowHasBytes(a, "data"))
-  );
+  // A cursor, not getAll: every room's multi-MB sealed blobs materialized
+  // at once just to pick this room's - a real memory spike on phones for
+  // every single room open.
+  const matches: Attachment[] = [];
+  let cursor = await database.transaction("attachments").store.openCursor();
+  while (cursor) {
+    const a = cursor.value;
+    if (a.roomCode === roomCode && rowHasBytes(a, "data")) matches.push(a);
+    cursor = await cursor.continue();
+  }
+  return _openAll("attachments", matches);
 }
 
 /**

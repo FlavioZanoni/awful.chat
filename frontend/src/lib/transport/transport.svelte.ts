@@ -111,8 +111,7 @@ import {
 } from "./dm.svelte";
 import {
   _announceStoredFilesTo,
-  _hydrateFileTransfersFromStorage,
-  _resumeAttachmentSeeding,
+  _hydrateAndSeedAttachments,
   INLINE_FILE_MAX_BYTES,
   stripAndAdoptInlineFiles,
   fileFingerprint,
@@ -2325,7 +2324,12 @@ export async function joinRoom(roomCode: string): Promise<boolean> {
     // ephemerals for pinned widgets and call tiles following OTHER rooms.
     clearCardStates(roomCode);
     await _loadHistory(roomCode, stillCurrent);
-    await _hydrateFileTransfersFromStorage(roomCode);
+    // Background, one decrypt pass for blob URLs AND re-seeding: awaiting
+    // this froze every room open for as long as its images take to decrypt
+    // and re-hash - the messages are on screen, pictures pop in after.
+    void _hydrateAndSeedAttachments(roomCode).catch((err) =>
+      console.warn("[room] attachment hydrate/seed failed:", err)
+    );
     if (!stillCurrent()) return false;
     _transport.joinRoom(roomCode);
     transportState.connected = true;
@@ -2351,10 +2355,9 @@ export async function joinRoom(roomCode: string): Promise<boolean> {
       ...new Set([...transportState.roomUsers, ...participants]),
     ];
     await addRoomParticipant(roomCode, selfDid);
-    // Best-effort: one corrupt stored attachment must not block joining
-    await _resumeAttachmentSeeding(roomCode).catch((err) =>
-      console.warn("[room] attachment re-seed failed:", err)
-    );
+    // Seeding already runs in the background via _hydrateAndSeedAttachments
+    // above - a second awaited decrypt-everything pass here was half the
+    // reason opening a picture-heavy room hung the app.
     await _broadcastProfile();
     _broadcastJoinRoom();
     // Ask the peers we are ALREADY connected to for this room's history. The
