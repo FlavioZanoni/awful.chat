@@ -214,8 +214,14 @@
     MessageType.File,
     MessageType.PluginCard,
   ]);
+  // The roomCode check is the backstop for switch races: writes that land in
+  // the shared array mid-switch (a sync batch for the room being left, a live
+  // append during the open's awaits) must never RENDER in the wrong
+  // conversation, whatever the transport layer let through.
   const visibleMessages = $derived(
-    messages.filter((m) => RENDERABLE_TYPES.has(m.type))
+    messages.filter(
+      (m) => RENDERABLE_TYPES.has(m.type) && m.roomCode === roomCode
+    )
   );
 
   const messageById = $derived(new Map(visibleMessages.map((m) => [m.id, m])));

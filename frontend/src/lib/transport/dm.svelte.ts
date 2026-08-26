@@ -180,6 +180,16 @@ export async function openDmConversation(
   }
   if (!stillCurrent()) return false;
   _transport.joinRoom(roomCode);
+  // Claim the conversation BEFORE the awaits, exactly like joinRoom does:
+  // while _loadHistory and the hydrations were in flight, roomCode still
+  // named the room being LEFT, so a live message or sync batch for that room
+  // matched the "is this for the open room" checks and landed in the freshly
+  // loaded DM view - room history inside a DM until the next reload.
+  transportState.chatMode = "dm";
+  transportState.activeDmPeerId = resolvedPeerId;
+  transportState.roomCode = roomCode;
+  transportState.roomName = resolveDmDisplayName(resolvedPeerId);
+  transportState.messages = [];
   await _loadHistory(roomCode, stillCurrent);
   // Rooms rebuild blob URLs for saved attachments on join; DMs never did,
   // so an image saved last night rendered as a bare file card after a
@@ -194,10 +204,6 @@ export async function openDmConversation(
     console.warn("[dm] attachment re-seed failed:", err)
   );
   if (!stillCurrent()) return false;
-  transportState.chatMode = "dm";
-  transportState.activeDmPeerId = resolvedPeerId;
-  transportState.roomCode = roomCode;
-  transportState.roomName = resolveDmDisplayName(resolvedPeerId);
   transportState.connected = true;
 
   // Everything now on screen counts as read - tell the sender.
