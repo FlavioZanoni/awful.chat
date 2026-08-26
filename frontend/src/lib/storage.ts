@@ -5,6 +5,7 @@ import {
   openRow,
   openRows,
   isSealed,
+  isStorageLockedError,
   rowHasBytes,
   storageCryptoReady,
   STORE_SPECS,
@@ -299,6 +300,7 @@ async function _open<T>(
   try {
     return await openRow<T>(row, STORE_SPECS[store]);
   } catch (err) {
+    if (isStorageLockedError(err)) throw err; // too-early read: stay loud
     // One undecryptable row (truncated blob, foreign key) degrades to one
     // missing row, never to a thrown query.
     console.warn(`[storage] dropped undecryptable ${store} row:`, err);
@@ -540,7 +542,17 @@ export async function markOwnMessagesReadUpTo(
   const candidates: Message[] = [];
   let cursor = await index.openCursor(range);
   while (cursor) {
-    if (cursor.value.senderId === senderId) candidates.push(cursor.value);
+    const v = cursor.value;
+    // senderId and status are clear fields: already-read backlog is skipped
+    // here without a decrypt, so a cascade costs crypto only for the rows it
+    // actually changes. A sealed row without a clear status (pre-status-clear
+    // layout) falls through and the post-decrypt check below decides.
+    if (
+      v.senderId === senderId &&
+      (!v.status || MESSAGE_STATUS_RANK[v.status] < MESSAGE_STATUS_RANK.read)
+    ) {
+      candidates.push(v);
+    }
     cursor = await cursor.continue();
   }
 
@@ -1249,11 +1261,15 @@ export async function migrateAtRest(): Promise<void> {
   }
   if (!storageCryptoReady()) return;
   _migrationRunning = true;
-  const CHUNK = 100;
   try {
     const database = await getDB();
     let sealedCount = 0;
     for (const store of Object.keys(STORE_SPECS) as EncryptedStoreName[]) {
+      // Byte-carrying stores hold multi-MB blobs per row: a 100-row chunk
+      // of attachments would materialize hundreds of MB at once.
+      const CHUNK = (STORE_SPECS[store] as { bytes?: string[] }).bytes?.length
+        ? 8
+        : 100;
       for (;;) {
         // Collect one chunk of plaintext rows (no crypto inside the tx)...
         const plain: Array<{ key: IDBValidKey; row: Record<string, unknown> }> =

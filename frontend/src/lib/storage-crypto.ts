@@ -106,6 +106,12 @@ function requireKey(): CryptoKey {
   return _key;
 }
 
+/** Locked-storage errors must stay LOUD - graceful row-dropping is for
+ *  corrupt/foreign ciphertext only, never for reads that ran too early. */
+export function isStorageLockedError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("storage is locked");
+}
+
 async function encrypt(key: CryptoKey, data: BufferSource): Promise<EncBlob> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);
@@ -208,8 +214,13 @@ export async function openRows<T>(
   const out: T[] = [];
   let dropped = 0;
   for (const s of settled) {
-    if (s.status === "fulfilled") out.push(s.value);
-    else dropped += 1;
+    if (s.status === "fulfilled") {
+      out.push(s.value);
+    } else if (isStorageLockedError(s.reason)) {
+      throw s.reason; // reading before unlock is a bug, not a bad row
+    } else {
+      dropped += 1;
+    }
   }
   if (dropped > 0) {
     console.warn(`[storage] dropped ${dropped} undecryptable row(s)`);
@@ -224,7 +235,13 @@ export async function openRows<T>(
 
 export const STORE_SPECS = {
   messages: {
-    clear: ["id", "roomCode", "lamport", "senderId", "type"],
+    // status is clear ON PURPOSE: delivery-state writes re-check it at
+    // write time inside the transaction (updateMessageStatus), which only
+    // works on a field readable without a decrypt. It leaks nothing beyond
+    // the sync metadata already clear. Older sealed rows without a clear
+    // status still open fine - openRow only copies clear keys present on
+    // the row, the blob's value wins otherwise.
+    clear: ["id", "roomCode", "lamport", "senderId", "type", "status"],
   },
   attachments: {
     clear: ["id", "roomCode", "messageId", "infoHash", "status"],
