@@ -34,6 +34,10 @@
   // svelte-ignore state_referenced_locally
   let liveRoomCode = $state(pin.roomCode);
   let lastScan = 0;
+  let rescanTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => () => {
+    if (rescanTimer) clearTimeout(rescanTimer);
+  });
 
   const manifest = $derived(getManifest(pin.pluginId));
 
@@ -57,7 +61,20 @@
         // so ending one party and joining another moves the widget with
         // you. Throttled to one scan per 5s of ticks; while no card
         // matches, the strip stays where it is.
-        if (plugin.singletonWidget && Date.now() - lastScan > 5000) {
+        if (plugin.singletonWidget && Date.now() - lastScan <= 5000) {
+          // Trailing edge: a tick swallowed by the throttle still deserves a
+          // scan once the window passes, or a join whose updates all land
+          // inside the window (join + owner sync usually do) never moves
+          // the strip until some unrelated plugin update fires.
+          if (!rescanTimer)
+            rescanTimer = setTimeout(
+              () => {
+                rescanTimer = null;
+                tick += 1;
+              },
+              5100 - (Date.now() - lastScan)
+            );
+        } else if (plugin.singletonWidget) {
           lastScan = Date.now();
           const found: Candidate[] = [];
           for (const room of [...roomsStore.rooms, ...roomsStore.dmRooms]) {
