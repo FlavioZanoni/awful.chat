@@ -19,7 +19,9 @@ import {
   putIdentityRecord,
   getWebAuthnRecord,
   deleteWebAuthnRecord,
+  migrateAtRest,
 } from "../storage";
+import { initStorageCrypto, clearStorageCrypto } from "../storage-crypto";
 import { clearRememberedPassword } from "./remembered-password";
 import { utf8 } from "../utils";
 
@@ -177,6 +179,24 @@ export function didToPublicKey(did: string): Uint8Array<ArrayBuffer> {
  *          Show the mnemonic to the user exactly once for backup -
  *          it is never retrievable again without the password.
  */
+/**
+ * Every path that unlocks (password, WebAuthn, create, restore) funnels
+ * here: the session key goes live and the at-rest storage key derives from
+ * it, so nothing can touch IndexedDB unlocked-but-unencrypted. The
+ * migration sweep sealing pre-encryption rows runs in the background.
+ */
+async function _activateSession(
+  privateKey: Uint8Array<ArrayBuffer>,
+  publicKey: Uint8Array<ArrayBuffer>,
+  did: string
+): Promise<void> {
+  await initStorageCrypto(privateKey);
+  session = { privateKey, publicKey, did };
+  migrateAtRest().catch((err) =>
+    console.warn("[storage] at-rest migration failed, will retry:", err)
+  );
+}
+
 export async function createIdentity(
   password: string
 ): Promise<{ keypair: KeypairRecord; mnemonic: string }> {
@@ -205,7 +225,7 @@ export async function createIdentity(
   await putIdentityRecord(mnemonicRecord);
   await putIdentityRecord(keypairRecord);
 
-  session = { privateKey, publicKey, did };
+  await _activateSession(privateKey, publicKey, did);
   return { keypair: keypairRecord, mnemonic };
 }
 
@@ -256,7 +276,7 @@ export async function restoreIdentity(
   await deleteWebAuthnRecord().catch(() => {});
   await clearRememberedPassword().catch(() => {});
 
-  session = { privateKey, publicKey, did };
+  await _activateSession(privateKey, publicKey, did);
   return keypairRecord;
 }
 
@@ -307,7 +327,7 @@ export async function unlockIdentity(password: string): Promise<void> {
   const { privateKey, publicKey } = deriveKeypairFromMnemonic(mnemonic);
   const did = publicKeyToDid(publicKey);
 
-  session = { privateKey, publicKey, did };
+  await _activateSession(privateKey, publicKey, did);
 }
 
 /**
@@ -320,6 +340,8 @@ export function lockIdentity(): void {
     session.privateKey.fill(0);
     session = null;
   }
+  // Sealed rows become unreadable until the next unlock re-derives the key.
+  clearStorageCrypto();
 }
 
 /**

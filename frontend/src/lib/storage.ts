@@ -1,5 +1,14 @@
 import { deleteDB, openDB, type IDBPDatabase } from "idb";
 
+import {
+  sealRow,
+  openRow,
+  isSealed,
+  rowHasBytes,
+  storageCryptoReady,
+  STORE_SPECS,
+  type EncryptedStoreName,
+} from "./storage-crypto";
 import type {
   Attachment,
   AttachmentStatus,
@@ -264,6 +273,35 @@ export async function getDB(): Promise<AppDB> {
 
 export const PAGE_SIZE = 50;
 
+// ── at-rest encryption boundary ──────────────────────────────────────────────
+// Rows go into IDB sealed (index fields clear, everything else AES-GCM) but
+// keep their compile-time types; these two casts are the only place that lie
+// lives. Crypto is async and an IDB transaction auto-commits the moment a
+// non-IDB await runs inside it, so every read-modify-write below reads first,
+// does its crypto OUTSIDE any transaction, then writes.
+
+async function _seal<T extends object>(
+  store: EncryptedStoreName,
+  record: T
+): Promise<T> {
+  return (await sealRow(
+    record as unknown as Record<string, unknown>,
+    STORE_SPECS[store]
+  )) as unknown as T;
+}
+
+async function _open<T>(
+  store: EncryptedStoreName,
+  row: T | undefined
+): Promise<T | undefined> {
+  if (row === undefined) return undefined;
+  return openRow<T>(row, STORE_SPECS[store]);
+}
+
+async function _openAll<T>(store: EncryptedStoreName, rows: T[]): Promise<T[]> {
+  return Promise.all(rows.map((r) => openRow<T>(r, STORE_SPECS[store])));
+}
+
 /**
  * Load a page of messages for a room, sorted by lamport ascending.
  * Pass beforeLamport for cursor-based pagination (scroll up to load older).
@@ -302,7 +340,9 @@ export async function getMessages(
     cursor = await cursor.continue();
   }
 
-  return results.reverse();
+  // Decrypt AFTER the cursor walk - the filter above only reads clear
+  // fields, and crypto inside the transaction would auto-commit it.
+  return _openAll("messages", results.reverse());
 }
 
 /**
@@ -319,7 +359,7 @@ export async function getLastMessage(
     [roomCode, Number.MAX_SAFE_INTEGER]
   );
   const cursor = await index.openCursor(range, "prev");
-  return cursor?.value;
+  return _open("messages", cursor?.value);
 }
 
 /**
@@ -362,7 +402,9 @@ export async function getLastMessageFrom(
   );
   let cursor = await index.openCursor(range, "prev");
   while (cursor) {
-    if (cursor.value.senderId !== notSenderId) return cursor.value;
+    if (cursor.value.senderId !== notSenderId) {
+      return _open("messages", cursor.value);
+    }
     cursor = await cursor.continue();
   }
   return undefined;
@@ -380,23 +422,24 @@ export async function getAllMessages(roomCode: string): Promise<Message[]> {
     [roomCode, Number.MAX_SAFE_INTEGER]
   );
   const results = await index.getAll(range);
-  return results;
+  return _openAll("messages", results);
 }
 
 export async function getMessage(id: string): Promise<Message | undefined> {
   const database = await getDB();
-  return database.get("messages", id);
+  return _open("messages", await database.get("messages", id));
 }
 
 export async function putMessage(message: Message): Promise<void> {
   const database = await getDB();
-  await database.put("messages", message);
+  await database.put("messages", await _seal("messages", message));
 }
 
 export async function bulkPutMessages(messages: Message[]): Promise<void> {
   const database = await getDB();
+  const sealed = await Promise.all(messages.map((m) => _seal("messages", m)));
   const tx = database.transaction("messages", "readwrite");
-  await Promise.all([...messages.map((m) => tx.store.put(m)), tx.done]);
+  await Promise.all([...sealed.map((m) => tx.store.put(m)), tx.done]);
 }
 
 export async function deleteMessagesForRoom(roomCode: string): Promise<void> {
@@ -479,24 +522,32 @@ export async function markOwnMessagesReadUpTo(
   lamport: number
 ): Promise<string[]> {
   const database = await getDB();
-  const tx = database.transaction("messages", "readwrite");
-  const index = tx.store.index("byRoomLamport");
+  // status lives inside the sealed blob, so this is a three-step cascade:
+  // collect candidates by clear senderId, decrypt/filter/re-seal outside any
+  // transaction, then write the changed rows back.
+  const index = database
+    .transaction("messages")
+    .store.index("byRoomLamport");
   const range = IDBKeyRange.bound([roomCode, 0], [roomCode, lamport]);
-  const updated: string[] = [];
+  const candidates: Message[] = [];
   let cursor = await index.openCursor(range);
   while (cursor) {
-    const m = cursor.value;
-    if (
-      m.senderId === senderId &&
-      (!m.status || MESSAGE_STATUS_RANK[m.status] < MESSAGE_STATUS_RANK.read)
-    ) {
-      await cursor.update({ ...m, status: "read" });
-      updated.push(m.id);
-    }
+    if (cursor.value.senderId === senderId) candidates.push(cursor.value);
     cursor = await cursor.continue();
   }
-  await tx.done;
-  return updated;
+
+  const changed: Message[] = [];
+  for (const row of candidates) {
+    const m = (await _open("messages", row))!;
+    if (!m.status || MESSAGE_STATUS_RANK[m.status] < MESSAGE_STATUS_RANK.read) {
+      changed.push(await _seal("messages", { ...m, status: "read" as const }));
+    }
+  }
+  if (!changed.length) return [];
+
+  const tx = database.transaction("messages", "readwrite");
+  await Promise.all([...changed.map((m) => tx.store.put(m)), tx.done]);
+  return changed.map((m) => m.id);
 }
 
 /** Advance a message's delivery status. Never regresses (read stays read). */
@@ -505,8 +556,10 @@ export async function updateMessageStatus(
   status: MessageStatus
 ): Promise<void> {
   const database = await getDB();
-  const tx = database.transaction("messages", "readwrite");
-  const message = await tx.store.get(id);
+  const message = await _open<Message>(
+    "messages",
+    await database.get("messages", id)
+  );
   if (!message) return;
   if (
     message.status &&
@@ -514,29 +567,34 @@ export async function updateMessageStatus(
   ) {
     return;
   }
-  await tx.store.put({ ...message, status });
-  await tx.done;
+  await database.put("messages", await _seal("messages", { ...message, status }));
 }
 
 export async function getAttachment(
   id: string
 ): Promise<Attachment | undefined> {
   const database = await getDB();
-  return database.get("attachments", id);
+  return _open("attachments", await database.get("attachments", id));
 }
 
 export async function getAttachmentsByMessage(
   messageId: string
 ): Promise<Attachment[]> {
   const database = await getDB();
-  return database.getAllFromIndex("attachments", "byMessage", messageId);
+  return _openAll(
+    "attachments",
+    await database.getAllFromIndex("attachments", "byMessage", messageId)
+  );
 }
 
 export async function getAttachmentsByInfoHash(
   infoHash: string
 ): Promise<Attachment[]> {
   const database = await getDB();
-  return database.getAllFromIndex("attachments", "byInfoHash", infoHash);
+  return _openAll(
+    "attachments",
+    await database.getAllFromIndex("attachments", "byInfoHash", infoHash)
+  );
 }
 
 export async function getAttachmentsWithData(
@@ -546,9 +604,12 @@ export async function getAttachmentsWithData(
   // Select by the bytes, not the status: rows written before the status
   // rank guards could be stuck at "downloading"/"failed" WITH data present,
   // and filtering on status made those images unrenderable forever.
+  // rowHasBytes sees the bytes whether the row is sealed or legacy, and the
+  // filter runs BEFORE decryption so no-data rows never cost a decrypt.
   const all = await database.getAll("attachments");
-  return all.filter(
-    (attachment) => attachment.roomCode === roomCode && !!attachment.data
+  return _openAll(
+    "attachments",
+    all.filter((a) => a.roomCode === roomCode && rowHasBytes(a, "data"))
   );
 }
 
@@ -572,30 +633,45 @@ export async function getSeedableFiles(): Promise<
   Array<{ roomCode: string; file: FileEntry }>
 > {
   const database = await getDB();
-  const byHash = new Map<string, { roomCode: string; file: FileEntry }>();
+  // Two passes: the cursor walk collects one small clone per infoHash using
+  // only clear fields and drops the blob references, then the metadata
+  // decrypt (skipBytes: filename/mimeType/size live in the JSON blob, the
+  // file bytes stay sealed) happens outside the transaction.
+  const byHash = new Map<string, Attachment>();
   let cursor = await database.transaction("attachments").store.openCursor();
   while (cursor) {
-    const attachment = cursor.value;
-    if (attachment.data && !byHash.has(attachment.infoHash)) {
-      byHash.set(attachment.infoHash, {
-        roomCode: attachment.roomCode,
-        file: {
-          infoHash: attachment.infoHash,
-          filename: attachment.filename,
-          mimeType: attachment.mimeType,
-          size: attachment.size,
-        },
-      });
+    const row = cursor.value;
+    if (rowHasBytes(row, "data") && !byHash.has(row.infoHash)) {
+      const { data: _d, ...meta } = row as Attachment & {
+        _encBytes?: unknown;
+      };
+      delete (meta as { _encBytes?: unknown })._encBytes;
+      byHash.set(row.infoHash, meta as Attachment);
     }
     cursor = await cursor.continue();
   }
-  return [...byHash.values()];
+  const out: Array<{ roomCode: string; file: FileEntry }> = [];
+  for (const row of byHash.values()) {
+    const a = await openRow<Attachment>(row, STORE_SPECS.attachments, {
+      skipBytes: true,
+    });
+    out.push({
+      roomCode: a.roomCode,
+      file: {
+        infoHash: a.infoHash,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+      },
+    });
+  }
+  return out;
 }
 
 export async function putAttachment(attachment: Attachment): Promise<void> {
   const database = await getDB();
   const { blobURL: _, ...record } = attachment;
-  await database.put("attachments", record);
+  await database.put("attachments", await _seal("attachments", record));
   _attachmentEpoch += 1;
 }
 
@@ -635,15 +711,29 @@ export async function updateAttachmentData(
   data: ArrayBuffer
 ): Promise<void> {
   const database = await getDB();
-  const tx = database.transaction("attachments", "readwrite");
-  const attachment = await tx.store.get(id);
+  const attachment = await _open<Attachment>(
+    "attachments",
+    await database.get("attachments", id)
+  );
   if (!attachment) return;
   const status =
     ATTACHMENT_STATUS_RANK[attachment.status] >=
     ATTACHMENT_STATUS_RANK.complete
       ? attachment.status
       : ("complete" as AttachmentStatus);
-  await tx.store.put({ ...attachment, data, status });
+  const sealed = await _seal("attachments", { ...attachment, data, status });
+  // The seal ran outside any transaction; status is a CLEAR field, so the
+  // regression guard re-checks against the freshest row at write time - the
+  // seeding path may have advanced it while we were encrypting the blob.
+  const tx = database.transaction("attachments", "readwrite");
+  const fresh = await tx.store.get(id);
+  if (
+    fresh &&
+    ATTACHMENT_STATUS_RANK[fresh.status] > ATTACHMENT_STATUS_RANK[sealed.status]
+  ) {
+    sealed.status = fresh.status;
+  }
+  await tx.store.put(sealed);
   await tx.done;
   _attachmentEpoch += 1;
 }
@@ -673,17 +763,20 @@ export async function getRoom(
   roomCode: string
 ): Promise<Room | DMRoom | undefined> {
   const database = await getDB();
-  return database.get("rooms", roomCode);
+  return _open("rooms", await database.get("rooms", roomCode));
 }
 
 export async function getAllRooms(): Promise<(Room | DMRoom)[]> {
   const database = await getDB();
-  return database.getAll("rooms");
+  return _openAll("rooms", await database.getAll("rooms"));
 }
 
 export async function getDMRooms(): Promise<DMRoom[]> {
   const database = await getDB();
-  return database.getAllFromIndex("rooms", "byType", "dm") as Promise<DMRoom[]>;
+  return _openAll(
+    "rooms",
+    (await database.getAllFromIndex("rooms", "byType", "dm")) as DMRoom[]
+  );
 }
 
 export async function putRoom(room: Room | DMRoom): Promise<void> {
@@ -692,12 +785,31 @@ export async function putRoom(room: Room | DMRoom): Promise<void> {
     ...room,
     participants: room.participants ?? [],
   };
-  await database.put("rooms", roomWithParticipants);
+  await database.put("rooms", await _seal("rooms", roomWithParticipants));
+}
+
+/** Shared read-decrypt-modify-seal-write cycle for room records. The old
+ *  single-transaction versions cannot survive at-rest crypto (an IDB tx
+ *  auto-commits on any non-IDB await), so the patch runs between a read and
+ *  a write; every patch below is idempotent or monotonic, which keeps the
+ *  slightly wider race window harmless. */
+async function _patchRoom(
+  roomCode: string,
+  patch: (room: Room | DMRoom) => Room | DMRoom | null
+): Promise<void> {
+  const database = await getDB();
+  const room = await _open<Room | DMRoom>(
+    "rooms",
+    await database.get("rooms", roomCode)
+  );
+  if (!room) return;
+  const updated = patch(room);
+  if (!updated) return;
+  await database.put("rooms", await _seal("rooms", updated));
 }
 
 export async function getRoomParticipants(roomCode: string): Promise<string[]> {
-  const database = await getDB();
-  const room = await database.get("rooms", roomCode);
+  const room = await getRoom(roomCode);
   return room?.participants ?? [];
 }
 
@@ -708,81 +820,57 @@ export async function addRoomParticipant(
   // participants are documented as DIDs; a raw peerId written here is never
   // matched by a leave (keyed by DID) and ghosts the member list for 7 days.
   if (!peerId.startsWith("did:")) return;
-  const database = await getDB();
-  const tx = database.transaction("rooms", "readwrite");
-  const room = await tx.store.get(roomCode);
-  if (!room) return;
-  const participants = new Set(room.participants ?? []);
-  participants.add(peerId);
-  const participantLastSeen = room.participantLastSeen ?? {};
-  participantLastSeen[peerId] = Date.now();
-  await tx.store.put({
-    ...room,
-    participants: [...participants],
-    participantLastSeen,
+  await _patchRoom(roomCode, (room) => {
+    const participants = new Set(room.participants ?? []);
+    participants.add(peerId);
+    const participantLastSeen = room.participantLastSeen ?? {};
+    participantLastSeen[peerId] = Date.now();
+    return { ...room, participants: [...participants], participantLastSeen };
   });
-  await tx.done;
 }
 
 export async function updateParticipantLastSeen(
   roomCode: string,
   peerId: string
 ): Promise<void> {
-  const database = await getDB();
-  const tx = database.transaction("rooms", "readwrite");
-  const room = await tx.store.get(roomCode);
-  if (!room) return;
-  const participantLastSeen = room.participantLastSeen ?? {};
-  participantLastSeen[peerId] = Date.now();
-  await tx.store.put({ ...room, participantLastSeen });
-  await tx.done;
+  await _patchRoom(roomCode, (room) => {
+    const participantLastSeen = room.participantLastSeen ?? {};
+    participantLastSeen[peerId] = Date.now();
+    return { ...room, participantLastSeen };
+  });
 }
 
 export async function removeRoomParticipant(
   roomCode: string,
   peerId: string
 ): Promise<void> {
-  const database = await getDB();
-  const tx = database.transaction("rooms", "readwrite");
-  const room = await tx.store.get(roomCode);
-  if (!room) return;
-  const participants = new Set(room.participants ?? []);
-  participants.delete(peerId);
-  const participantLastSeen = room.participantLastSeen ?? {};
-  delete participantLastSeen[peerId];
-  await tx.store.put({
-    ...room,
-    participants: [...participants],
-    participantLastSeen,
+  await _patchRoom(roomCode, (room) => {
+    const participants = new Set(room.participants ?? []);
+    participants.delete(peerId);
+    const participantLastSeen = room.participantLastSeen ?? {};
+    delete participantLastSeen[peerId];
+    return { ...room, participants: [...participants], participantLastSeen };
   });
-  await tx.done;
 }
 
 export async function cleanupInactiveParticipants(
   roomCode: string
 ): Promise<string[]> {
-  const database = await getDB();
-  const tx = database.transaction("rooms", "readwrite");
-  const room = await tx.store.get(roomCode);
-  if (!room) return [];
-  const cutoff = Date.now() - PARTICIPANT_INACTIVE_MS;
-  const participantLastSeen = room.participantLastSeen ?? {};
   const removed: string[] = [];
-  const participants = new Set(room.participants ?? []);
-  for (const peerId of participants) {
-    const lastSeen = participantLastSeen[peerId] ?? 0;
-    if (lastSeen < cutoff) {
-      participants.delete(peerId);
-      delete participantLastSeen[peerId];
-      removed.push(peerId);
+  await _patchRoom(roomCode, (room) => {
+    const cutoff = Date.now() - PARTICIPANT_INACTIVE_MS;
+    const participantLastSeen = room.participantLastSeen ?? {};
+    const participants = new Set(room.participants ?? []);
+    for (const peerId of participants) {
+      const lastSeen = participantLastSeen[peerId] ?? 0;
+      if (lastSeen < cutoff) {
+        participants.delete(peerId);
+        delete participantLastSeen[peerId];
+        removed.push(peerId);
+      }
     }
-  }
-  await tx.store.put({
-    ...room,
-    participants: [...participants],
-    participantLastSeen,
+    return { ...room, participants: [...participants], participantLastSeen };
   });
-  await tx.done;
   return removed;
 }
 
@@ -799,15 +887,10 @@ export async function markRoomSeen(
   roomCode: string,
   lamport: number
 ): Promise<void> {
-  const database = await getDB();
-  const tx = database.transaction("rooms", "readwrite");
-  const room = await tx.store.get(roomCode);
-  if (!room) return;
-  await tx.store.put({
+  await _patchRoom(roomCode, (room) => ({
     ...room,
     lastSeenLamport: Math.max(room.lastSeenLamport ?? 0, lamport),
-  });
-  await tx.done;
+  }));
 }
 
 export async function deleteRoom(roomCode: string): Promise<void> {
@@ -819,9 +902,10 @@ export async function getOwnProfile(
   selfDid?: string
 ): Promise<OwnProfile | undefined> {
   const database = await getDB();
+  // did and isMe are clear fields, so both lookups run before any decrypt.
   const all = await database.getAll("profiles");
-  const mine = all.find((p): p is OwnProfile => p.isMe === true);
-  if (mine) return mine;
+  const mine = all.find((p) => p.isMe === true);
+  if (mine) return _open("profiles", mine as OwnProfile);
   // Fall back to the row under our own did, and repair the flag. An incoming
   // profile used to be written over that row with isMe:false - our own second
   // device carries the same did - and the flag alone then hid a row that was
@@ -829,9 +913,12 @@ export async function getOwnProfile(
   if (!selfDid) return undefined;
   const byDid = all.find((p) => p.did === selfDid);
   if (!byDid) return undefined;
-  const repaired = { ...byDid, isMe: true as const } as OwnProfile;
+  const repaired = {
+    ...(await _open<OwnProfile>("profiles", byDid as OwnProfile))!,
+    isMe: true as const,
+  };
   try {
-    await database.put("profiles", repaired);
+    await database.put("profiles", await _seal("profiles", repaired));
   } catch {
     // Reading still works even if the repair write does not.
   }
@@ -840,7 +927,10 @@ export async function getOwnProfile(
 
 export async function putOwnProfile(profile: OwnProfile): Promise<void> {
   const database = await getDB();
-  await database.put("profiles", { ...profile, isMe: true as const });
+  await database.put(
+    "profiles",
+    await _seal("profiles", { ...profile, isMe: true as const })
+  );
 }
 
 /**
@@ -853,13 +943,17 @@ export async function rekeyOwnProfile(
 ): Promise<void> {
   if (from === to) return;
   const database = await getDB();
-  const tx = database.transaction("profiles", "readwrite");
-  const existing = await tx.store.get(from);
+  const existing = await _open<OwnProfile>(
+    "profiles",
+    (await database.get("profiles", from)) as OwnProfile | undefined
+  );
   if (existing) {
-    await tx.store.put({ ...existing, did: to, isMe: true as const });
-    await tx.store.delete(from);
+    await database.put(
+      "profiles",
+      await _seal("profiles", { ...existing, did: to, isMe: true as const })
+    );
+    await database.delete("profiles", from);
   }
-  await tx.done;
 }
 
 /**
@@ -870,17 +964,16 @@ export async function updateOwnProfile(
   patch: Partial<Pick<OwnProfile, "nickname" | "pfpData" | "pfpURL" | "color" | "bannerData" | "bannerURL" | "tagText" | "tagTextColor" | "tagChipColor" | "bio" | "nameEffect" | "gradient2" | "gradient3">>
 ): Promise<void> {
   const database = await getDB();
-  const tx = database.transaction("profiles", "readwrite");
-  const all = await tx.store.getAll();
-  const profile = all.find((p): p is OwnProfile => p.isMe === true);
-  if (!profile) return;
+  const all = await database.getAll("profiles");
+  const row = all.find((p) => p.isMe === true);
+  if (!row) return;
+  const profile = (await _open<OwnProfile>("profiles", row as OwnProfile))!;
   const updated: OwnProfile = { ...profile, ...patch, updatedAt: Date.now() };
   if (patch.pfpData !== undefined) updated.pfpURL = undefined;
   if (patch.pfpURL !== undefined) updated.pfpData = undefined;
   if (patch.bannerData !== undefined) updated.bannerURL = undefined;
   if (patch.bannerURL !== undefined) updated.bannerData = undefined;
-  await tx.store.put(updated);
-  await tx.done;
+  await database.put("profiles", await _seal("profiles", updated));
 }
 
 export async function getPeerProfile(
@@ -889,18 +982,24 @@ export async function getPeerProfile(
   const database = await getDB();
   const record = await database.get("profiles", did);
   if (!record || record.isMe) return undefined;
-  return record as PeerProfile;
+  return _open("profiles", record as PeerProfile);
 }
 
 export async function putPeerProfile(profile: PeerProfile): Promise<void> {
   const database = await getDB();
-  await database.put("profiles", { ...profile, isMe: false as const });
+  await database.put(
+    "profiles",
+    await _seal("profiles", { ...profile, isMe: false as const })
+  );
 }
 
 export async function getAllPeerProfiles(): Promise<PeerProfile[]> {
   const database = await getDB();
   const all = await database.getAll("profiles");
-  return all.filter((p): p is PeerProfile => p.isMe === false);
+  return _openAll(
+    "profiles",
+    all.filter((p): p is PeerProfile => p.isMe === false)
+  );
 }
 
 /**
@@ -964,12 +1063,12 @@ export async function getWatermarksForRoom(
 
 export async function getAllSavedGifs(): Promise<SavedGif[]> {
   const database = await getDB();
-  return database.getAll("savedGifs");
+  return _openAll("savedGifs", await database.getAll("savedGifs"));
 }
 
 export async function putSavedGif(gif: SavedGif): Promise<void> {
   const database = await getDB();
-  await database.put("savedGifs", gif);
+  await database.put("savedGifs", await _seal("savedGifs", gif));
 }
 
 export async function deleteSavedGif(id: string): Promise<void> {
@@ -980,7 +1079,8 @@ export async function deleteSavedGif(id: string): Promise<void> {
 export async function isGifSaved(gifId: string): Promise<SavedGif | undefined> {
   const database = await getDB();
   const all = await database.getAll("savedGifs");
-  return all.find((g) => g.gifId === gifId);
+  // gifId is a clear field: the lookup costs zero decrypts, only the hit.
+  return _open("savedGifs", all.find((g) => g.gifId === gifId));
 }
 
 export async function getWebAuthnRecord(): Promise<WebAuthnRecord | undefined> {
@@ -992,7 +1092,10 @@ export async function getWebAuthnRecord(): Promise<WebAuthnRecord | undefined> {
 
 export async function getPhonebookEntries(): Promise<PhonebookEntry[]> {
   const database = await getDB();
-  const entries = await database.getAll("phonebook");
+  const entries = await _openAll<PhonebookEntry>(
+    "phonebook",
+    await database.getAll("phonebook")
+  );
   return entries.sort((a, b) => {
     const favDiff = Number(!!b.favorite) - Number(!!a.favorite);
     if (favDiff !== 0) return favDiff;
@@ -1009,7 +1112,10 @@ export async function getPhonebookEntries(): Promise<PhonebookEntry[]> {
  */
 export async function dedupePhonebook(): Promise<void> {
   const database = await getDB();
-  const entries = await database.getAll("phonebook");
+  const entries = await _openAll<PhonebookEntry>(
+    "phonebook",
+    await database.getAll("phonebook")
+  );
   const byDid = new Map<string, PhonebookEntry[]>();
   for (const e of entries) {
     const did =
@@ -1033,13 +1139,13 @@ export async function dedupePhonebook(): Promise<void> {
       favorite: group.some((e) => e.favorite) || undefined,
     };
     for (const e of group) await database.delete("phonebook", e.peerId);
-    await database.put("phonebook", merged);
+    await database.put("phonebook", await _seal("phonebook", merged));
   }
 }
 
 export async function putPhonebookEntry(entry: PhonebookEntry): Promise<void> {
   const database = await getDB();
-  await database.put("phonebook", entry);
+  await database.put("phonebook", await _seal("phonebook", entry));
 }
 
 export async function deletePhonebookEntry(peerId: string): Promise<void> {
@@ -1058,6 +1164,71 @@ export async function wipeLocalDatabase(): Promise<void> {
     db = null;
   }
   await deleteDB("awful-chat");
+}
+
+// ── at-rest migration ────────────────────────────────────────────────────────
+
+const ATREST_DONE_FLAG = "awful:atrest:v1";
+let _migrationRunning = false;
+
+/**
+ * One-time background sweep re-encrypting rows written before at-rest
+ * encryption existed. Reads pass legacy plaintext rows through, so the app
+ * is fully usable while this runs; each pass converts a chunk and loops
+ * until a full scan finds nothing plaintext. Chunked so no transaction
+ * spans the (async, tx-killing) crypto, and so a mid-sweep close just
+ * resumes next unlock.
+ */
+export async function migrateAtRest(): Promise<void> {
+  if (_migrationRunning) return;
+  try {
+    if (localStorage.getItem(ATREST_DONE_FLAG)) return;
+  } catch {
+    // No localStorage (tests): scan anyway, it is cheap when all is sealed.
+  }
+  if (!storageCryptoReady()) return;
+  _migrationRunning = true;
+  const CHUNK = 100;
+  try {
+    const database = await getDB();
+    let sealedCount = 0;
+    for (const store of Object.keys(STORE_SPECS) as EncryptedStoreName[]) {
+      for (;;) {
+        // Collect one chunk of plaintext rows (no crypto inside the tx)...
+        const plain: Record<string, unknown>[] = [];
+        let cursor = await database.transaction(store).store.openCursor();
+        while (cursor && plain.length < CHUNK) {
+          if (!isSealed(cursor.value)) {
+            plain.push(cursor.value as unknown as Record<string, unknown>);
+          }
+          cursor = await cursor.continue();
+        }
+        if (plain.length === 0) break;
+        // ...seal it outside, write it back. put() replaces in place: every
+        // spec keeps the store's keyPath in its clear fields.
+        const sealed = await Promise.all(
+          plain.map((r) => sealRow(r, STORE_SPECS[store]))
+        );
+        const tx = database.transaction(store, "readwrite");
+        await Promise.all([
+          ...sealed.map((r) => tx.store.put(r as never)),
+          tx.done,
+        ]);
+        sealedCount += sealed.length;
+        if (plain.length < CHUNK) break;
+      }
+    }
+    if (sealedCount > 0) {
+      console.log(`[storage] at-rest migration sealed ${sealedCount} rows`);
+    }
+    try {
+      localStorage.setItem(ATREST_DONE_FLAG, String(Date.now()));
+    } catch {
+      // Flag is an optimization; the scan re-runs next unlock without it.
+    }
+  } finally {
+    _migrationRunning = false;
+  }
 }
 
 /**
@@ -1103,15 +1274,23 @@ export interface StorageMetrics {
 export async function getStorageMetrics(): Promise<StorageMetrics> {
   const database = await getDB();
 
-  const rooms = await database.getAll("rooms");
+  const rooms = await _openAll<Room | DMRoom>(
+    "rooms",
+    await database.getAll("rooms")
+  );
   const profiles = await database.getAll("profiles");
   const attachments = await database.getAll("attachments");
 
   const seedingCount = attachments.filter((a) => a.status === "seeding").length;
 
+  // Ciphertext length ~= plaintext length for AES-GCM, so sealed rows report
+  // their size without decrypting a single blob.
   let storedSize = 0;
   attachments.forEach((a) => {
+    const enc = (a as unknown as { _encBytes?: { data?: { ct: ArrayBuffer } } })
+      ._encBytes?.data;
     if (a.data) storedSize += a.data.byteLength;
+    else if (enc) storedSize += enc.ct.byteLength;
   });
 
   const totalMessages = await database.count("messages");

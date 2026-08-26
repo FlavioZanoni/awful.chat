@@ -29,6 +29,7 @@ import {
   attachmentEpoch,
   putAttachment,
   getDB,
+  migrateAtRest,
 } from "./storage";
 import { MessageType, type Message } from "./types/message";
 
@@ -275,6 +276,34 @@ describe("markOwnMessagesReadUpTo", () => {
     expect((await getMessage("own-3"))?.status).toBe("sent");
     expect((await getMessage("theirs"))?.status).toBe("delivered");
     expect((await getMessage("own-1"))?.status).toBe("read");
+  });
+});
+
+describe("at-rest encryption", () => {
+  it("rows land sealed - a raw dump shows no plaintext", async () => {
+    await putMessage(
+      msg({ id: "sealed-1", roomCode: "room-enc", content: "top secret words" })
+    );
+    const raw = await (await getDB()).get("messages", "sealed-1");
+    expect(JSON.stringify(raw)).not.toContain("top secret");
+    expect(JSON.stringify(raw)).not.toContain("Alice");
+    const back = await getMessage("sealed-1");
+    expect(back?.content).toBe("top secret words");
+    expect(back?.senderName).toBe("Alice");
+  });
+
+  it("migrateAtRest seals legacy plaintext rows in place", async () => {
+    const database = await getDB();
+    // A row written by a pre-encryption build: plaintext, no _enc.
+    await database.put(
+      "messages",
+      msg({ id: "legacy-1", roomCode: "room-mig", content: "readable" })
+    );
+    await migrateAtRest();
+    const raw = await database.get("messages", "legacy-1");
+    expect(JSON.stringify(raw)).not.toContain("readable");
+    const opened = await getMessage("legacy-1");
+    expect(opened?.content).toBe("readable");
   });
 });
 

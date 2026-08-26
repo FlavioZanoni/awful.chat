@@ -26,6 +26,7 @@ import {
 } from "../storage";
 import type { Message, Attachment, PendingMessage } from "../types/message";
 import { bytesToBase64 } from "../utils";
+import { openRows, sealRow, STORE_SPECS } from "../storage-crypto";
 import type {
   Room,
   DMRoom,
@@ -777,14 +778,21 @@ async function exportDatabase(skipIdentity = false): Promise<DatabaseExport> {
     profiles,
     savedGifs,
   ] = await Promise.all([
-    db.getAll("messages"),
-    db.getAll("attachments"),
-    db.getAll("pending"),
+    // The export format carries PLAINTEXT records (it has its own transport
+    // encryption and validators that inspect fields), so sealed rows are
+    // opened here; the importing side re-seals through the storage API.
+    db.getAll("messages").then((r) => openRows<Message>(r, STORE_SPECS.messages)),
+    db
+      .getAll("attachments")
+      .then((r) => openRows<Attachment>(r, STORE_SPECS.attachments)),
+    db
+      .getAll("pending")
+      .then((r) => openRows<PendingMessage>(r, STORE_SPECS.pending)),
     db.getAll("watermarks"),
     db.getAll("yjsDocs"),
-    db.getAll("rooms"),
-    db.getAll("profiles"),
-    db.getAll("savedGifs"),
+    db.getAll("rooms").then((r) => openRows(r, STORE_SPECS.rooms)),
+    db.getAll("profiles").then((r) => openRows(r, STORE_SPECS.profiles)),
+    db.getAll("savedGifs").then((r) => openRows(r, STORE_SPECS.savedGifs)),
   ]);
 
   const result: DatabaseExport = {
@@ -928,7 +936,13 @@ async function importDatabase(
     ...data.pending.map((p) => {
       return (async () => {
         const db = await getDB();
-        await db.put("pending", p);
+        await db.put(
+          "pending",
+          (await sealRow(
+            p as unknown as Record<string, unknown>,
+            STORE_SPECS.pending
+          )) as unknown as PendingMessage
+        );
       })();
     }),
     ...data.watermarks.map((w) => {
