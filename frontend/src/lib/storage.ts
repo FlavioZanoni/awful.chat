@@ -1385,20 +1385,28 @@ export async function getStorageMetrics(): Promise<StorageMetrics> {
     "rooms",
     await database.getAll("rooms")
   );
-  const profiles = await database.getAll("profiles");
-  const attachments = await database.getAll("attachments");
+  const totalProfiles = await database.count("profiles");
 
-  const seedingCount = attachments.filter((a) => a.status === "seeding").length;
-
+  // A cursor, never getAll: materializing every attachment's bytes at once
+  // just to sum their lengths stalled phones long enough that the Data tab
+  // sat on "Loading metrics" forever - keeping the eviction warning and the
+  // persist button unreachable on exactly the platform that needs them.
   // Ciphertext length ~= plaintext length for AES-GCM, so sealed rows report
   // their size without decrypting a single blob.
+  let seedingCount = 0;
   let storedSize = 0;
-  attachments.forEach((a) => {
-    const enc = (a as unknown as { _encBytes?: { data?: { ct: ArrayBuffer } } })
-      ._encBytes?.data;
+  let totalAttachments = 0;
+  let cursor = await database.transaction("attachments").store.openCursor();
+  while (cursor) {
+    const a = cursor.value as Attachment & {
+      _encBytes?: { data?: { ct: ArrayBuffer } };
+    };
+    totalAttachments += 1;
+    if (a.status === "seeding") seedingCount += 1;
     if (a.data) storedSize += a.data.byteLength;
-    else if (enc) storedSize += enc.ct.byteLength;
-  });
+    else if (a._encBytes?.data) storedSize += a._encBytes.data.ct.byteLength;
+    cursor = await cursor.continue();
+  }
 
   const totalMessages = await database.count("messages");
   const roomCounts = new Map<string, number>();
@@ -1437,9 +1445,9 @@ export async function getStorageMetrics(): Promise<StorageMetrics> {
     quota,
     totalMessages,
     totalRooms: rooms.length,
-    totalProfiles: profiles.length,
+    totalProfiles,
     seedingAttachments: seedingCount,
-    totalAttachments: attachments.length,
+    totalAttachments,
     storedDataSize: storedSize,
     rooms: roomMetrics,
   };

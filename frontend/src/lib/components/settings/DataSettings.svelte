@@ -34,16 +34,20 @@
   let { activeTab = "data" }: Props = $props();
 
   let metrics = $state<StorageMetrics | null>(null);
+  let metricsError = $state(false);
   let confirmErase = $state(false);
 
   $effect(() => {
-    if (activeTab === "data" && !metrics) {
+    if (activeTab === "data" && !metrics && !metricsError) {
       getStorageMetrics()
         .then((m) => {
           metrics = m;
         })
-        .catch(() => {
-          metrics = null;
+        .catch((err) => {
+          // Failing silently left "Loading metrics..." forever - and with it
+          // hid the storage-eviction warning this tab exists to show.
+          console.warn("[settings] storage metrics failed:", err);
+          metricsError = true;
         });
     }
   });
@@ -338,6 +342,19 @@
             </div>
           </div>
         {/if}
+      </div>
+    {:else if metricsError}
+      <div class="flex flex-col items-center gap-2 py-8">
+        <span class="text-xs text-muted-foreground font-mono"
+          >Couldn't read storage metrics.</span
+        >
+        <Button
+          variant="outline"
+          class="font-mono text-xs"
+          onclick={() => (metricsError = false)}
+        >
+          Try again
+        </Button>
       </div>
     {:else}
       <div class="flex items-center justify-center py-8">
