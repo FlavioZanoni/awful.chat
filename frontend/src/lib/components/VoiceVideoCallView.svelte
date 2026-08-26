@@ -1361,7 +1361,7 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
           pluginId={pt.pluginId!}
           cardId={pt.cardId!}
           roomCode={pt.pluginRoomCode!}
-          chromeVisible={dockedControls || controlsVisible}
+          chromeVisible={dockedControls ? panelMouse !== null : controlsVisible}
         />
       </div>
     {/each}
