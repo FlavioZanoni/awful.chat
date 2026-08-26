@@ -435,6 +435,27 @@ export async function getAllMessages(roomCode: string): Promise<Message[]> {
   return _openAll("messages", results);
 }
 
+/**
+ * Only the room's PluginCard messages. type is a CLEAR field, so the cursor
+ * walk filters without decrypting and only the few card rows pay for
+ * crypto - callers used getAllMessages for this, which decrypts the entire
+ * room history and froze the UI for seconds on every rescan.
+ */
+export async function getPluginCardMessages(
+  roomCode: string
+): Promise<Message[]> {
+  const database = await getDB();
+  const index = database.transaction("messages").store.index("byRoom");
+  const rows: Message[] = [];
+  let cursor = await index.openCursor(roomCode);
+  while (cursor) {
+    if (cursor.value.type === MessageType.PluginCard) rows.push(cursor.value);
+    cursor = await cursor.continue();
+  }
+  const opened = await _openAll("messages", rows);
+  return opened.sort((a, b) => a.lamport - b.lamport);
+}
+
 export async function getMessage(id: string): Promise<Message | undefined> {
   const database = await getDB();
   return _open("messages", await database.get("messages", id));

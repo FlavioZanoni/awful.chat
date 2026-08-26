@@ -9,6 +9,7 @@
     Users,
   } from "@lucide/svelte";
   import SidebarControls from "./SidebarControls.svelte";
+  import PluginWidgetSlots from "./PluginWidgetSlots.svelte";
   import GifImage from "./GifImage.svelte";
   import { Tip } from "$lib/components/ui/tooltip";
   import CallStatus from "./CallStatus.svelte";
@@ -392,6 +393,7 @@
     {/if}
   </div>
 
+  <PluginWidgetSlots />
   <CallStatus />
   <SidebarControls />
 </aside>

@@ -64,6 +64,42 @@ export interface PluginDefinition {
   manifest: PluginManifest;
   // Svelte component rendering a card. Props: { card, state, host }.
   card?: ComponentType;
+  /**
+   * Compact view for a pinned sidebar widget box. Same props as `card`
+   * ({ card, cardState, host }); when absent, pinning falls back to the
+   * card component, so every plugin is pinnable with zero changes. Keep it
+   * glanceable - the box is small and capped in height.
+   */
+  widget?: ComponentType;
+  /**
+   * A tile in the call grid - the plugin appears as a "streamer" (a YouTube
+   * watch-together, a shared board) rather than a chat card. Same props as
+   * `card`. The tile is CLICK-TO-JOIN like screen shares: render nothing
+   * loud until the user opted in. Content renders locally on every client;
+   * only plugin state syncs, so this costs the SFU nothing.
+   */
+  callTile?: ComponentType;
+  /**
+   * Whether a card should currently occupy a call tile, derived from its
+   * reduced state - PURE and deterministic, so every client shows and hides
+   * the tile in the same fold. Absent means "always on while the card
+   * exists", which is almost never what you want.
+   */
+  callTileActive?: (cardState: unknown) => boolean;
+  /**
+   * Display names of the people currently using the tile (party members,
+   * board editors), derived from state - PURE. The host shows them in the
+   * same audience chip screen-share transmissions get.
+   */
+  callTileViewers?: (cardState: unknown) => string[];
+  /**
+   * Only ONE card of this plugin is ever worth pinning (a watch-together:
+   * old parties are dead parties). The sidebar picker offers only the
+   * newest card, and pinning it replaces any existing pin of this plugin.
+   * Leave off for plugins where several cards coexist meaningfully (two
+   * polls from different rooms).
+   */
+  singletonWidget?: boolean;
   // Pure reducer. Host feeds persisted updates in lamport order (history
   // replay first, then live), ephemeral updates live only.
   reduce?: (state: unknown, update: PluginUpdate, ctx: UpdateCtx) => unknown;

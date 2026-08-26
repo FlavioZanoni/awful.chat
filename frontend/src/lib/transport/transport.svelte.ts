@@ -2701,9 +2701,13 @@ export async function sendUpdate(
   pluginId: string,
   cardId: string,
   payload: unknown,
-  opts: { ephemeral?: boolean } = {}
+  opts: { ephemeral?: boolean } = {},
+  // A pinned sidebar widget acts on its card's room, not whatever room is
+  // open - the host API binds this to the card's room at construction.
+  targetRoom?: string
 ): Promise<void> {
-  if (!transportState.roomCode) {
+  const roomCode = targetRoom ?? transportState.roomCode;
+  if (!roomCode) {
     throw new Error("Not in a room");
   }
 
@@ -2743,7 +2747,7 @@ export async function sendUpdate(
     // Sign the ephemeral message (cast to Message-compatible shape for signMessage)
     const signed = signMessage(wire as any);
     wire = signed as any as WirePluginEphemeral;
-    _transport.broadcast(encode(wire), transportState.roomCode);
+    _transport.broadcast(encode(wire), roomCode);
     // Wire-only: no storage, no watermark, no visibleMessages, no noteRoomActivity
     return;
   }
@@ -2751,14 +2755,14 @@ export async function sendUpdate(
   // Persisted updates
   const updateTs = Date.now();
   // DM rooms order by wall-clock ms, same as files and cards.
-  const lamport = transportState.roomCode.startsWith("dm-")
-    ? await nextDmLamport(transportState.roomCode, updateTs)
-    : lamportSend(transportState.roomCode);
+  const lamport = roomCode.startsWith("dm-")
+    ? await nextDmLamport(roomCode, updateTs)
+    : lamportSend(roomCode);
   const content = JSON.stringify({ pluginId, cardId, data: payload });
 
   let msg: Message = {
     id: crypto.randomUUID(),
-    roomCode: transportState.roomCode,
+    roomCode,
     senderId: myId,
     senderName,
     timestamp: updateTs,
@@ -2771,13 +2775,17 @@ export async function sendUpdate(
   // Sign the message
   msg = signMessage(msg);
 
-  _broadcastChatWire(messageToWire(msg), transportState.roomCode);
+  _broadcastChatWire(messageToWire(msg), roomCode);
 
   // Persist non-ephemeral updates
   await putMessage(msg);
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
-  transportState.messages = appendSorted(transportState.messages, msg);
-  markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
+  // View and seen-watermark belong to the OPEN room only: a widget update
+  // for a background room must not paint here or mark that room read.
+  if (transportState.roomCode === msg.roomCode) {
+    transportState.messages = appendSorted(transportState.messages, msg);
+    markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
+  }
 
   // Fold our OWN update into the card state - the dispatcher only folds
   // INCOMING messages, so the sender's card never saw their own vote or spin

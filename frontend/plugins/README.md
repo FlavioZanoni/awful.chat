@@ -83,6 +83,33 @@ screens) and the plugin name and version in its header. Give your card's
 root `w-full` and let the frame own the sizing; only cap inner elements
 that should not stretch (a banner image, a fixed-size canvas).
 
+**Surfaces.** A card can render in more places than the chat. All are
+optional components on the definition, all receive the same
+`{ card, cardState, host }` props:
+
+- `widget` - a one-row strip for the sidebar slots (dotted "+ pin" boxes
+  above the call controls; users pick a card from any of their rooms).
+  Design for a single connection-status-sized row of simple controls -
+  plugins without a `widget` component do not appear in the picker.
+  Widgets act on the card's own room even while another room is open.
+  Set `singletonWidget: true` when only the NEWEST card of your plugin is
+  ever worth pinning (a watch-together: old parties are dead parties) -
+  the picker then offers just that one and pinning replaces the previous.
+- `callTile` - the plugin appears in the call grid as a "streamer" (a
+  watch-together player, a shared board). Click-to-join like screen
+  shares: render nothing loud before the user opts in. Content renders
+  locally on every client and only card state syncs, so it costs the SFU
+  nothing. Pair it with `callTileActive(cardState)`, a PURE predicate
+  deciding whether the newest card of your plugin currently occupies a
+  tile, and optionally `callTileViewers(cardState)` returning the display
+  names using it - the host shows them in the same audience chip screen
+  shares get. Both must be deterministic: every client evaluates them on
+  the same folded state. The host renders the tile content inside a
+  pointer-events-none layer (clicking the tile focuses it, like any
+  stream) - give your interactive controls `pointer-events-auto`, and
+  know the mount is PERSISTENT: it survives focus changes and filters, so
+  an iframe never reloads mid-call.
+
 **Updates** attach to a card. `host.sendUpdate(cardId, data)` persists and
 replays; `{ ephemeral: true }` sends live-only (cursors, ticks) and is capped
 at ~4 per second per sender. Your `reduce(state, update, ctx)` folds them:

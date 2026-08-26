@@ -14,7 +14,7 @@ import {
   sendUpdateImmediately,
   transportState,
 } from "$lib/transport/transport.svelte";
-import { getAllMessages } from "$lib/storage";
+import { getPluginCardMessages } from "$lib/storage";
 import { MessageType } from "$lib/types/message";
 
 export function makeHostApi(pluginId: string, roomCode: string): HostApi {
@@ -25,7 +25,9 @@ export function makeHostApi(pluginId: string, roomCode: string): HostApi {
     },
     async sendUpdate(cardId, payload, opts) {
       const { sendUpdate } = await import("$lib/transport/transport.svelte");
-      return sendUpdate(pluginId, cardId, payload, opts);
+      // Bound to the host's room, not the open one: a pinned widget votes
+      // in ITS card's room even while the user reads another.
+      return sendUpdate(pluginId, cardId, payload, opts, roomCode);
     },
     roomCode: () => roomCode,
     selfDid: () => identityStore.did || "",
@@ -50,7 +52,9 @@ export function makeHostApi(pluginId: string, roomCode: string): HostApi {
       sendUpdateImmediately(pluginId, cardId, payload);
     },
     async cards() {
-      const messages = await getAllMessages(roomCode);
+      // Card rows only - getAllMessages decrypted the ENTIRE room history
+      // for this, which froze the UI on every plugin join.
+      const messages = await getPluginCardMessages(roomCode);
       return messages.flatMap((message) => {
         if (message.type !== MessageType.PluginCard) return [];
         try {

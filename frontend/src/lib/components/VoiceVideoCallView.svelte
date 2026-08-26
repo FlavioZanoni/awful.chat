@@ -55,11 +55,18 @@
     Volume1,
     VolumeX,
     Workflow,
+    Puzzle,
+    X as XIcon,
   } from "@lucide/svelte";
-  import { Check, MessageSquare, MonitorIcon, Users as UsersIcon, UserX } from "@lucide/svelte";
+  import { Check, MessageSquare, MonitorIcon, SlidersHorizontal, Users as UsersIcon, UserX } from "@lucide/svelte";
 import { profileStore, loadProfile } from "$lib/profile.svelte";
 import { displayPrefs } from "$lib/display-prefs.svelte";
 import { cn } from "$lib/utils";
+import { callTilesState, refreshCallTiles } from "$lib/plugins/call-tiles.svelte";
+import { getManifest } from "$lib/plugins/registry";
+import { onCardStateChange } from "$lib/plugins/state.svelte";
+import PluginCallTileView from "./PluginCallTileView.svelte";
+import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   import { Slider } from "./ui/slider";
 
   $effect(() => {
@@ -71,7 +78,7 @@ import { cn } from "$lib/utils";
     label: string;
     avatarUrl?: string | null;
     isLocal: boolean;
-    kind: "camera" | "screen" | "transmission";
+    kind: "camera" | "screen" | "transmission" | "plugin";
     videoTrack: MediaStreamTrack | null;
     audioTrack?: MediaStreamTrack | null;
     peerId: string;
@@ -83,6 +90,12 @@ import { cn } from "$lib/utils";
     isPending?: boolean;
     /** The SFU producerId - only set on pending transmission tiles. */
     producerId?: string;
+    /** Plugin tiles: which card renders in this tile. */
+    pluginId?: string;
+    cardId?: string;
+    pluginRoomCode?: string;
+    /** Plugin tiles: names using it, for the audience chip. */
+    pluginViewers?: string[];
   }
 
   let {
@@ -110,13 +123,6 @@ import { cn } from "$lib/utils";
     return peerNames.get(did) ?? peerNames.get(peerId) ?? peerId.slice(0, 8);
   }
 
-  const callMembers = $derived.by(() => {
-    const names = [...callPeerIds].map(getPeerLabel);
-    return {
-      count: names.length + (transportState.inCall ? 1 : 0),
-      label: formatReactorNames(names, transportState.inCall),
-    };
-  });
 
   function transmissionAudience(sharerPeerId: string): {
     count: number;
@@ -189,8 +195,9 @@ import { cn } from "$lib/utils";
 
   function openPeerMenu(e: MouseEvent, tile: TileData): void {
     // The local tile has nothing to offer here, so the event is left to bubble
-    // to the panel and open the view menu instead.
-    if (tile.isLocal || !tile.peerId) return;
+    // to the panel and open the view menu instead. Plugin tiles are not
+    // peers - volume/profile entries would dereference a synthetic id.
+    if (tile.isLocal || !tile.peerId || tile.kind === "plugin") return;
     e.preventDefault();
     e.stopPropagation();
     peerVolumeSlider = gainToSlider(getVoicePeerVolume(tile.peerId));
@@ -201,31 +208,12 @@ import { cn } from "$lib/utils";
   function openViewMenu(e: MouseEvent): void {
     e.preventDefault();
     peerMenu = null;
-    viewMenu = clampMenu(e, 224, 156);
+    viewMenu = clampMenu(e, 224, 248);
   }
 
   function closeMenus(): void {
     peerMenu = null;
     viewMenu = null;
-  }
-
-  function pickFilter(next: TileFilter): void {
-    tileFilter = next;
-    closeMenus();
-  }
-
-  /**
-   * Step the corner button through the filters that currently match something,
-   * so the whole set stays reachable without a right-click. A filter whose last
-   * match went away drops out of the order, which lands the next step on
-   * "all".
-   */
-  function cycleFilter(): void {
-    const order = viewFilterOptions
-      .map((o) => o.value)
-      .filter((v) => v === "all" || tiles.some(filterMatch[v]));
-    const next = order[(order.indexOf(tileFilter) + 1) % order.length];
-    tileFilter = next ?? "all";
   }
 
   function onPeerVolume(value: number): void {
@@ -564,8 +552,133 @@ import { cn } from "$lib/utils";
         producerId,
       });
     }
+    // Plugin tiles: the plugin joins the grid as a "streamer". Discovery
+    // derives purely from shared card state, so every client in the call
+    // sees the same set. Content renders locally; joining is opt-in below.
+    for (const pt of callTilesState.tiles) {
+      const m = getManifest(pt.pluginId);
+      result.push({
+        id: `plugin-${pt.pluginId}-${pt.cardId}`,
+        label: m?.name ?? pt.pluginId,
+        isLocal: false,
+        kind: "plugin",
+        videoTrack: null,
+        peerId: `plugin:${pt.pluginId}`,
+        pluginId: pt.pluginId,
+        cardId: pt.cardId,
+        pluginRoomCode: pt.roomCode,
+        pluginViewers: pt.viewers,
+      });
+    }
     return result;
   });
+
+  // What plugin tiles the user opted into (click-to-join, like shares).
+  let joinedPluginTiles = $state(new Set<string>());
+
+  // ── Persistent plugin layer ─────────────────────────────────────────────
+  // A joined plugin tile's content (a YouTube iframe) cannot survive a
+  // remount, and focusing moves tiles between DOM slots - so the content
+  // mounts ONCE in a floating layer over the panel and only FOLLOWS the
+  // placeholder tile's geometry. Clicks pass through the layer to the
+  // placeholder (click-to-primary), except on the plugin's own controls,
+  // which re-enable pointer events themselves.
+  const _pluginAnchors = new Map<string, HTMLElement>();
+  let pluginRects = $state<
+    Record<string, { x: number; y: number; w: number; h: number } | null>
+  >({});
+
+  function pluginTileAnchor(node: HTMLElement, id: string) {
+    _pluginAnchors.set(id, node);
+    return {
+      destroy() {
+        if (_pluginAnchors.get(id) === node) _pluginAnchors.delete(id);
+      },
+    };
+  }
+
+  $effect(() => {
+    if (joinedPluginTiles.size === 0 || !panelEl) {
+      pluginRects = {};
+      return;
+    }
+    let raf = 0;
+    const measure = () => {
+      const panel = panelEl?.getBoundingClientRect();
+      if (panel) {
+        const next: typeof pluginRects = {};
+        for (const id of joinedPluginTiles) {
+          const el = _pluginAnchors.get(id);
+          if (el && el.isConnected) {
+            const r = el.getBoundingClientRect();
+            next[id] = {
+              x: r.left - panel.left,
+              y: r.top - panel.top,
+              w: r.width,
+              h: r.height,
+            };
+          } else {
+            // Placeholder filtered out of the grid: hide the content but
+            // keep it MOUNTED - the party's audio keeps playing.
+            next[id] = null;
+          }
+        }
+        const a = JSON.stringify(next);
+        if (a !== JSON.stringify(pluginRects)) pluginRects = next;
+      }
+      raf = requestAnimationFrame(measure);
+    };
+    raf = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(raf);
+  });
+
+  const joinedPluginTileData = $derived(
+    tiles.filter((t) => t.kind === "plugin" && joinedPluginTiles.has(t.id))
+  );
+
+  // The name tag paints ABOVE the plugin's own controls (it lives in the
+  // placeholder, they live in the floating layer) and the two share the
+  // tile's bottom edge. The tag cannot hover-hide itself - it is paint-only
+  // and the controls are another subtree - so geometry decides: cursor in
+  // the tile's bottom control zone means the tag steps aside.
+  let panelMouse = $state<{ x: number; y: number } | null>(null);
+  $effect(() => {
+    const el = panelEl;
+    if (!el) return;
+    const onMove = (e: MouseEvent) => {
+      const r = el.getBoundingClientRect();
+      panelMouse = { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+    const onLeave = () => (panelMouse = null);
+    el.addEventListener("mousemove", onMove);
+    el.addEventListener("mouseleave", onLeave);
+    return () => {
+      el.removeEventListener("mousemove", onMove);
+      el.removeEventListener("mouseleave", onLeave);
+    };
+  });
+
+  function pluginBadgeHidden(id: string): boolean {
+    const rect = pluginRects[id];
+    const m = panelMouse;
+    if (!rect || !m) return false;
+    return (
+      m.x >= rect.x &&
+      m.x <= rect.x + rect.w &&
+      m.y >= rect.y + rect.h - 72 &&
+      m.y <= rect.y + rect.h
+    );
+  }
+
+  $effect(() => {
+    // Rescan when the call room changes, when card state folds (votes,
+    // queue changes), and when new cards land in the open room's view.
+    void cardStateTickForPlugins;
+    void transportState.messages.length;
+    void refreshCallTiles(transportState.callRoomCode ?? null);
+  });
+  let cardStateTickForPlugins = $state(0);
+  $effect(() => onCardStateChange(() => (cardStateTickForPlugins += 1)));
 
   const hasActiveVideo = $derived(
     localVideoTrack !== null ||
@@ -597,44 +710,36 @@ import { cn } from "$lib/utils";
   // what you want when someone is presenting and the cameras are noise.
   // Either filter falls back to everyone if its last match goes away, so the
   // panel never ends up empty.
-  type TileFilter = "all" | "streaming" | "screens";
-
-  let tileFilter = $state<TileFilter>("all");
+  // Per-category visibility instead of one exclusive filter: with people,
+  // screen shares AND app tiles all in the grid, "only X" radios stopped
+  // composing. People keeps three levels (hiding non-streamers is its own
+  // popular mode); shares and apps are plain toggles.
+  type PeopleMode = "all" | "streaming" | "hidden";
+  const gridView = $state({
+    people: "all" as PeopleMode,
+    screens: true,
+    apps: true,
+  });
+  const gridViewActive = $derived(
+    gridView.people !== "all" || !gridView.screens || !gridView.apps
+  );
   const tileHasVideo = (t: TileData) =>
-    t.videoTrack !== null || (t.kind === "transmission" && !!t.isPending);
-  const tileIsShare = (t: TileData) =>
-    t.kind === "screen" || t.kind === "transmission";
-  const filterMatch: Record<TileFilter, (t: TileData) => boolean> = {
-    all: () => true,
-    streaming: tileHasVideo,
-    screens: tileIsShare,
-  };
+    t.videoTrack !== null ||
+    (t.kind === "transmission" && !!t.isPending) ||
+    t.kind === "plugin";
   const visibleTiles = $derived.by(() => {
-    if (tileFilter === "all") return tiles;
-    const kept = tiles.filter(filterMatch[tileFilter]);
+    const kept = tiles.filter((t) => {
+      if (t.kind === "plugin") return gridView.apps;
+      if (t.kind === "screen" || t.kind === "transmission")
+        return gridView.screens;
+      if (gridView.people === "hidden") return false;
+      if (gridView.people === "streaming") return t.videoTrack !== null;
+      return true;
+    });
+    // Never an empty panel: a view that filters everything away shows
+    // everyone instead, so there is always a way back to the menu.
     return kept.length ? kept : tiles;
   });
-
-  const viewFilterOptions: {
-    value: TileFilter;
-    label: string;
-    icon: typeof UsersIcon;
-    emptyHint: string;
-  }[] = [
-    { value: "all", label: "Everyone", icon: UserX, emptyHint: "" },
-    {
-      value: "streaming",
-      label: "Only streamers",
-      icon: UsersIcon,
-      emptyHint: "Nobody is sharing a camera or screen",
-    },
-    {
-      value: "screens",
-      label: "Screen shares only",
-      icon: MonitorIcon,
-      emptyHint: "Nobody is sharing a screen",
-    },
-  ];
 
   const gridCols = $derived.by(() => {
     const n = visibleTiles.length;
@@ -696,7 +801,9 @@ import { cn } from "$lib/utils";
     null;
 
   // Docked only when there is nothing to watch - pure audio call
-  const dockedControls = $derived(!hasActiveVideo && !isWatchingTransmission);
+  // Windowed: the controls dock and stay put. Fullscreen is the immersive
+  // mode - there they fade after the idle timeout and return on hover.
+  const dockedControls = $derived(!isFullscreen);
 
   $effect(() => {
     if (typeof window === "undefined") return;
@@ -858,6 +965,63 @@ import { cn } from "$lib/utils";
   {@const hasVideo = tile.videoTrack !== null}
   {@const isPendingTx = tile.kind === "transmission" && tile.isPending}
   {@const tileColor = getPeerColor(tile.peerId)}
+  {#if tile.kind === "plugin" && joinedPluginTiles.has(tile.id)}
+    <!-- A DIV, not the button every other tile is: the plugin renders its
+         own interactive controls and interactive content nested in a button
+         is both invalid and unusable. Clicking the tile itself behaves like
+         every other tile - toggle primary - and the plugin's real controls
+         stop propagation so they never trigger it. -->
+    <div
+      data-plugin-tile={tile.id}
+      use:pluginTileAnchor={tile.id}
+      role="button"
+      tabindex={0}
+      aria-label={isFocused ? "Minimize tile" : `Focus ${tile.label}`}
+      onclick={() => {
+        if (isOnlyOne) return;
+        if (isFocused) onUnfocus();
+        else onFocus();
+      }}
+      onkeydown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        if (isOnlyOne) return;
+        if (isFocused) onUnfocus();
+        else onFocus();
+      }}
+      class="group relative flex cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-black {isFocused
+        ? 'w-full h-full'
+        : ''} {compact ? 'aspect-video' : ''}"
+    >
+      <!-- Content lives in the persistent layer; this is only the anchor
+           the layer follows, plus the chrome painted above it. -->
+      <div
+        class="absolute bottom-1.5 left-1.5 z-30 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 pointer-events-none transition-opacity {pluginBadgeHidden(
+          tile.id
+        )
+          ? 'opacity-0'
+          : ''}"
+      >
+        <Puzzle class="size-3 text-white" />
+        <span class="text-xs mt-0.75 leading-none text-white font-mono"
+          >{tile.label}</span
+        >
+      </div>
+      {#if tile.pluginViewers?.length}
+        <!-- Same audience chip, same corner as transmissions. -->
+        <Tip text={(tile.pluginViewers ?? []).join(", ")}>
+          {#snippet children(props)}
+            <div
+              {...props}
+              class="absolute top-1.5 right-1.5 z-30 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-mono text-white"
+            >
+              <Eye class="size-3" />
+              {(tile.pluginViewers ?? []).length}
+            </div>
+          {/snippet}
+        </Tip>
+      {/if}
+    </div>
+  {:else}
   <button
     type="button"
     oncontextmenu={(e) => openPeerMenu(e, tile)}
@@ -870,6 +1034,11 @@ import { cn } from "$lib/utils";
       : ''}
       {isPendingTx ? 'ring-1 ring-primary/40 hover:ring-primary/80' : ''}"
     onclick={() => {
+      if (tile.kind === "plugin") {
+        // Opt-in, like screen shares: nothing plays until you join.
+        joinedPluginTiles = new Set([...joinedPluginTiles, tile.id]);
+        return;
+      }
       if (isPendingTx) {
         // Join this transmission (opt-in)
         if (tile.producerId) {
@@ -881,11 +1050,13 @@ import { cn } from "$lib/utils";
       if (isFocused) onUnfocus();
       else onFocus();
     }}
-    aria-label={isPendingTx
-      ? `Watch ${tile.label}'s screen`
-      : isFocused
-        ? "Minimize tile"
-        : `Focus ${tile.label}`}
+    aria-label={tile.kind === "plugin"
+      ? `Join ${tile.label}`
+      : isPendingTx
+        ? `Watch ${tile.label}'s screen`
+        : isFocused
+          ? "Minimize tile"
+          : `Focus ${tile.label}`}
   >
     {#if hasVideo}
       <video
@@ -898,6 +1069,36 @@ import { cn } from "$lib/utils";
           : ''}"
         use:videoAction={tile.videoTrack!}
       ></video>
+    {:else if tile.kind === "plugin"}
+      <!-- Unjoined plugin tile: icon plus an explicit join affordance. -->
+      {#if tile.pluginViewers?.length}
+        <Tip text={(tile.pluginViewers ?? []).join(", ")}>
+          {#snippet children(props)}
+            <div
+              {...props}
+              class="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-mono text-white"
+            >
+              <Eye class="size-3" />
+              {(tile.pluginViewers ?? []).length}
+            </div>
+          {/snippet}
+        </Tip>
+      {/if}
+      <div
+        class="pointer-events-none absolute inset-0 grid place-items-center bg-muted/30"
+      >
+        <div class="flex flex-col items-center gap-2">
+          <PluginIcon
+            icon={getManifest(tile.pluginId ?? "")?.icon ?? "🔌"}
+            class="size-8 text-primary"
+          />
+          <div
+            class="rounded-full border border-border bg-background/95 px-3 py-1.5 text-xs font-mono text-foreground shadow-sm transition-all group-hover:border-primary/50 group-hover:shadow-md"
+          >
+            Join {tile.label}
+          </div>
+        </div>
+      </div>
     {:else if !isPendingTx}
       <div
         class="relative flex items-center justify-center rounded-full {tile.isLocal
@@ -952,7 +1153,7 @@ import { cn } from "$lib/utils";
     {/if}
 
     <!-- Name badge -->
-    {#if !isPendingTx}
+    {#if !isPendingTx && tile.kind !== "plugin"}
       <div
         class="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 pointer-events-none"
       >
@@ -995,6 +1196,7 @@ import { cn } from "$lib/utils";
       </div>
     {/if}
   </button>
+  {/if}
 {/snippet}
 
 {#if nobodyInCall}
@@ -1141,6 +1343,27 @@ import { cn } from "$lib/utils";
         </div>
       {/if}
     </div>
+
+    <!-- Persistent plugin content layer: mounted once per joined tile,
+         positioned over the placeholder wherever the layout puts it, so a
+         focus change never remounts (and thus never reloads) an iframe.
+         pointer-events-none lets clicks fall through to the placeholder;
+         plugin controls re-enable their own. -->
+    {#each joinedPluginTileData as pt (pt.id)}
+      {@const rect = pluginRects[pt.id]}
+      <div
+        class="pointer-events-none absolute z-10 overflow-hidden rounded-lg"
+        style={rect
+          ? `left:${rect.x}px; top:${rect.y}px; width:${rect.w}px; height:${rect.h}px;`
+          : "left:0; top:0; width:1px; height:1px; opacity:0;"}
+      >
+        <PluginCallTileView
+          pluginId={pt.pluginId!}
+          cardId={pt.cardId!}
+          roomCode={pt.pluginRoomCode!}
+        />
+      </div>
+    {/each}
 
     <!-- Call controls -->
     <div
@@ -1453,45 +1676,34 @@ import { cn } from "$lib/utils";
       {/if}
     </div>
 
-    {#if callMembers.count > 0}
-      <Tip text={callMembers.label}>
-        {#snippet children(props)}
-          <div
-            {...props}
-            aria-label="Call members"
-            class="absolute top-3 right-12 sm:top-4 sm:right-16 z-20 flex h-8 sm:h-10 items-center gap-1.5 rounded-lg bg-zinc-900 px-2.5 font-mono text-xs text-zinc-300"
-          >
-            <UsersIcon class="size-4" />
-            {callMembers.count}
-          </div>
-        {/snippet}
-      </Tip>
-    {/if}
-
     <Tip text={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
       {#snippet children(props)}
     <!-- Worth showing only when it changes anything: some tile with
          video AND some tile without. It also stays up whenever a filter is
          active, so a filter picked from the menu always has a way out even
          once everyone is streaming. -->
-    {#if tileFilter !== "all" || (tiles.some(tileHasVideo) && tiles.some((t) => !tileHasVideo(t)))}
-      {@const current =
-        viewFilterOptions.find((o) => o.value === tileFilter) ??
-        viewFilterOptions[0]}
-      <Tip text={`Showing ${current.label.toLowerCase()} - right-click for options`}>
+    {#if gridViewActive || tiles.length > 1}
+      <Tip text="Configure what the grid shows">
         {#snippet children(props)}
           <button
             {...props}
             type="button"
-            onclick={cycleFilter}
-            oncontextmenu={openViewMenu}
-            aria-label={`Change who is shown - currently ${current.label.toLowerCase()}`}
-            class="absolute top-3 left-3 sm:top-4 sm:left-4 flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-zinc-900 transition-all duration-200 hover:scale-105 z-20 {tileFilter !==
-            'all'
+            onclick={(e) => {
+              // Without this the click bubbles to the panel's click-away
+              // closeMenus and the menu dies the same instant it opens.
+              e.stopPropagation();
+              openViewMenu(e);
+            }}
+            oncontextmenu={(e) => {
+              e.stopPropagation();
+              openViewMenu(e);
+            }}
+            aria-label="Configure what the grid shows"
+            class="absolute top-3 left-3 sm:top-4 sm:left-4 flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-zinc-900 transition-all duration-200 hover:scale-105 z-20 {gridViewActive
               ? 'text-primary'
               : 'text-zinc-300'}"
           >
-            <current.icon class="size-4" />
+            <SlidersHorizontal class="size-4" />
           </button>
         {/snippet}
       </Tip>
@@ -1530,28 +1742,52 @@ import { cn } from "$lib/utils";
         oncontextmenu={(e) => e.preventDefault()}
       >
         <p class="truncate px-3 pb-1 pt-0.5 text-xs text-muted-foreground">
-          Show
+          People
         </p>
-
-        {#each viewFilterOptions as option (option.value)}
-          {@const available =
-            option.value === "all" || tiles.some(filterMatch[option.value])}
+        {#each [{ value: "all", label: "Everyone", icon: UsersIcon }, { value: "streaming", label: "Only streamers", icon: Radio }, { value: "hidden", label: "Hidden", icon: UserX }] as opt (opt.value)}
           <button
             type="button"
             role="menuitemradio"
-            aria-checked={tileFilter === option.value}
-            disabled={!available}
-            title={available ? undefined : option.emptyHint}
-            class="flex w-full items-center gap-2 px-3 py-1.5 text-sm enabled:cursor-pointer enabled:hover:bg-muted disabled:opacity-40"
-            onclick={() => pickFilter(option.value)}
+            aria-checked={gridView.people === opt.value}
+            class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
+            onclick={() => (gridView.people = opt.value as PeopleMode)}
           >
-            <option.icon class="size-4 shrink-0" />
-            <span class="flex-1 truncate text-left">{option.label}</span>
-            {#if tileFilter === option.value}
+            <opt.icon class="size-4 shrink-0" />
+            <span class="flex-1 truncate text-left">{opt.label}</span>
+            {#if gridView.people === opt.value}
               <Check class="size-3.5 shrink-0 text-primary" />
             {/if}
           </button>
         {/each}
+
+        <div class="my-1 border-t border-border"></div>
+
+        <button
+          type="button"
+          role="menuitemcheckbox"
+          aria-checked={gridView.screens}
+          class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
+          onclick={() => (gridView.screens = !gridView.screens)}
+        >
+          <MonitorIcon class="size-4 shrink-0" />
+          <span class="flex-1 truncate text-left">Screen shares</span>
+          {#if gridView.screens}
+            <Check class="size-3.5 shrink-0 text-primary" />
+          {/if}
+        </button>
+        <button
+          type="button"
+          role="menuitemcheckbox"
+          aria-checked={gridView.apps}
+          class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
+          onclick={() => (gridView.apps = !gridView.apps)}
+        >
+          <Puzzle class="size-4 shrink-0" />
+          <span class="flex-1 truncate text-left">Apps</span>
+          {#if gridView.apps}
+            <Check class="size-3.5 shrink-0 text-primary" />
+          {/if}
+        </button>
       </div>
     {/if}
 
