@@ -120,6 +120,15 @@ export interface PluginDefinition {
    * polls from different rooms).
    */
   singletonWidget?: boolean;
+  /**
+   * For singleton widgets: is this card currently YOURS, derived from its
+   * reduced state - PURE (e.g. "am I a member of this party"). The pinned
+   * strip follows the newest card for which this returns true, so ending
+   * one party and joining another moves the widget with you; while no card
+   * matches, the strip stays where it is. Absent, the strip follows the
+   * plugin's newest card unconditionally.
+   */
+  widgetMine?: (cardState: unknown, selfDid: string) => boolean;
   // Pure reducer. Host feeds persisted updates in lamport order (history
   // replay first, then live), ephemeral updates live only.
   reduce?: (state: unknown, update: PluginUpdate, ctx: UpdateCtx) => unknown;

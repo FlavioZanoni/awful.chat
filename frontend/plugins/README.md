@@ -95,6 +95,10 @@ optional components on the definition, all receive the same
   Set `singletonWidget: true` when only the NEWEST card of your plugin is
   ever worth pinning (a watch-together: old parties are dead parties) -
   the picker then offers just that one and pinning replaces the previous.
+  Pair it with `widgetMine(cardState, selfDid)`, a PURE predicate saying
+  whether a card is currently the user's (a party they are a member of) -
+  the pinned strip then follows the newest card that matches, so joining
+  a new party moves the widget automatically.
 - `callTile` - the plugin appears in the call grid as a "streamer" (a
   watch-together player, a shared board). Click-to-join like screen
   shares: render nothing loud before the user opts in. Content renders

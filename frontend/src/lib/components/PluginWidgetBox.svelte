@@ -8,6 +8,7 @@
   import { makeHostApi } from "$lib/plugins/host";
   import { getMessage, getPluginCardMessages } from "$lib/storage";
   import { roomsStore } from "$lib/rooms.svelte";
+  import { identityStore } from "$lib/identity/identity.svelte";
   import { MessageType } from "$lib/types/message";
   import type { Message } from "$lib/transport/transport.svelte";
 
@@ -51,13 +52,14 @@
           gone = true;
           return;
         }
-        // ponytail: newest-card-wins across rooms, throttled to one scan per
-        // 5s of ticks. If you sit in an OLDER party while someone spins up a
-        // newer one elsewhere, the strip follows the newer one - the host
-        // cannot see plugin-private membership to do better.
+        // The strip follows the newest card the plugin says is YOURS
+        // (widgetMine on its folded state - for waffle, "am I a member"),
+        // so ending one party and joining another moves the widget with
+        // you. Throttled to one scan per 5s of ticks; while no card
+        // matches, the strip stays where it is.
         if (plugin.singletonWidget && Date.now() - lastScan > 5000) {
           lastScan = Date.now();
-          let newest: Candidate | null = null;
+          const found: Candidate[] = [];
           for (const room of [...roomsStore.rooms, ...roomsStore.dmRooms]) {
             for (const msg of await getPluginCardMessages(room.roomCode)) {
               if (msg.type !== MessageType.PluginCard) continue;
@@ -67,17 +69,27 @@
               } catch {
                 continue;
               }
-              if (!newest || msg.timestamp > newest.timestamp)
-                newest = {
-                  cardId: msg.id,
-                  roomCode: room.roomCode,
-                  timestamp: msg.timestamp,
-                };
+              found.push({
+                cardId: msg.id,
+                roomCode: room.roomCode,
+                timestamp: msg.timestamp,
+              });
             }
           }
-          if (newest && newest.cardId !== liveCardId) {
-            liveCardId = newest.cardId;
-            liveRoomCode = newest.roomCode;
+          found.sort((a, b) => b.timestamp - a.timestamp);
+          const selfDid = identityStore.did || "";
+          let picked: Candidate | null = null;
+          for (const c of found) {
+            if (plugin.widgetMine) {
+              const state = await getCardState(c.cardId, c.roomCode, plugin);
+              if (!plugin.widgetMine(state, selfDid)) continue;
+            }
+            picked = c;
+            break;
+          }
+          if (picked && picked.cardId !== liveCardId) {
+            liveCardId = picked.cardId;
+            liveRoomCode = picked.roomCode;
             card = null;
           }
         }
