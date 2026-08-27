@@ -1039,18 +1039,38 @@ async function _handleSyncBatch(
       `[sync] dropped ${messages.length - verified.length} message(s) with invalid signatures`
     );
   }
-  // The lowest lamport we REJECTED, per sender. A watermark may not pass it:
-  // claiming a message we threw away means no peer will ever offer it again,
-  // and there is no repair for that. It bites for real on legacy v1-signed
-  // history, which _verifyIncoming rejects wholesale.
+  // Two kinds of rejection. A SIGNED (v2/v3) message that failed verify is
+  // suspicious - maybe corruption, maybe a better copy exists - so its
+  // lamport is a floor watermarks may not pass (claiming it would mean no
+  // peer ever offers it again). But an unsigned row in a signed room, or
+  // the retired v1 canonical, is rejected DETERMINISTICALLY, FOREVER: not
+  // claiming those made every peer re-advertise the same gap and every
+  // pusher re-decrypt and re-send the entire legacy backlog on each repair
+  // tick - a permanent sync storm that pinned CPU on both ends (profiled:
+  // getMessagesAboveWatermarks + _openAll at 40%+ of an idle tab). There
+  // is no repair to protect; claim them.
   const rejectedFloor = new Map<string, number>();
+  const permanentMax = new Map<string, number>();
   messages.forEach((m, i) => {
     if (verdicts[i]) return;
+    if (!m.sig || (m.sigV !== 2 && m.sigV !== 3)) {
+      const at = permanentMax.get(m.senderId);
+      if (at === undefined || m.lamport > at) {
+        permanentMax.set(m.senderId, m.lamport);
+      }
+      return;
+    }
     const at = rejectedFloor.get(m.senderId);
     if (at === undefined || m.lamport < at) {
       rejectedFloor.set(m.senderId, m.lamport);
     }
   });
+  for (const [sid, lamport] of permanentMax) {
+    const floor = rejectedFloor.get(sid);
+    if (floor === undefined || lamport < floor) {
+      await setWatermark(roomCode, sid, lamport);
+    }
+  }
   if (!verified.length) return;
   const fullMessages = verified.map((w) => wireToMessage(w, roomCode));
 
