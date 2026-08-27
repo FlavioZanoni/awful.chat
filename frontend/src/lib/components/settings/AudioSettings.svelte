@@ -48,6 +48,10 @@
 
   let inputDevices = $state<MediaDeviceInfo[]>([]);
   let outputDevices = $state<MediaDeviceInfo[]>([]);
+  // Device enumeration is async: swapping the fallback line for the taller
+  // Select once it lands shifted the whole tab. A select-sized skeleton
+  // holds the height until we know which one renders.
+  let devicesLoaded = $state(false);
   let activeInput = $state<string | null>(null);
   let activeOutput = $state<string | null>(null);
 
@@ -97,11 +101,15 @@
     activeOutput = getVoiceActiveOutputDevice();
     inputSlider = [liveInputSlider()];
     outputSlider = [liveOutputSlider()];
-    getVoiceInputDevices().then((d) => {
-      inputDevices = d;
-    });
-    getVoiceOutputDevices().then((d) => {
-      outputDevices = d;
+    void Promise.allSettled([
+      getVoiceInputDevices().then((d) => {
+        inputDevices = d;
+      }),
+      getVoiceOutputDevices().then((d) => {
+        outputDevices = d;
+      }),
+    ]).then(() => {
+      devicesLoaded = true;
     });
   });
 
@@ -279,7 +287,9 @@
       >
     </div>
 
-    {#if inputDevices.length > 0}
+    {#if !devicesLoaded}
+      <div class="h-9 w-full animate-pulse rounded-md bg-muted/60"></div>
+    {:else if inputDevices.length > 0}
       <Select
         type="single"
         value={activeInput ?? ""}
@@ -425,7 +435,9 @@
       >
     </div>
 
-    {#if outputDevices.length > 0}
+    {#if !devicesLoaded}
+      <div class="h-9 w-full animate-pulse rounded-md bg-muted/60"></div>
+    {:else if outputDevices.length > 0}
       <Select
         type="single"
         value={activeOutput ?? ""}

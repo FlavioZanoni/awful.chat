@@ -6,6 +6,11 @@ instance decides what ships, everyone on it gets the same set, and adding one
 is a folder plus a redeploy. There is no runtime installation and no
 sandboxing, because a plugin runs with the same trust as the app itself.
 
+For working examples beyond the built-ins here, browse
+[awful-org/awfully-awesome](https://github.com/awful-org/awfully-awesome) -
+the curated plugin collection (its waffle-party watch-together exercises
+every surface: card, call tile, sidebar widget, media session).
+
 ## Anatomy
 
 ```
@@ -37,9 +42,12 @@ export const manifest: PluginManifest = {
   author: "you",          // optional, shown in the plugins settings list
   license: "MIT",         // optional, shown next to the author
   version: "1.0.0",       // optional, shown on the card header and in settings
-  repository: "https://github.com/you/your-plugin", // optional, linked from both
+  // Optional. The settings list GROUPS plugins by this URL's repository
+  // root, with the group heading linking there; a deeper path (the plugin's
+  // folder in a monorepo) also gets its own source link on the row.
+  repository: "https://github.com/you/your-plugin",
   apiVersion: 1,
-  commands: [{ name: "wheel", usage: "/wheel option1, option2, ..." }],
+  commands: [{ name: "wheel", usage: "/wheel Question? option1, option2" }],
 };
 ```
 
@@ -121,7 +129,10 @@ For playback plugins, `host.setNowPlaying({...})` puts the track on the
 OS media surface (lock screen, media keys, headsets); the host owns
 `navigator.mediaSession` and arbitrates between plugins - latest claimer
 wins, null releases your claim. Call it from the surface that RENDERS
-playback and make the handlers fire your SYNCED actions.
+playback and make the handlers fire your SYNCED actions - a headset pause
+should pause for everyone, exactly like an in-card button. The shape:
+`{ title, artist?, artworkUrl?, playing, onPlay?, onPause?, onNext?,
+onPrevious? }`.
 
 **Updates** attach to a card. `host.sendUpdate(cardId, data)` persists and
 replays; `{ ephemeral: true }` sends live-only (cursors, ticks) and is capped
@@ -129,6 +140,12 @@ at ~4 per second per sender. Your `reduce(state, update, ctx)` folds them:
 history first in a deterministic order, then live. Keep it pure, keep it a
 function of its inputs, and the same state materializes on every client and
 every reload.
+
+Two related host calls: `host.cards()` lists the plugin's existing cards in
+the host's room (cheap - it reads only card rows), and
+`host.sendUpdateImmediately(cardId, data)` is the page-teardown variant of
+sendUpdate for `host.onBeforeDisconnect` departure beacons - no async work,
+same room binding as sendUpdate.
 
 **Identity**: `ctx.senderDid` and `ctx.senderName` are verified by the host.
 Anything inside `update.data` is peer-supplied and untrusted; validate shapes
@@ -210,7 +227,10 @@ PLUGIN_SOURCES=https://github.com/you/awful-plugin-dice#v1,you/plugin-pack
   own code.
 
 Locally: `PLUGIN_SOURCES=... node scripts/fetch-plugins.mjs` then `pnpm dev`.
-Fetched folders are gitignored automatically.
+Fetched folders are deliberately NOT gitignored - Tailwind's source
+detection honors ignore rules, and an ignored plugin builds with none of
+its utility classes. A pre-commit hook refuses to commit them instead, so
+they show as untracked and stay out of the repo.
 
 ## Developing
 

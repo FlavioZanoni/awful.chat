@@ -44,3 +44,18 @@ describe("wheel logic (the real module, not a copy)", () => {
     expect(hashSeed("abc")).not.toBe(hashSeed("abd"));
   });
 });
+
+describe("wheel question", () => {
+  it("seeds an optional question from card data, capped and typed", () => {
+    expect(initialState({ options: ["a", "b"] }).question).toBe("");
+    expect(
+      initialState({ question: "What game?", options: ["a", "b"] }).question
+    ).toBe("What game?");
+    expect(
+      initialState({ question: 42, options: ["a", "b"] }).question
+    ).toBe("");
+    expect(
+      initialState({ question: "x".repeat(500), options: ["a", "b"] }).question
+    ).toHaveLength(200);
+  });
+});

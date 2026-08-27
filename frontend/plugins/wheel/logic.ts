@@ -6,6 +6,7 @@
 import type { UpdateCtx } from "$lib/plugins/api";
 
 export interface WheelState {
+  question: string;
   options: string[];
   spun: boolean;
   winner: number | null;
@@ -24,8 +25,10 @@ export function hashSeed(seed: string): number {
 }
 
 export const initialState = (cardData: unknown) => {
-    const data = (cardData ?? {}) as { options?: unknown };
+    const data = (cardData ?? {}) as { options?: unknown; question?: unknown };
     return {
+      question:
+        typeof data.question === "string" ? data.question.slice(0, 200) : "",
       options: Array.isArray(data.options)
         ? data.options.filter((o): o is string => typeof o === "string")
         : [],
