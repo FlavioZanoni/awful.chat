@@ -379,7 +379,9 @@
 <div class="ml-9 text-sm text-foreground wrap-break-word">
   {#if isFileMessage}
     {#if msg.content}
-      <p class="whitespace-pre-wrap mb-2">{msg.content}</p>
+      <!-- Through linkifyText like every other body: rendered raw, a caption
+           showed mention tokens as @[did:key:...] instead of the name. -->
+      <p class="whitespace-pre-wrap mb-2">{@html linkifyText(msg.content)}</p>
     {/if}
 
     <div class="space-y-2">
