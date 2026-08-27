@@ -1897,7 +1897,7 @@
           <button
             {...props}
             type="button"
-            class="mt-2 size-6 shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+            class="self-center size-6 shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
             onclick={clearStagedFiles}
             aria-label="Remove all attachments"
           >
