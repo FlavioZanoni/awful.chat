@@ -150,20 +150,26 @@ type mailboxEntry struct {
 
 func boxPath(box string) string { return filepath.Join(mailboxDir, box) }
 
-// mailboxTotalBytes walks every box. O(boxes) per deposit is fine at the
-// volumes the caps allow; callers hold mailboxMu.
-func mailboxTotalBytes() int64 {
-	var total int64
+// mailboxUsedBytes tracks the global quota incrementally: a full-tree walk
+// per deposit was tens of thousands of syscalls under mailboxMu at scale,
+// serializing every deposit and ack behind disk I/O. One walk at startup
+// (mailboxInitUsedBytes, before the sweeper loop), then deposits add and
+// removals subtract. Guarded by mailboxMu like everything else here.
+var mailboxUsedBytes int64
+
+func mailboxInitUsedBytes() {
+	mailboxMu.Lock()
+	defer mailboxMu.Unlock()
+	mailboxUsedBytes = 0
 	boxes, _ := os.ReadDir(mailboxDir)
 	for _, b := range boxes {
 		entries, _ := os.ReadDir(filepath.Join(mailboxDir, b.Name()))
 		for _, e := range entries {
 			if info, err := e.Info(); err == nil {
-				total += info.Size()
+				mailboxUsedBytes += info.Size()
 			}
 		}
 	}
-	return total
 }
 
 // handleMailboxDeposit stores one sealed blob. Anonymous by design; only
@@ -212,7 +218,7 @@ func handleMailboxDeposit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mailbox full", http.StatusInsufficientStorage)
 		return
 	}
-	if mailboxTotalBytes()+int64(len(blob)) > mailboxGlobalMaxBytes {
+	if mailboxUsedBytes+int64(len(blob)) > mailboxGlobalMaxBytes {
 		http.Error(w, "mailbox full", http.StatusInsufficientStorage)
 		return
 	}
@@ -221,6 +227,7 @@ func handleMailboxDeposit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+	mailboxUsedBytes += int64(len(blob))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -304,7 +311,10 @@ func handleMailboxAck(w http.ResponseWriter, r *http.Request) {
 	mailboxMu.Lock()
 	for _, id := range req.IDs {
 		if mailboxIDRe.MatchString(id) {
-			_ = os.Remove(filepath.Join(boxPath(box), id))
+			p := filepath.Join(boxPath(box), id)
+			if info, err := os.Stat(p); err == nil && os.Remove(p) == nil {
+				mailboxUsedBytes -= info.Size()
+			}
 		}
 	}
 	_ = os.Remove(boxPath(box)) // succeeds only when empty
@@ -315,6 +325,7 @@ func handleMailboxAck(w http.ResponseWriter, r *http.Request) {
 // startMailboxSweeper expires unclaimed blobs. Runs hourly; a restart
 // changes nothing because the state is plain files under the data volume.
 func startMailboxSweeper() {
+	mailboxInitUsedBytes()
 	go func() {
 		for {
 			cutoff := time.Now().Add(-mailboxTTL)
@@ -328,7 +339,9 @@ func startMailboxSweeper() {
 				entries, _ := os.ReadDir(dir)
 				for _, e := range entries {
 					if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
-						_ = os.Remove(filepath.Join(dir, e.Name()))
+						if os.Remove(filepath.Join(dir, e.Name())) == nil {
+							mailboxUsedBytes -= info.Size()
+						}
 						removed++
 					}
 				}

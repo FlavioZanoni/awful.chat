@@ -152,6 +152,14 @@ func handleOgPreview(w http.ResponseWriter, r *http.Request) {
 		apiError(w, r, "Origin not allowed", http.StatusForbidden)
 		return
 	}
+	// The one outbound-fetch handler that had NO throttle: each request is
+	// a DNS lookup plus up to 10s of held goroutine and a 5MB read - the
+	// cheapest-for-attacker, dearest-for-server call here. Same budget as
+	// its plugin-proxy sibling.
+	if !rateAllow("og:"+clientIP(r), pluginProxyRateLimit) {
+		apiError(w, r, "rate limited", http.StatusTooManyRequests)
+		return
+	}
 
 	target := r.URL.Query().Get("url")
 	target = strings.TrimSpace(target)
