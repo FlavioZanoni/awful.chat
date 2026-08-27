@@ -819,12 +819,14 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
       ? (visibleTiles.find((t) => t.id === focusedTileId) ?? null)
       : null
   );
-  // A focused screen/transmission is being WATCHED, not glanced at: the
-  // panel grows (rowClass) and the controls go immersive like fullscreen
-  // (dockedControls).
+  // A focused screen/transmission/plugin tile is being WATCHED, not glanced
+  // at: the panel grows (rowClass) and the controls go immersive like
+  // fullscreen (dockedControls).
   const watchingFocused = $derived(
     !!focusedTile &&
-      (focusedTile.kind === "screen" || focusedTile.kind === "transmission")
+      (focusedTile.kind === "screen" ||
+        focusedTile.kind === "transmission" ||
+        focusedTile.kind === "plugin")
   );
   const showThumbnails = $derived(
     focusedTile ? focusedTile.kind !== "screen" : false
