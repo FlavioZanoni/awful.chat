@@ -14,6 +14,7 @@ import {
 import type {
   Attachment,
   AttachmentStatus,
+  ChatMessageType,
   FileEntry,
   Message,
   MessageStatus,
@@ -454,6 +455,70 @@ export async function getPluginCardMessages(
   }
   const opened = await _openAll("messages", rows);
   return opened.sort((a, b) => a.lamport - b.lamport);
+}
+
+/**
+ * Only the room's messages of the given clear types, decrypted. Same cursor
+ * trick as getPluginCardMessages: rows that fail the clear-field filter
+ * never pay for crypto.
+ */
+export async function getMessagesOfTypes(
+  roomCode: string,
+  types: ChatMessageType[]
+): Promise<Message[]> {
+  const database = await getDB();
+  const index = database.transaction("messages").store.index("byRoom");
+  const wanted = new Set<ChatMessageType>(types);
+  const rows: Message[] = [];
+  let cursor = await index.openCursor(roomCode);
+  while (cursor) {
+    if (wanted.has(cursor.value.type)) rows.push(cursor.value);
+    cursor = await cursor.continue();
+  }
+  const opened = await _openAll("messages", rows);
+  return opened.sort((a, b) => a.lamport - b.lamport);
+}
+
+/**
+ * Per-sender maximum lamport for a room, from CLEAR fields alone - digest
+ * reconciliation needs nothing else, and building this via getAllMessages
+ * decrypted the entire room on every background digest exchange.
+ */
+export async function getSenderMaxLamports(
+  roomCode: string
+): Promise<Map<string, number>> {
+  const database = await getDB();
+  const index = database.transaction("messages").store.index("byRoom");
+  const highest = new Map<string, number>();
+  let cursor = await index.openCursor(roomCode);
+  while (cursor) {
+    const { senderId, lamport } = cursor.value;
+    const at = highest.get(senderId);
+    if (at === undefined || lamport > at) highest.set(senderId, lamport);
+    cursor = await cursor.continue();
+  }
+  return highest;
+}
+
+/**
+ * Messages above a peer's per-sender watermarks - the sync push. The
+ * filter runs on CLEAR senderId/lamport, so only the rows actually being
+ * pushed are decrypted (previously the whole room, twice per exchange).
+ */
+export async function getMessagesAboveWatermarks(
+  roomCode: string,
+  watermarks: Record<string, number>
+): Promise<Message[]> {
+  const database = await getDB();
+  const index = database.transaction("messages").store.index("byRoom");
+  const rows: Message[] = [];
+  let cursor = await index.openCursor(roomCode);
+  while (cursor) {
+    const { senderId, lamport } = cursor.value;
+    if (lamport > (watermarks[senderId] ?? -1)) rows.push(cursor.value);
+    cursor = await cursor.continue();
+  }
+  return _openAll("messages", rows);
 }
 
 export async function getMessage(id: string): Promise<Message | undefined> {
@@ -1297,12 +1362,22 @@ export async function migrateAtRest(): Promise<void> {
       const CHUNK = (STORE_SPECS[store] as { bytes?: string[] }).bytes?.length
         ? 8
         : 100;
+      // Resume each chunk AFTER the last processed key: restarting the
+      // cursor at the store head made every chunk re-skip all previously
+      // sealed rows - O(n²) over a big legacy history, minutes of IDB
+      // churn on the very unlock that migrates it.
+      let lastKey: IDBValidKey | null = null;
       for (;;) {
         // Collect one chunk of plaintext rows (no crypto inside the tx)...
         const plain: Array<{ key: IDBValidKey; row: Record<string, unknown> }> =
           [];
-        let cursor = await database.transaction(store).store.openCursor();
+        let cursor = await database
+          .transaction(store)
+          .store.openCursor(
+            lastKey === null ? null : IDBKeyRange.lowerBound(lastKey, true)
+          );
         while (cursor && plain.length < CHUNK) {
+          lastKey = cursor.primaryKey;
           if (!isSealed(cursor.value)) {
             plain.push({
               key: cursor.primaryKey,

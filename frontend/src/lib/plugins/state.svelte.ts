@@ -6,7 +6,7 @@
 import type { Message } from "$lib/transport/transport.svelte";
 import type { PluginDefinition, UpdateCtx } from "./api";
 import { MessageType, type ChatMessageType } from "$lib/types/message";
-import { getAllMessages } from "$lib/storage";
+import { getMessagesOfTypes } from "$lib/storage";
 
 export interface CardStateEntry {
   state: unknown;
@@ -78,8 +78,13 @@ export async function buildCardState(
   definition: PluginDefinition
 ): Promise<CardStateEntry> {
   // The card's own payload seeds the state (a poll's question and options
-  // live there); updates only ever mutate it.
-  const allMessages = await getAllMessages(roomCode);
+  // live there); updates only ever mutate it. Plugin rows ONLY: pulling
+  // this via getAllMessages decrypted the room's entire history - every
+  // text and file message - to rebuild one card, on every cache miss.
+  const allMessages = await getMessagesOfTypes(roomCode, [
+    MessageType.PluginCard,
+    MessageType.PluginUpdate,
+  ]);
   let cardData: unknown = undefined;
   const cardMsg = allMessages.find((m) => m.id === cardId);
   if (cardMsg) {
@@ -210,8 +215,12 @@ export function foldUpdate(
   };
 
   try {
-    entry.state = definition.reduce(entry.state, { data: update.data }, ctx);
-    bumpTick();
+    const next = definition.reduce(entry.state, { data: update.data }, ctx);
+    // Reducers deliberately return the SAME reference for no-ops; a tick for
+    // one re-rendered every mounted plugin surface in the app for nothing.
+    const changed = next !== entry.state;
+    entry.state = next;
+    if (changed) bumpTick();
     if (!update.ephemeral) {
       entry.last = {
         lamport: update.lamport,
@@ -230,6 +239,11 @@ export function foldUpdate(
  * Initialize or retrieve cached state for a card.
  * Returns cached state if available, otherwise builds it from storage.
  */
+/** In-flight builds, so N mounted views of one card (chat card + pinned
+ *  widget + call tile) share a single storage read instead of each paying
+ *  a full rebuild after every eviction. */
+const _building = new Map<string, Promise<unknown>>();
+
 export async function getCardState(
   cardId: string,
   roomCode: string,
@@ -237,21 +251,31 @@ export async function getCardState(
 ): Promise<unknown> {
   const entry = cardStates.get(cardId);
   if (entry) return entry.state;
+  const inflight = _building.get(cardId);
+  if (inflight) return inflight;
 
-  _missedFold.delete(cardId); // a flag from a previous (evicted) life is stale
-  let built = await buildCardState(cardId, roomCode, definition);
-  // An update folded while we were reading storage found no entry and was
-  // dropped - but its putMessage preceded the fold, so a fresh read sees it.
-  while (_missedFold.delete(cardId)) {
-    built = await buildCardState(cardId, roomCode, definition);
+  const build = (async () => {
+    _missedFold.delete(cardId); // a flag from a previous (evicted) life is stale
+    let built = await buildCardState(cardId, roomCode, definition);
+    // An update folded while we were reading storage found no entry and was
+    // dropped - but its putMessage preceded the fold, so a fresh read sees it.
+    while (_missedFold.delete(cardId)) {
+      built = await buildCardState(cardId, roomCode, definition);
+    }
+    // A concurrent getCardState may have set the entry first; live folds have
+    // been applying to THAT object, so ours must not clobber it.
+    const existing = cardStates.get(cardId);
+    if (existing) return existing.state;
+    cardStates.set(cardId, built);
+    bumpTick();
+    return built.state;
+  })();
+  _building.set(cardId, build);
+  try {
+    return await build;
+  } finally {
+    _building.delete(cardId);
   }
-  // A concurrent getCardState may have set the entry first; live folds have
-  // been applying to THAT object, so ours must not clobber it.
-  const existing = cardStates.get(cardId);
-  if (existing) return existing.state;
-  cardStates.set(cardId, built);
-  bumpTick();
-  return built.state;
 }
 
 /**

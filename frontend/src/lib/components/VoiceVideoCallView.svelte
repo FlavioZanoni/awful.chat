@@ -676,16 +676,32 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   $effect(() => {
     const el = panelEl;
     if (!el) return;
+    // rAF-coalesced: raw mousemove fires far above frame rate, and each
+    // handler did a synchronous getBoundingClientRect (layout) plus a state
+    // write re-evaluating chrome visibility - per EVENT, during a live call.
+    let raf = 0;
+    let pending: MouseEvent | null = null;
     const onMove = (e: MouseEvent) => {
-      const r = el.getBoundingClientRect();
-      panelMouse = { x: e.clientX - r.left, y: e.clientY - r.top };
+      pending = e;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (!pending) return;
+        const r = el.getBoundingClientRect();
+        panelMouse = { x: pending.clientX - r.left, y: pending.clientY - r.top };
+        pending = null;
+      });
     };
-    const onLeave = () => (panelMouse = null);
+    const onLeave = () => {
+      pending = null;
+      panelMouse = null;
+    };
     el.addEventListener("mousemove", onMove);
     el.addEventListener("mouseleave", onLeave);
     return () => {
       el.removeEventListener("mousemove", onMove);
       el.removeEventListener("mouseleave", onLeave);
+      if (raf) cancelAnimationFrame(raf);
     };
   });
 

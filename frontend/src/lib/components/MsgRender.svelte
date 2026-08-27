@@ -80,7 +80,20 @@
   // promise is a meaningless cleanup - so the async work is an inner IIFE.)
   // Bridge the store's plain-callback notifications into local reactivity.
   let cardStateTickLocal = $state(0);
-  $effect(() => onCardStateChange(() => (cardStateTickLocal += 1)));
+  $effect(() => {
+    // Only PLUGIN CARDS need to hear state ticks: subscribing every text
+    // and file message meant one vote anywhere woke hundreds of callbacks
+    // in a long scrollback.
+    if (msg.type !== MessageType.PluginCard) return;
+    return onCardStateChange(() => (cardStateTickLocal += 1));
+  });
+
+  // One host per (plugin, room), like PluginCallTileView/PluginWidgetBox: a
+  // fresh host per render meant a fresh now-playing token per state tick,
+  // churning the OS media surface on every party action.
+  const pluginHostApi = $derived(
+    pluginCardPluginId ? makeHostApi(pluginCardPluginId, msg.roomCode) : null
+  );
 
   $effect(() => {
     void cardStateTickLocal;
@@ -582,11 +595,13 @@
             </span>
           {/if}
         </div>
-        <PluginCardUi
-          card={msg}
-          cardState={pluginCardState}
-          host={makeHostApi(pluginCardPluginId, msg.roomCode)}
-        />
+        {#if pluginHostApi}
+          <PluginCardUi
+            card={msg}
+            cardState={pluginCardState}
+            host={pluginHostApi}
+          />
+        {/if}
       </div>
     {/if}
   {:else}

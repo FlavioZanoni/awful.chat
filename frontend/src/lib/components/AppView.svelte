@@ -33,6 +33,7 @@
     getPeerProfile,
     markRoomSeen,
     putPhonebookEntry,
+    requestPersistentStorage,
     type PhonebookEntry,
   } from "$lib/storage";
   import { MessageType } from "$lib/types/message";
@@ -110,10 +111,12 @@ import { displayPrefs } from "$lib/display-prefs.svelte";
       .catch(() => {});
     // Persistence IS requested at every unlock, but a denial was silent -
     // and eviction on a denied origin is exactly how a phone loses its
-    // identity. Say it out loud, once per page load.
-    import("$lib/storage")
-      .then(async ({ requestPersistentStorage }) => {
-        if (await requestPersistentStorage()) return;
+    // identity. Say it out loud, once per page load. ($lib/storage is
+    // already statically imported here; a dynamic import of it was a
+    // synthetic no-op promise.)
+    requestPersistentStorage()
+      .then(async (granted) => {
+        if (granted) return;
         const { _transport } = await import("$lib/transport/transport.svelte");
         _transport.announce({
           type: "app-warning",

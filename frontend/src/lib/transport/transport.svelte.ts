@@ -6,6 +6,9 @@ import {
   bulkPutMessages,
   getMessages,
   getAllMessages,
+  getMessagesAboveWatermarks,
+  getMessagesOfTypes,
+  getSenderMaxLamports,
   getWatermarksForRoom,
   setWatermark,
   markRoomSeen,
@@ -885,23 +888,21 @@ async function _handleDigest(
   // now) leaves `mine` empty, which reads as "nothing to compare" and makes
   // reconciliation a no-op. Rebuild once from what is actually stored.
   if (Object.keys(mine).length === 0) {
-    const stored = await getAllMessages(roomCode);
-    for (const m of stored) {
-      await setWatermark(m.roomCode, m.senderId, m.lamport);
+    // Clear fields suffice for watermarks too - no decrypt for the rebuild.
+    const rebuilt = await getSenderMaxLamports(roomCode);
+    for (const [sid, lamport] of rebuilt) {
+      await setWatermark(roomCode, sid, lamport);
     }
-    if (stored.length) mine = await getWatermarksForRoom(roomCode);
+    if (rebuilt.size) mine = await getWatermarksForRoom(roomCode);
   }
 
   // Senders we hold messages from, not senders we happen to have a watermark
   // row for. A partial watermark map (one row lost, or written before a sender
-  // was known) silently excluded that sender from every push we ever made,
-  // even though _pushMissingTo scans all stored messages anyway.
-  const stored = await getAllMessages(roomCode);
-  const highest = new Map<string, number>();
-  for (const m of stored) {
-    const at = highest.get(m.senderId);
-    if (at === undefined || m.lamport > at) highest.set(m.senderId, m.lamport);
-  }
+  // was known) silently excluded that sender from every push we ever made.
+  // Clear fields only: building this via getAllMessages AES-decrypted the
+  // whole room on every background digest exchange, for two fields that
+  // were never encrypted in the first place.
+  const highest = await getSenderMaxLamports(roomCode);
   for (const [sid, lamport] of Object.entries(mine)) {
     const at = highest.get(sid);
     if (at === undefined || lamport > at) highest.set(sid, lamport);
@@ -933,10 +934,9 @@ async function _pushMissingTo(
   theirWatermarks: Record<string, number>
 ): Promise<void> {
   if (!roomCode) return;
-  const all = await getAllMessages(roomCode);
-  const missing = all.filter(
-    (m) => m.lamport > (theirWatermarks[m.senderId] ?? -1)
-  );
+  // Filter on clear senderId/lamport BEFORE decrypting: only the rows
+  // actually going onto the wire pay for crypto, instead of the whole room.
+  const missing = await getMessagesAboveWatermarks(roomCode, theirWatermarks);
 
   if (!missing.length) return;
 
@@ -2959,12 +2959,12 @@ export async function toggleReaction(
   const roomCode = transportState.roomCode;
   if (!roomCode) return;
   // The loaded page cannot see reactions on older messages, which made
-  // un-reacting there impossible: the prior comes from storage.
-  const all = await getAllMessages(roomCode);
+  // un-reacting there impossible: the prior comes from storage. Reaction
+  // rows only - every emoji click used to decrypt the entire room.
+  const all = await getMessagesOfTypes(roomCode, [MessageType.Reaction]);
   const existing = all
     .filter(
       (m) =>
-        m.type === MessageType.Reaction &&
         m.reactionTo === messageId &&
         m.reactionEmoji === emoji &&
         isSelfSender(m.senderId)

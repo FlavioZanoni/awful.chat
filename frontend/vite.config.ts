@@ -33,6 +33,7 @@ export default defineConfig(({ mode }) => ({
         globIgnores: [
           "**/node_modules/**/*",
           "assets/langs/**", // ~300 shiki language chunks, ~8 MB
+          "assets/lazy/**", // shiki themes+wasm engine, webtorrent: ~2.6 MB
           "audio-worklet.js", // DTLN wasm, ~8 MB
         ],
       },
@@ -167,12 +168,22 @@ export default defineConfig(({ mode }) => ({
         // Shiki ships one chunk per language. Park them in their own directory
         // so the service worker can leave them out of the precache and fetch
         // them on demand (see globIgnores above).
-        chunkFileNames: (chunk) =>
-          /[\\/](@shikijs[\\/]langs|shiki[\\/]dist[\\/]langs)[\\/]/.test(
-            chunk.facadeModuleId ?? ""
+        chunkFileNames: (chunk) => {
+          const id = chunk.facadeModuleId ?? "";
+          if (/[\\/](@shikijs[\\/]langs|shiki[\\/]dist[\\/]langs)[\\/]/.test(id))
+            return "assets/langs/[name]-[hash].js";
+          // Same trick for the other on-demand heavyweights: 70 shiki theme
+          // chunks (only github-dark is ever loaded), the oniguruma wasm
+          // engine, and webtorrent. Together they were 46% of the precache,
+          // re-downloaded on every deploy by sessions that never used them.
+          if (
+            /[\\/](@shikijs[\\/]themes|shiki[\\/]dist[\\/]themes)[\\/]|[\\/]@shikijs[\\/]engine-oniguruma[\\/]|[\\/]shiki[\\/]dist[\\/]wasm|[\\/]webtorrent[\\/]/.test(
+              id
+            )
           )
-            ? "assets/langs/[name]-[hash].js"
-            : "assets/[name]-[hash].js",
+            return "assets/lazy/[name]-[hash].js";
+          return "assets/[name]-[hash].js";
+        },
         assetFileNames: "assets/[name]-[hash].[ext]",
       },
     },
