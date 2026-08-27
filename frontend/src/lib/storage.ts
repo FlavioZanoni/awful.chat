@@ -445,16 +445,7 @@ export async function getAllMessages(roomCode: string): Promise<Message[]> {
 export async function getPluginCardMessages(
   roomCode: string
 ): Promise<Message[]> {
-  const database = await getDB();
-  const index = database.transaction("messages").store.index("byRoom");
-  const rows: Message[] = [];
-  let cursor = await index.openCursor(roomCode);
-  while (cursor) {
-    if (cursor.value.type === MessageType.PluginCard) rows.push(cursor.value);
-    cursor = await cursor.continue();
-  }
-  const opened = await _openAll("messages", rows);
-  return opened.sort((a, b) => a.lamport - b.lamport);
+  return getMessagesOfTypes(roomCode, [MessageType.PluginCard]);
 }
 
 /**
@@ -466,17 +457,30 @@ export async function getMessagesOfTypes(
   roomCode: string,
   types: ChatMessageType[]
 ): Promise<Message[]> {
-  const database = await getDB();
-  const index = database.transaction("messages").store.index("byRoom");
+  // One bulk read, then filter on clear fields, then decrypt survivors.
+  // NOT a cursor: an await per row is an IDB round-trip per message, and
+  // walking a big room that way (recurring, per digest) jammed the
+  // database enough to delay live attachment writes and sends. Sealed
+  // message rows are small; materializing them raw is the cheap part -
+  // the decrypt is what must stay scoped.
+  const rows = await _rawRoomMessages(roomCode);
   const wanted = new Set<ChatMessageType>(types);
-  const rows: Message[] = [];
-  let cursor = await index.openCursor(roomCode);
-  while (cursor) {
-    if (wanted.has(cursor.value.type)) rows.push(cursor.value);
-    cursor = await cursor.continue();
-  }
-  const opened = await _openAll("messages", rows);
+  const opened = await _openAll(
+    "messages",
+    rows.filter((r) => wanted.has(r.type))
+  );
   return opened.sort((a, b) => a.lamport - b.lamport);
+}
+
+/** Raw (still-sealed) message rows for a room - one bulk index read. */
+async function _rawRoomMessages(roomCode: string): Promise<Message[]> {
+  const database = await getDB();
+  const index = database.transaction("messages").store.index("byRoomLamport");
+  const range = IDBKeyRange.bound(
+    [roomCode, 0],
+    [roomCode, Number.MAX_SAFE_INTEGER]
+  );
+  return index.getAll(range);
 }
 
 /**
@@ -487,15 +491,11 @@ export async function getMessagesOfTypes(
 export async function getSenderMaxLamports(
   roomCode: string
 ): Promise<Map<string, number>> {
-  const database = await getDB();
-  const index = database.transaction("messages").store.index("byRoom");
+  const rows = await _rawRoomMessages(roomCode);
   const highest = new Map<string, number>();
-  let cursor = await index.openCursor(roomCode);
-  while (cursor) {
-    const { senderId, lamport } = cursor.value;
+  for (const { senderId, lamport } of rows) {
     const at = highest.get(senderId);
     if (at === undefined || lamport > at) highest.set(senderId, lamport);
-    cursor = await cursor.continue();
   }
   return highest;
 }
@@ -509,16 +509,11 @@ export async function getMessagesAboveWatermarks(
   roomCode: string,
   watermarks: Record<string, number>
 ): Promise<Message[]> {
-  const database = await getDB();
-  const index = database.transaction("messages").store.index("byRoom");
-  const rows: Message[] = [];
-  let cursor = await index.openCursor(roomCode);
-  while (cursor) {
-    const { senderId, lamport } = cursor.value;
-    if (lamport > (watermarks[senderId] ?? -1)) rows.push(cursor.value);
-    cursor = await cursor.continue();
-  }
-  return _openAll("messages", rows);
+  const rows = await _rawRoomMessages(roomCode);
+  return _openAll(
+    "messages",
+    rows.filter((r) => r.lamport > (watermarks[r.senderId] ?? -1))
+  );
 }
 
 export async function getMessage(id: string): Promise<Message | undefined> {
