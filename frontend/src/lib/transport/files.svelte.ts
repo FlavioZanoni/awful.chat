@@ -189,10 +189,12 @@ async function _adoptInline(
 
   // The live message handler creates the attachment records; give it a
   // moment before concluding this message has none (the sync path never
-  // creates any, so after the wait we make our own).
+  // creates any, so after the wait we make our own). A short POLL, not one
+  // blind 2s sleep - that sleep was a 2-second floor on every received
+  // image before its bytes registered and the picture appeared.
   let records = await getAttachmentsByMessage(messageId);
-  if (!records.length) {
-    await new Promise((r) => setTimeout(r, 2000));
+  for (let i = 0; i < 10 && !records.length; i++) {
+    await new Promise((r) => setTimeout(r, 200));
     records = await getAttachmentsByMessage(messageId);
   }
   const buf = bytes.buffer as ArrayBuffer;

@@ -295,11 +295,12 @@ async function _seal<T extends object>(
 
 async function _open<T>(
   store: EncryptedStoreName,
-  row: T | undefined
+  row: T | undefined,
+  opts?: { skipBytes?: boolean }
 ): Promise<T | undefined> {
   if (row === undefined) return undefined;
   try {
-    return await openRow<T>(row, STORE_SPECS[store]);
+    return await openRow<T>(row, STORE_SPECS[store], opts);
   } catch (err) {
     if (isStorageLockedError(err)) throw err; // too-early read: stay loud
     // One undecryptable row (truncated blob, foreign key) degrades to one
@@ -1033,13 +1034,16 @@ export async function deleteRoom(roomCode: string): Promise<void> {
 }
 
 export async function getOwnProfile(
-  selfDid?: string
+  selfDid?: string,
+  opts?: { skipBytes?: boolean }
 ): Promise<OwnProfile | undefined> {
   const database = await getDB();
   // did and isMe are clear fields, so both lookups run before any decrypt.
   const all = await database.getAll("profiles");
   const mine = all.find((p) => p.isMe === true);
-  if (mine) return _open("profiles", mine as OwnProfile);
+  // skipBytes: senders only need the nickname - decrypting the avatar and
+  // banner blobs on EVERY message send was a visible chunk of send latency.
+  if (mine) return _open("profiles", mine as OwnProfile, opts);
   // Fall back to the row under our own did, and repair the flag. An incoming
   // profile used to be written over that row with isMe:false - our own second
   // device carries the same did - and the flag alone then hid a row that was

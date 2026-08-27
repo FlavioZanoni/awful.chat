@@ -317,6 +317,17 @@ export async function sendDirectMessage(
   // Sign the message before storing
   msg = signMessage(msg);
 
+  // Echo BEFORE the storage chain: put + watermark + seen + rooms refresh
+  // gated the local echo behind four storage operations, which read as
+  // send lag. Status updates flow into this same object via
+  // applyMessageStatus once acks arrive.
+  if (
+    transportState.chatMode === "dm" &&
+    transportState.activeDmPeerId === peerId
+  ) {
+    transportState.messages = appendSorted(transportState.messages, msg);
+  }
+
   await putMessage(msg);
   await setWatermark(roomCode, mySenderId, msg.lamport);
   // Sending is reading: your own message must not count as unread, and the
@@ -324,12 +335,6 @@ export async function sendDirectMessage(
   await markRoomSeen(roomCode, msg.lamport);
   await refreshDmRooms();
   transportState.dmVersion += 1;
-  if (
-    transportState.chatMode === "dm" &&
-    transportState.activeDmPeerId === peerId
-  ) {
-    transportState.messages = appendSorted(transportState.messages, msg);
-  }
 }
 
 /**

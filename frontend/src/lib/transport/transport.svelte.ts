@@ -2556,7 +2556,7 @@ export async function sendMessage(
   }
   if (!transportState.roomCode) return;
 
-  const profile = await getOwnProfile();
+  const profile = await getOwnProfile(undefined, { skipBytes: true });
   const senderName = profile?.nickname?.trim() || "Anonymous";
   const myId = identityStore.did ?? _transport.selfId();
   const lamport = lamportSend(transportState.roomCode);
@@ -2583,10 +2583,12 @@ export async function sendMessage(
 
   _broadcastChatWire(messageToWire(msg), transportState.roomCode);
 
+  // Echo BEFORE the storage writes: seal + two IDB round-trips gated the
+  // local echo, which read as send lag - the network send already left.
+  transportState.messages = appendSorted(transportState.messages, msg);
+
   await putMessage(msg);
   await setWatermark(msg.roomCode, msg.senderId, msg.lamport);
-
-  transportState.messages = appendSorted(transportState.messages, msg);
 
   markRoomSeen(msg.roomCode, msg.lamport).catch(() => {});
   noteRoomActivity(msg.roomCode, msg.timestamp);
@@ -2677,7 +2679,7 @@ export async function sendFiles(
     });
   }
 
-  const profile = await getOwnProfile();
+  const profile = await getOwnProfile(undefined, { skipBytes: true });
   const senderName = profile?.nickname?.trim() || "Anonymous";
   const myId = identityStore.did ?? _transport.selfId();
   // DM rooms order by wall-clock ms; a room-counter lamport (~small int)
@@ -2744,7 +2746,7 @@ export async function sendCard(
     throw new Error(`Card payload error: ${payloadValidation.reason}`);
   }
 
-  const profile = await getOwnProfile();
+  const profile = await getOwnProfile(undefined, { skipBytes: true });
   const senderName = profile?.nickname?.trim() || "Anonymous";
   const myId = identityStore.did ?? _transport.selfId();
   const ts = Date.now();
@@ -2810,7 +2812,7 @@ export async function sendUpdate(
     throw new Error(`Update payload error: ${payloadValidation.reason}`);
   }
 
-  const profile = await getOwnProfile();
+  const profile = await getOwnProfile(undefined, { skipBytes: true });
   const senderName = profile?.nickname?.trim() || "Anonymous";
   const myId = identityStore.did ?? _transport.selfId();
 
