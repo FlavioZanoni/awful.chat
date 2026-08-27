@@ -737,12 +737,6 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   let cardStateTickForPlugins = $state(0);
   $effect(() => onCardStateChange(() => (cardStateTickForPlugins += 1)));
 
-  const hasActiveVideo = $derived(
-    localVideoTrack !== null ||
-      localScreenTrack !== null ||
-      [...participants.values()].some((p) => p.videoTrack || p.screenTrack)
-  );
-
   const isWatchingTransmission = $derived(watchingTransmissionPeerId !== null);
 
   const remoteAudio = $derived.by(() => {
@@ -1360,7 +1354,7 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     aria-label="Call"
     oncontextmenu={openViewMenu}
     class="flex flex-col relative bg-background {panelSizeClass}
-      {!isFullscreen && !hasActiveVideo ? 'pb-14' : ''}"
+      {dockedControls ? 'pb-14' : ''}"
   >
     <!-- Always-mounted remote audio elements -->
     {#each remoteAudio as a (a.id)}
