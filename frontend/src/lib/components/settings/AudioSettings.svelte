@@ -166,6 +166,13 @@
     if (isMicStarting) return;
     isMicStarting = true;
 
+    // Kept outside the try so the catch can clean up a half-built test:
+    // the mic capture and the monitor graph exist before micTestDisconnect is
+    // assigned, and a lingering monitor blocks the transport edge of every
+    // future mic rebuild.
+    let testStream: MediaStream | null = null;
+    let dtlnCleanup: (() => void) | null = null;
+
     try {
       // Deafen when starting test (mutes both input and output)
       setDeafened(true);
@@ -184,13 +191,14 @@
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      testStream = stream;
 
       if (dtlnEnabled) {
         _dtln.disconnectFromTransport();
         await _dtln.waitUntilReady();
         _dtln.setNoiseGate(noiseGateThreshold);
-        const { processedStream, cleanup: dtlnCleanup } =
-          await _dtln.monitorStream(stream);
+        const { processedStream, cleanup } = await _dtln.monitorStream(stream);
+        dtlnCleanup = cleanup;
 
         const testCtx = new AudioContext();
         const source = testCtx.createMediaStreamSource(processedStream);
@@ -209,7 +217,7 @@
         }, 50);
 
         micTestDisconnect = () => {
-          dtlnCleanup();
+          dtlnCleanup?.();
           _dtln.reconnectToTransport();
           source.disconnect();
           testCtx.close?.();
@@ -249,6 +257,13 @@
       isMicTesting = true;
     } catch (e) {
       console.error("Mic test failed:", e);
+      // Failure can land with the setup half-built and micTestDisconnect not
+      // yet assigned: drop the monitor graph and the captured mic, then
+      // restore the transport edge (safe no-op when nothing was cut) - or a
+      // live call transmits silence from here on.
+      dtlnCleanup?.();
+      testStream?.getTracks().forEach((t) => t.stop());
+      _dtln.reconnectToTransport();
       micTestDisconnect?.();
       micTestDisconnect = null;
       setDeafened(false);

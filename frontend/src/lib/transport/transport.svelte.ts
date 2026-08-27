@@ -61,6 +61,7 @@ import { LibP2PTransport } from "./libp2p/transport";
 import { refreshTurnCredentials } from "./ice-server-list";
 import { LibP2PVoice } from "./libp2p/voice";
 import { DtlnProcessor } from "../audio/dtln-processor";
+import { WORKLET_URL } from "../audio/worklet-url";
 import { requireSession } from "../identity/identity";
 import { deviceKeySeed } from "./device-key";
 import { looksLikeDid, looksLikePeerId } from "../identity/identity-utils";
@@ -424,7 +425,12 @@ function _setPeerDid(peerId: string, did: string): void {
 const _seededByFingerprint = new Map<string, FileDescriptor>();
 
 export const _dtln = new DtlnProcessor();
-_dtln.init().catch(console.error);
+// The 8 MB worklet is loaded lazily on first voice use (waitUntilReady kicks
+// init); at startup we only warm the service-worker cache for it, off the
+// critical path, so the first call doesn't also pay the download.
+const warmWorkletCache = () => void fetch(WORKLET_URL).catch(() => {});
+if (typeof requestIdleCallback === "function") requestIdleCallback(warmWorkletCache);
+else setTimeout(warmWorkletCache, 3000);
 export const _transport = new LibP2PTransport();
 export const _voice = new LibP2PVoice(_transport, _dtln);
 export const _video = new MediasoupVideo();
