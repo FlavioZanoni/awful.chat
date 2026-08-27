@@ -171,15 +171,16 @@
   let reactionPickerFor = $state<string | null>(null);
   let reactionAnchor = $state<DOMRect | null>(null);
   let composerEmojiOpen = $state(false);
-  // Idle toy: hovering the emoji button flips through faces (and friends).
-  // -1 = not hovering = the usual Smile.
+  // Idle toy: each hover of the emoji button steps to the next icon, and it
+  // STAYS there until the next hover. Deliberately not persisted - a refresh
+  // starts back at Smile.
   const emojiCycle = [
+    Smile,
     Angry,
     Annoyed,
     Laugh,
     Meh,
     Frown,
-    Smile,
     Baby,
     Dog,
     Skull,
@@ -192,18 +193,7 @@
     ChessQueen,
     ThumbsUp,
   ];
-  let emojiCycleIdx = $state(-1);
-  let emojiCycleTimer: ReturnType<typeof setInterval> | undefined;
-  const emojiCycleStart = () => {
-    emojiCycleIdx = 0;
-    emojiCycleTimer = setInterval(() => {
-      emojiCycleIdx = (emojiCycleIdx + 1) % emojiCycle.length;
-    }, 200);
-  };
-  const emojiCycleStop = () => {
-    clearInterval(emojiCycleTimer);
-    emojiCycleIdx = -1;
-  };
+  let emojiCycleIdx = $state(0);
   let composerEmojiAnchor = $state<DOMRect | null>(null);
   let gifPickerOpen = $state(false);
   let hasMoreHistory = $state(true);
@@ -2068,11 +2058,10 @@
                 }}
                 aria-label="Insert emoji"
                 class="size-8 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
-                onpointerenter={emojiCycleStart}
-                onpointerleave={emojiCycleStop}
+                onpointerenter={() =>
+                  (emojiCycleIdx = (emojiCycleIdx + 1) % emojiCycle.length)}
               >
-                {@const CycleIcon =
-                  emojiCycleIdx < 0 ? Smile : emojiCycle[emojiCycleIdx]}
+                {@const CycleIcon = emojiCycle[emojiCycleIdx]}
                 <CycleIcon class="size-4" />
               </Button>
             {/snippet}
