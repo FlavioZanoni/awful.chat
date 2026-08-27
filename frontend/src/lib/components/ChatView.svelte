@@ -161,6 +161,9 @@
   let loadingMore = $state(false);
   let activeMessageId = $state<string | null>(null);
   let stagedFiles = $state<File[]>([]);
+  // Names of files between "Enter pressed" and "message echoed" - hashing
+  // for seeding happens in that window and it is silent otherwise.
+  let sendingFiles = $state<string[]>([]);
   let fileInputEl = $state<HTMLInputElement | null>(null);
   let dragOverlayActive = $state(false);
   let dragDepth = $state(0);
@@ -537,6 +540,7 @@
     const wireText = serialize(text, draftMentionMap);
 
     if (stagedFiles.length > 0) {
+      sendingFiles = stagedFiles.map((f) => f.name);
       sendFiles(stagedFiles, wireText, {
         replyTo: replyTarget
           ? {
@@ -548,6 +552,8 @@
                   : replyTarget.content,
             }
           : undefined,
+      }).finally(() => {
+        sendingFiles = [];
       });
       clearStagedFiles();
     } else if (replyTarget) {
@@ -618,7 +624,10 @@
   function handleGifFileSelect(file: File) {
     // A saved uploaded gif re-enters as a fresh file send: re-seeded, and
     // inlined into the message when small enough.
-    sendFiles([file]).catch(() => {});
+    sendingFiles = [file.name];
+    sendFiles([file])
+      .catch(() => {})
+      .finally(() => (sendingFiles = []));
     autoScroll = true;
   }
 
@@ -1806,6 +1815,24 @@
           {/snippet}
         </Tip>
       </div>
+    </div>
+  {/if}
+
+  {#if sendingFiles.length > 0}
+    <!-- The gap this fills: staged previews clear on Enter, but the message
+         only appears once the file is fingerprinted and hashed for seeding -
+         seconds of dead air on a big file with nothing saying it is going. -->
+    <div
+      class="flex items-center gap-2 border-t border-border bg-muted/30 px-4 py-2 font-mono text-xs text-muted-foreground"
+    >
+      <span
+        class="size-2 shrink-0 animate-pulse rounded-full bg-primary"
+      ></span>
+      <span class="truncate">
+        Sending {sendingFiles.length === 1
+          ? sendingFiles[0]
+          : `${sendingFiles.length} files`}...
+      </span>
     </div>
   {/if}
 
