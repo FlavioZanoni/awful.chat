@@ -28,11 +28,21 @@ export function initVoice(voice: LibP2PVoice, dtln: DtlnProcessor): void {
   _voice.on("trackAdded", (peerId, track) => {
     // Apply the remembered volume for this identity the moment audio exists;
     // a manual change during the call still wins (it also updates storage).
-    if (!_voice!.hasPeerVolume(peerId)) {
+    // RETRY while the did binding lands: voice ICE routinely beats the
+    // profile exchange, and giving up on the first miss left the live gain
+    // at 1.0 while the menu showed the stored boost - a slider already "at"
+    // 250% that audibly did nothing.
+    const applyStored = (attempt: number) => {
+      if (_voice?.hasPeerVolume(peerId)) return;
       const did = peerIdToDid(peerId);
-      const stored = looksLikeDid(did) ? loadPeerVolume(did) : null;
-      if (stored !== null) _voice!.setPeerVolume(peerId, stored);
-    }
+      if (looksLikeDid(did)) {
+        const stored = loadPeerVolume(did);
+        if (stored !== null) _voice?.setPeerVolume(peerId, stored);
+        return;
+      }
+      if (attempt < 10) setTimeout(() => applyStored(attempt + 1), 1000);
+    };
+    applyStored(0);
     const existing = transportState.participants.get(peerId) ?? {
       peerId,
       audioTrack: null,

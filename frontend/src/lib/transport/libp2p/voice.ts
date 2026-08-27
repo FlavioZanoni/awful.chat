@@ -562,9 +562,16 @@ export class LibP2PVoice implements VoiceTransport {
   private applyPeerGain(peerId: string): void {
     const remote = this.remotePeers.get(peerId);
     if (!remote?.gainNode || !this.audioCtx) return;
-    remote.gainNode.gain.linearRampToValueAtTime(
+    // Anchor before ramping: linearRampToValueAtTime with an empty
+    // automation timeline has no start event and behaves inconsistently
+    // (sometimes as a no-op) - the WebAudio footgun.
+    const gain = remote.gainNode.gain;
+    const now = this.audioCtx.currentTime;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(
       this.currentOutputVolume * this.getPeerVolume(peerId),
-      this.audioCtx.currentTime + 0.05
+      now + 0.05
     );
   }
 
