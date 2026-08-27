@@ -152,8 +152,10 @@ Anything inside `update.data` is peer-supplied and untrusted; validate shapes
 and clamp values exactly as you would any network input.
 
 **Determinism**: never call Math.random() for anything that peers must agree
-on. Use `host.seededRandom(seed)` with a seed derived from message ids, so
-every client computes the same outcome. Honest limit: the sender of a message
+on. Derive outcomes from message ids (`ctx.updateId`, `ctx.senderDid`) so
+every client computes the same result - inside `reduce` that means hashing
+those ids yourself (`reduce` receives no `host`; see wheel's `hashSeed`),
+while command handlers and components can use `host.seededRandom(seed)`. Honest limit: the sender of a message
 influences its id, so seeded outcomes are consistent and verifiable, not
 adversarially fair.
 
