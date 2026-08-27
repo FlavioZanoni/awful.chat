@@ -1837,8 +1837,13 @@
   {/if}
 
   {#if stagedFiles.length > 0}
-    <div class="border-t border-border bg-muted/30 px-4 py-2">
-      <div class="flex gap-2 overflow-x-auto pb-1">
+    <div
+      class="flex items-start gap-2 border-t border-border bg-muted/30 px-4 py-2"
+    >
+      <!-- pt-2/pr-2 inside the scroll area: the per-file delete badge hangs
+           past the tile's top-right corner, and the overflow container was
+           cropping it. -->
+      <div class="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1 pr-2 pt-2">
         {#each stagedFiles as file (fileKey(file))}
           {@const previewUrl = getStagedPreviewURL(file)}
           <div
@@ -1886,6 +1891,20 @@
           </div>
         {/each}
       </div>
+      <!-- Same way out the reply banner has: one X clears everything staged. -->
+      <Tip text="Remove attachments (Esc)">
+        {#snippet children(props)}
+          <button
+            {...props}
+            type="button"
+            class="mt-2 size-6 shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+            onclick={clearStagedFiles}
+            aria-label="Remove all attachments"
+          >
+            <X class="size-4" />
+          </button>
+        {/snippet}
+      </Tip>
     </div>
   {/if}
 
