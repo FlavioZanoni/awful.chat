@@ -289,11 +289,12 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   // ring strobe. Hold it on briefly after the last loud frame, and use a lower
   // threshold to stay on than to switch on.
   const SPEAKING_HOLD_MS = 500;
-  // Average byte-frequency amplitude (0-255). 5/2 lit the ring on ordinary
-  // background noise - keyboard, fan, room tone - so it read as "speaking"
-  // half the time. Real speech averages well above this; noise floors don't.
-  const SPEAKING_ON = 12;
-  const SPEAKING_OFF = 5;
+  // Average byte-frequency amplitude (0-255). Tuned DOWN by live testing:
+  // at 5/2 the ring still missed quiet talkers and soft consonants, reading
+  // as "not speaking" mid-sentence. Noise suppression upstream (DTLN) keeps
+  // the floor near zero, so a low trigger is safe.
+  const SPEAKING_ON = 3;
+  const SPEAKING_OFF = 1;
   const lastLoudAt = new Map<string, number>();
 
   // Peers whose voice ICE actually completed - a roster tile without a track
