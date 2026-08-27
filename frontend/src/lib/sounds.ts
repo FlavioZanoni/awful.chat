@@ -9,6 +9,24 @@ function getCtx(): AudioContext {
   return audioCtx;
 }
 
+// Autoplay policy: resume() is IGNORED outside a user gesture, so a session
+// that never played a gesture-driven sound (joining a call, toggling mute)
+// carried a permanently suspended context - incoming-message beeps were
+// scheduled into silence. The session's first gesture unlocks it for good.
+if (typeof window !== "undefined") {
+  const unlock = () => {
+    try {
+      getCtx();
+    } catch {
+      /* no audio here */
+    }
+    window.removeEventListener("pointerdown", unlock);
+    window.removeEventListener("keydown", unlock);
+  };
+  window.addEventListener("pointerdown", unlock);
+  window.addEventListener("keydown", unlock);
+}
+
 function playOsc(
   freq: number,
   duration: number,
