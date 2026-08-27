@@ -801,12 +801,8 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   });
 
   const rowClass = $derived.by(() => {
-    // A focused screen/transmission is being watched, not glanced at - give
-    // it ~20% more height without going fullscreen.
-    if (
-      focusedTile &&
-      (focusedTile.kind === "screen" || focusedTile.kind === "transmission")
-    ) {
+    // ~20% more height without going fullscreen.
+    if (watchingFocused) {
       return "h-[54vh]";
     }
     const n = visibleTiles.length;
@@ -822,6 +818,13 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     focusedTileId
       ? (visibleTiles.find((t) => t.id === focusedTileId) ?? null)
       : null
+  );
+  // A focused screen/transmission is being WATCHED, not glanced at: the
+  // panel grows (rowClass) and the controls go immersive like fullscreen
+  // (dockedControls).
+  const watchingFocused = $derived(
+    !!focusedTile &&
+      (focusedTile.kind === "screen" || focusedTile.kind === "transmission")
   );
   const showThumbnails = $derived(
     focusedTile ? focusedTile.kind !== "screen" : false
@@ -852,9 +855,11 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     null;
 
   // Docked only when there is nothing to watch - pure audio call
-  // Windowed: the controls dock and stay put. Fullscreen is the immersive
-  // mode - there they fade after the idle timeout and return on hover.
-  const dockedControls = $derived(!isFullscreen);
+  // Windowed: the controls dock and stay put. Fullscreen AND the focused
+  // tall-panel view are the immersive modes - there the controls (and the
+  // fullscreen button, and plugin tile chrome, which all key off this)
+  // fade after the idle timeout and return on mouse movement.
+  const dockedControls = $derived(!isFullscreen && !watchingFocused);
 
   $effect(() => {
     if (typeof window === "undefined") return;
