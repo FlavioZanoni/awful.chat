@@ -1,5 +1,11 @@
 <script lang="ts">
   import { newRoomCode } from "$lib/room-code";
+  import {
+    createInvite,
+    formatShortCode,
+    looksLikeShortCode,
+    resolveInvite,
+  } from "$lib/invite";
   import { Check, Clipboard, Copy, LogIn, Menu, Plus } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -27,6 +33,11 @@
   let joinCode = $state("");
   let createdCode = $state<string | null>(null);
   let copied = $state(false);
+  // The 5-minute alias of createdCode, once asked for. See $lib/invite.
+  let shortCode = $state<string | null>(null);
+  let shortCodeError = $state<string | null>(null);
+  let shortCopied = $state(false);
+  let joinError = $state<string | null>(null);
   let avatarDialogOpen = $state(false);
 
   let { relayConnected } = $derived(transportState);
@@ -46,6 +57,8 @@
       const code = newRoomCode();
       createdCode = code;
       copied = false;
+      shortCode = null;
+      shortCodeError = null;
     } finally {
       creating = false;
     }
@@ -70,12 +83,42 @@
   async function handleJoin() {
     if (!joinCode.trim() || joining) return;
     joining = true;
+    joinError = null;
     try {
       await saveName(profileStore.nickname);
-      onJoin(joinCode.trim(), profileStore.nickname || "Anonymous");
+      let code = joinCode.trim();
+      // Six characters is a short invite - or a legacy hex room code, which
+      // is why a miss falls through to joining the input as typed.
+      if (looksLikeShortCode(code)) {
+        try {
+          code = (await resolveInvite(code)) ?? code;
+        } catch {
+          joinError = "Could not reach the relay to look up that code";
+          return;
+        }
+      }
+      onJoin(code, profileStore.nickname || "Anonymous");
     } finally {
       joining = false;
     }
+  }
+
+  async function handleShortCode() {
+    if (!createdCode) return;
+    shortCodeError = null;
+    try {
+      shortCode = (await createInvite(createdCode)).code;
+      shortCopied = false;
+    } catch {
+      shortCodeError = "The relay is not reachable right now";
+    }
+  }
+
+  async function handleCopyShort() {
+    if (!shortCode) return;
+    await navigator.clipboard.writeText(formatShortCode(shortCode));
+    shortCopied = true;
+    setTimeout(() => (shortCopied = false), 2000);
   }
 
   async function handleCopy(code: string) {
@@ -149,11 +192,11 @@
       </CardHeader>
 
       <CardContent class="grid gap-6">
-        {#if error}
+        {#if error || joinError}
           <div
             class="rounded-lg bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive"
           >
-            {error}
+            {error ?? joinError}
           </div>
         {/if}
 
@@ -223,7 +266,7 @@
           <div class="relative">
             <Input
               bind:value={joinCode}
-              placeholder="Room code or room link"
+              placeholder="Room code, short code or link"
               class="bg-background border-input text-foreground placeholder:text-muted-foreground font-mono pr-10 focus-visible:ring-ring"
             />
             <button
@@ -279,6 +322,42 @@
             {/if}
           </button>
         </div>
+
+        {#if shortCode}
+          <div class="relative rounded-lg bg-muted px-3 py-2">
+            <div
+              class="text-center font-mono text-lg tracking-widest text-foreground pr-8"
+            >
+              {formatShortCode(shortCode)}
+            </div>
+            <button
+              type="button"
+              onclick={handleCopyShort}
+              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+              aria-label="Copy short code"
+            >
+              {#if shortCopied}
+                <Check class="size-4 text-primary" />
+              {:else}
+                <Copy class="size-4" />
+              {/if}
+            </button>
+            <div class="mt-1 text-center text-xs text-muted-foreground">
+              Short code, works for 5 minutes
+            </div>
+          </div>
+        {:else}
+          <Button
+            variant="outline"
+            onclick={handleShortCode}
+            class="border-border text-muted-foreground hover:text-foreground hover:bg-muted font-mono cursor-pointer w-full"
+          >
+            Short code (5 min)
+          </Button>
+          {#if shortCodeError}
+            <div class="text-center text-xs text-destructive">{shortCodeError}</div>
+          {/if}
+        {/if}
 
         <Button
           onclick={handleJoinCreated}

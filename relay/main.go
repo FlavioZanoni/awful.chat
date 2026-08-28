@@ -127,6 +127,35 @@ const (
 	// orders of magnitude (34/s, against the ~4,000/s the attack needs).
 	maxMembershipOps   = 2 * maxRoomsPerPeer
 	membershipOpWindow = time.Minute
+	// registry.register is the only oracle a room-code guesser has: an empty
+	// PEERS reply means the room it guessed is empty, a populated one means
+	// it hit a real room. Codes are moving to 48 bits, so the relay has to
+	// make that oracle expensive without refusing REGISTER outright - a
+	// legitimate reconnect re-registers every saved room too, and most of
+	// them have nobody else online.
+	//
+	// maxEmptyRegisters bounds REGISTERs into a room with no OTHER member at
+	// registration time, per stream, per emptyRegisterWindow; a REGISTER
+	// into a populated room costs nothing against it. Exhausting the budget
+	// drops the REGISTER - no PEERS reply, no join - the same way an
+	// exhausted membershipOps drops the op above, rather than resetting the
+	// stream: the drop alone already silences the oracle for the rest of the
+	// window, so paying the cost of a reconnect on top buys nothing.
+	//
+	// 128/min/stream x maxStreamsPerPeer x connMgrHigh bounds the system-wide
+	// guess rate: 128 x 32 x 512 = 2,097,152 empty-room REGISTERs/minute at
+	// the absolute worst case (connMgrHigh connections, each holding
+	// maxStreamsPerPeer streams, every one saturating this budget) - a
+	// vanishing fraction of the 2^48 code space per minute.
+	//
+	// maxRoomsPerPeer is 1024, so a peer with more than 128 saved EMPTY rooms
+	// will exhaust this partway through a reconnect burst and have the rest
+	// of that burst silently dropped until the window refills; the budget
+	// refills on the same still-open stream without a reconnect, same as
+	// every other per-stream budget here. 128 is picked so a realistic user -
+	// dozens of rooms, not four figures of them - never gets near it.
+	maxEmptyRegisters   = 128
+	emptyRegisterWindow = time.Minute
 )
 
 // rendezvousIdleTimeout closes a stream that has REGISTERed nothing yet and
@@ -157,6 +186,12 @@ type connectedClient struct {
 	closeOnce     sync.Once
 	roomCapLogged bool          // guarded by registry.mu; keeps a capped peer from flooding the log
 	joinLeaveLog  membershipLog // guarded by registry.mu; caps the join/leave lines this stream can write
+	// emptyRegisters bounds REGISTERs this stream makes into a room with no
+	// OTHER member - see maxEmptyRegisters. Set only inside registry.register,
+	// which is only ever called from this stream's own read loop, so - like
+	// membershipOps in readLoop - it needs no lock of its own even though
+	// register() happens to touch it while holding registry.mu.
+	emptyRegisters opBudget
 }
 
 // newConnectedClient starts the client's writer goroutine. The client must
@@ -498,7 +533,13 @@ func (r *registry) sendTo(c *connectedClient, msg serverMsg) {
 	}
 }
 
-func (r *registry) register(c *connectedClient, room string) {
+// register admits c into room. It returns false only when the room had no
+// OTHER member and this stream's maxEmptyRegisters budget was already spent -
+// the empty-room-guess oracle case - in which case nothing happens: c is not
+// added, no PEERS is sent, and the caller (readLoop) is left to log it. Every
+// other path, including the existing caps above, returns true; they already
+// log their own refusal here and need no extra signal to the caller.
+func (r *registry) register(c *connectedClient, room string) bool {
 	r.mu.Lock()
 
 	// A stream the registry has already let go of - its read loop ended, or the
@@ -507,12 +548,12 @@ func (r *registry) register(c *connectedClient, room string) {
 	// that entry again (RELAY-02).
 	if !r.isLive(c) {
 		r.mu.Unlock()
-		return
+		return true
 	}
 
 	if _, already := c.rooms[room]; already {
 		r.mu.Unlock()
-		return
+		return true
 	}
 	if r.total >= maxTotalRegistrations {
 		sayCapped := !r.totalCapLogged
@@ -521,7 +562,7 @@ func (r *registry) register(c *connectedClient, room string) {
 		if sayCapped {
 			log.Printf("[rv] registry is at its %d-registration ceiling, ignoring further REGISTERs", maxTotalRegistrations)
 		}
-		return
+		return true
 	}
 	if len(c.rooms) >= maxRoomsPerPeer {
 		sayCapped := !c.roomCapLogged
@@ -535,10 +576,20 @@ func (r *registry) register(c *connectedClient, room string) {
 		if sayCapped {
 			log.Printf("[rv] %s hit the %d-room cap, ignoring further REGISTERs", short(c.peerId), maxRoomsPerPeer)
 		}
-		return
+		return true
 	}
 
 	members := r.rooms[room]
+	// Whether the room has an OTHER member has to be read right here, under
+	// the same lock that is about to add c to it - a second lookup after
+	// unlocking could race a concurrent register into the same room and
+	// charge (or spare) the wrong REGISTER. An empty room is the oracle a
+	// code guesser is fishing for, so only THAT case spends the budget; a
+	// REGISTER into a room that already has somebody else in it is free.
+	if len(members) == 0 && !c.emptyRegisters.allow(time.Now()) {
+		r.mu.Unlock()
+		return false
+	}
 	if members == nil {
 		members = make(map[*connectedClient]struct{})
 		r.rooms[room] = members
@@ -587,7 +638,7 @@ func (r *registry) register(c *connectedClient, room string) {
 	// broadcast to everyone else only delays the join for no reason.
 	r.sendTo(c, serverMsg{Type: "PEERS", Room: room, Peers: others})
 	if !announce {
-		return
+		return true
 	}
 	for _, tc := range targetClients {
 		r.sendTo(tc, serverMsg{
@@ -596,6 +647,7 @@ func (r *registry) register(c *connectedClient, room string) {
 			Peer: c.peerId,
 		})
 	}
+	return true
 }
 
 func (r *registry) unregister(c *connectedClient, room string) {
@@ -917,7 +969,16 @@ readLoop:
 					continue
 				}
 				if msg.Type == "REGISTER" {
-					r.register(c, msg.Room)
+					// register only refuses (false) when the room had no OTHER
+					// member and this stream's empty-register budget - the
+					// room-code-guessing oracle case - was already spent. Warn
+					// and drop the REGISTER exactly like an exhausted
+					// membershipOps above: no PEERS goes out, so the guess
+					// gets no answer, and there is nothing more to do with it.
+					if !r.register(c, msg.Room) {
+						warn("[rv] %s exhausted its empty-room register budget (%d/%s), ignoring", short(peerId), maxEmptyRegisters, emptyRegisterWindow)
+						continue
+					}
 					registered = true
 				} else {
 					r.unregister(c, msg.Room)
@@ -1079,6 +1140,8 @@ func main() {
 		mux.HandleFunc("/klipy/search", getOnly(handleKlipySearch))
 		mux.HandleFunc("/klipy/trending", getOnly(handleKlipyTrending))
 		mux.HandleFunc("/turn-credentials", getOnly(handleTurnCredentials))
+		mux.HandleFunc("/invite", postOnly(handleInviteCreate))
+		mux.HandleFunc("/invite/", getOnly(handleInviteResolve))
 		mux.HandleFunc("/plugin-proxy", getOnly(handlePluginProxy))
 		mux.HandleFunc("/mailbox/deposit", handleMailboxDeposit)
 		mux.HandleFunc("/mailbox/collect", handleMailboxCollect)

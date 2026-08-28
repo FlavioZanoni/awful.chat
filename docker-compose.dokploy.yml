@@ -98,6 +98,12 @@ services:
       - traefik.http.routers.steam.tls=true
       - traefik.http.routers.steam.tls.certresolver=letsencrypt
       - traefik.http.routers.steam.service=relay-api-service
+      - traefik.http.routers.invite.rule=Host(`relay.${DOMAIN}`) && PathPrefix(`/invite`)
+      - traefik.http.routers.invite.entrypoints=websecure
+      - traefik.http.routers.invite.middlewares=relay-sec
+      - traefik.http.routers.invite.tls=true
+      - traefik.http.routers.invite.tls.certresolver=letsencrypt
+      - traefik.http.routers.invite.service=relay-api-service
       - traefik.http.routers.mailbox.rule=Host(`relay.${DOMAIN}`) && PathPrefix(`/mailbox`)
       - traefik.http.routers.mailbox.entrypoints=websecure
       - traefik.http.routers.mailbox.middlewares=relay-sec
