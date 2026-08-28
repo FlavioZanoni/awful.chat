@@ -37,6 +37,7 @@
   let shortCode = $state<string | null>(null);
   let shortCodeError = $state<string | null>(null);
   let shortCopied = $state(false);
+  let copyMenuOpen = $state(false);
   let joinError = $state<string | null>(null);
   let avatarDialogOpen = $state(false);
 
@@ -103,19 +104,22 @@
     }
   }
 
-  async function handleShortCode() {
-    if (!createdCode) return;
-    shortCodeError = null;
-    try {
-      shortCode = (await createInvite(createdCode)).code;
-      shortCopied = false;
-    } catch {
-      shortCodeError = "The relay is not reachable right now";
-    }
+  async function handleCopyLink() {
+    copyMenuOpen = false;
+    await handleCopy(createdCode!);
   }
 
+  // Mint on first use, then copy. The code stays on screen afterwards so it
+  // can be read aloud, which is the point of it.
   async function handleCopyShort() {
-    if (!shortCode) return;
+    copyMenuOpen = false;
+    shortCodeError = null;
+    try {
+      shortCode ??= (await createInvite(createdCode!)).code;
+    } catch {
+      shortCodeError = "The relay is not reachable right now";
+      return;
+    }
     await navigator.clipboard.writeText(formatShortCode(shortCode));
     shortCopied = true;
     setTimeout(() => (shortCopied = false), 2000);
@@ -309,54 +313,60 @@
           >
             {createdCode}
           </div>
-          <button
-            type="button"
-            onclick={() => handleCopy(createdCode!)}
-            class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
-            aria-label="Copy room code"
-          >
-            {#if copied}
-              <Check class="size-4 text-primary" />
-            {:else}
-              <Copy class="size-4" />
-            {/if}
-          </button>
-        </div>
-
-        {#if shortCode}
-          <div class="relative rounded-lg bg-muted px-3 py-2">
-            <div
-              class="text-center font-mono text-lg tracking-widest text-foreground pr-8"
-            >
-              {formatShortCode(shortCode)}
-            </div>
+          <div class="absolute right-2 top-1/2 -translate-y-1/2" data-copy-menu>
             <button
               type="button"
-              onclick={handleCopyShort}
-              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
-              aria-label="Copy short code"
+              onclick={() => (copyMenuOpen = !copyMenuOpen)}
+              class="text-muted-foreground hover:text-foreground cursor-pointer"
+              aria-label="Copy"
+              aria-haspopup="menu"
+              aria-expanded={copyMenuOpen}
             >
-              {#if shortCopied}
+              {#if copied || shortCopied}
                 <Check class="size-4 text-primary" />
               {:else}
                 <Copy class="size-4" />
               {/if}
             </button>
+            {#if copyMenuOpen}
+              <div
+                role="menu"
+                class="absolute right-0 top-full mt-2 z-10 w-56 rounded-lg border border-border bg-popover text-popover-foreground shadow-md p-1"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onclick={handleCopyLink}
+                  class="w-full text-left rounded-md px-2 py-1.5 text-sm hover:bg-muted cursor-pointer"
+                >
+                  Copy link
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onclick={handleCopyShort}
+                  class="w-full text-left rounded-md px-2 py-1.5 text-sm hover:bg-muted cursor-pointer"
+                >
+                  Copy short code
+                  <span class="block text-xs text-muted-foreground">Works for 5 minutes</span>
+                </button>
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        {#if shortCode}
+          <div class="rounded-lg bg-muted px-3 py-2">
+            <div class="text-center font-mono text-lg tracking-widest text-foreground">
+              {formatShortCode(shortCode)}
+            </div>
             <div class="mt-1 text-center text-xs text-muted-foreground">
               Short code, works for 5 minutes
             </div>
           </div>
-        {:else}
-          <Button
-            variant="outline"
-            onclick={handleShortCode}
-            class="border-border text-muted-foreground hover:text-foreground hover:bg-muted font-mono cursor-pointer w-full"
-          >
-            Short code (5 min)
-          </Button>
-          {#if shortCodeError}
-            <div class="text-center text-xs text-destructive">{shortCodeError}</div>
-          {/if}
+        {/if}
+        {#if shortCodeError}
+          <div class="text-center text-xs text-destructive">{shortCodeError}</div>
         {/if}
 
         <Button
@@ -371,6 +381,16 @@
     </Card>
   </div>
 {/if}
+
+<svelte:window
+  onclick={(e) => {
+    if (copyMenuOpen && !(e.target as HTMLElement).closest("[data-copy-menu]"))
+      copyMenuOpen = false;
+  }}
+  onkeydown={(e) => {
+    if (e.key === "Escape") copyMenuOpen = false;
+  }}
+/>
 
 <AvatarPickerDialog
   open={avatarDialogOpen}
