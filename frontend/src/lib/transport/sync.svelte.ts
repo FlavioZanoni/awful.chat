@@ -73,6 +73,20 @@ export interface SyncPayload {
   expires: number;
   mode?: "add" | "replace";
   password?: string;
+  /**
+   * The source's libp2p peerId (full form, from the QR payload). The
+   * transport authenticates the remote peerId via Noise, so pinning to it
+   * is what stops the FIRST peer to join the ephemeral sync room - which
+   * the relay operator can trivially arrange - from impersonating the
+   * source. Optional only for the short-code path below, which carries
+   * `peerPrefix` instead.
+   */
+  peerId?: string;
+  /**
+   * Short-code path: the 8 chars of the source's peerId after the constant
+   * Ed25519 prefix `12D3KooW` (see peerIdShortPrefix / parseShortCode below).
+   */
+  peerPrefix?: string;
 }
 
 enum SyncMessageType {
@@ -120,14 +134,52 @@ let _syncRoomCode: string | null = null;
 let _syncToken: string | null = null;
 let _syncExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 let _isSourceDevice = false;
-// Target-side: the one source peer we're syncing with. Once set, data from any
-// other peer that joined the (ephemeral) sync room is ignored - otherwise a
-// second joiner could inject a forged database/identity export.
+// Target-side: the one source peer we're syncing with, set only once
+// matchesSourcePeer() confirms the connecting peerId is the one the
+// QR/short code names. Once set, data from any other peer that joined the
+// (ephemeral) sync room is ignored - otherwise the FIRST peer to join
+// (trivially arranged by the relay operator) could impersonate the source.
 let _targetSourcePeerId: string | null = null;
 
 /** Reduce a full or short-code token to its comparable 8-char prefix. */
 function tokenPrefix(t: string | undefined | null): string {
   return (t ?? "").slice(0, 8);
+}
+
+/**
+ * True if `peerId` is the source device that generated `payload` - checked
+ * against the full peerId (QR/manual-entry path) or the peerPrefix (short
+ * code path). The libp2p connection is Noise-authenticated to this peerId,
+ * so this is what makes pinning meaningful rather than trusting whoever
+ * connects first.
+ */
+export function matchesSourcePeer(payload: SyncPayload, peerId: string): boolean {
+  if (payload.peerId) return peerId === payload.peerId;
+  if (payload.peerPrefix) return peerId.slice(8, 16) === payload.peerPrefix;
+  return false;
+}
+
+// Every libp2p peerId minted from an Ed25519 key (the only kind this app
+// generates) starts with this constant multihash/multibase prefix, so the
+// short code can drop it and still carry enough of the peerId to pin the
+// target to the right source. If a future key type changes the prefix this
+// still yields 8 stable chars (just not right after position 8) - documented
+// rather than asserted so an oddly-shaped peerId degrades instead of throwing.
+const PEER_ID_ED25519_PREFIX = "12D3KooW";
+
+/**
+ * The 8 peerId chars the short code carries - see PEER_ID_ED25519_PREFIX.
+ * Always chars [8, 16): for the expected Ed25519 form that's right after the
+ * constant prefix; for anything else it is still 8 deterministic chars of
+ * the peerId, just not aligned to a semantic boundary.
+ */
+export function peerIdShortPrefix(peerId: string): string {
+  if (!peerId.startsWith(PEER_ID_ED25519_PREFIX)) {
+    console.warn(
+      "[Sync] peerId does not start with the expected Ed25519 prefix - short code will still use chars [8,16)"
+    );
+  }
+  return peerId.slice(8, 16);
 }
 
 const SYNC_ROOM_PREFIX = "__sync_";
@@ -171,34 +223,43 @@ function generateToken(): string {
 }
 
 /**
- * Generate a short readable code from full room code and token
- * Uses base32-like encoding for shorter, readable codes
+ * Generate a short readable code from the room code, token and source peerId.
+ * Format: XXXXXXXX-XXXXXXXX-XXXXXXXX = room8-token8-peer8. The peer segment
+ * is what lets the target pin to the real source instead of the first peer
+ * to join the ephemeral room - see SyncPayload.peerPrefix.
  */
-function generateShortCode(roomCode: string, token: string): string {
-  // Remove prefix from room code and take first 8 chars of each
+export function generateShortCode(
+  roomCode: string,
+  token: string,
+  peerId: string
+): string {
   const roomPart = roomCode.slice(SYNC_ROOM_PREFIX.length).slice(0, 8);
   const tokenPart = token.slice(0, 8);
-
-  // Format: XXXX-XXXX (8 chars room + 8 chars token)
-  return `${roomPart}-${tokenPart}`;
+  const peerPart = peerIdShortPrefix(peerId);
+  return `${roomPart}-${tokenPart}-${peerPart}`;
 }
 
 /**
- * Parse short code back to full payload
+ * Parse short code back to a payload fragment.
+ * Only the current 3-part (room-token-peer) format is accepted: a 2-part
+ * code predates peerId pinning and cannot prove which device is the real
+ * source, so it is rejected rather than silently trusting the first joiner.
  */
-function parseShortCode(
+export function parseShortCode(
   shortCode: string
-): { roomCode: string; token: string } | null {
+): { roomCode: string; token: string; peerPrefix: string } | null {
   const parts = shortCode.split("-");
-  if (parts.length !== 2) return null;
+  if (parts.length !== 3) return null;
 
-  const [roomPart, tokenPart] = parts;
-  if (roomPart.length !== 8 || tokenPart.length !== 8) return null;
+  const [roomPart, tokenPart, peerPart] = parts;
+  if (roomPart.length !== 8 || tokenPart.length !== 8 || peerPart.length !== 8)
+    return null;
 
   // Reconstruct the full room code (we lose the middle part but that's ok for sync rooms)
   return {
     roomCode: `${SYNC_ROOM_PREFIX}${roomPart}`,
     token: tokenPart,
+    peerPrefix: peerPart,
   };
 }
 
@@ -229,10 +290,33 @@ export async function generateSyncCode(): Promise<void> {
       }
     }, SYNC_TIMEOUT);
 
+    _isSourceDevice = true;
+
+    // Start listening for connections FIRST: the QR/short code has to carry
+    // this device's real peerId (so the target can pin to it instead of
+    // trusting whichever peer joins the room first), and that peerId only
+    // exists once the transport is connected. The UI stays on its spinner
+    // (isGenerating) for this whole span.
+    try {
+      await startSyncServer();
+    } catch (err) {
+      await cleanup();
+      throw err;
+    }
+
+    const selfId = _transport?.selfId() ?? "";
+    if (!selfId) {
+      // The code is USELESS without a peerId to pin to - the other device
+      // would scan it and have nothing to authenticate the source against.
+      await cleanup();
+      throw new Error("Could not determine this device's peer ID");
+    }
+
     const payload: SyncPayload = {
       roomCode: _syncRoomCode,
       token,
       expires,
+      peerId: selfId,
     };
 
     const payloadJson = JSON.stringify(payload);
@@ -248,24 +332,10 @@ export async function generateSyncCode(): Promise<void> {
     });
 
     // Create short plaintext token
-    const plaintextToken = generateShortCode(_syncRoomCode, token);
+    const plaintextToken = generateShortCode(_syncRoomCode, token, selfId);
 
     syncState.qrDataUrl = qrDataUrl;
     syncState.plaintextToken = plaintextToken;
-    _isSourceDevice = true;
-
-    // Start listening for connections
-    try {
-      await startSyncServer();
-    } catch (err) {
-      // The code is USELESS if the server never came up: the other device
-      // would scan it, join an empty room and sit there until it timed out.
-      // Withdraw it rather than displaying a QR that cannot work.
-      syncState.qrDataUrl = null;
-      syncState.plaintextToken = null;
-      await cleanup();
-      throw err;
-    }
   } catch (err) {
     syncState.syncError = err instanceof Error ? err.message : String(err);
   } finally {
@@ -276,36 +346,49 @@ export async function generateSyncCode(): Promise<void> {
 /**
  * Parse a plaintext token and return the full payload.
  * Supports both formats:
- *   Short: XXXXXXXX-XXXXXXXX (roomPart-tokenPart)
- *   Full:  __sync_xxxxxxxxxxxxxxxx:token (for QR code JSON)
+ *   Short: XXXXXXXX-XXXXXXXX-XXXXXXXX (roomPart-tokenPart-peerPart)
+ *   Full:  __sync_xxxxxxxxxxxxxxxx:token:peerId (for the manual-entry
+ *          fallback of the QR code's JSON payload)
+ * The old 2-part short code and the 2-part "room:token" full code predate
+ * peerId pinning (see connectAsTarget) and are rejected with a message
+ * telling the user to update both devices, rather than silently connecting
+ * without source authentication.
  */
 export function parsePlaintextToken(plaintext: string): SyncPayload | null {
   // Try short format first (contains hyphen but no __sync_ prefix)
   if (plaintext.includes("-") && !plaintext.includes(SYNC_ROOM_PREFIX)) {
+    const legacyParts = plaintext.split("-");
+    if (legacyParts.length === 2) {
+      throw new Error(
+        "This sync code is from an older version of the app - update both devices and generate a new code"
+      );
+    }
     const parsed = parseShortCode(plaintext);
     if (parsed) {
       return {
         roomCode: parsed.roomCode,
         token: parsed.token,
+        peerPrefix: parsed.peerPrefix,
         expires: Date.now() + SYNC_TIMEOUT,
       };
     }
   }
 
-  // Try full format (contains colon)
-  const lastColon = plaintext.lastIndexOf(":");
-  if (lastColon !== -1) {
-    const roomCode = plaintext.slice(0, lastColon);
-    const token = plaintext.slice(lastColon + 1);
-
-    // Validate the room code has the correct prefix
-    if (roomCode.startsWith(SYNC_ROOM_PREFIX)) {
-      return {
-        roomCode,
-        token,
-        expires: Date.now() + SYNC_TIMEOUT,
-      };
+  // Try full format (colon-delimited)
+  if (plaintext.includes(SYNC_ROOM_PREFIX) && plaintext.includes(":")) {
+    const [roomCode, token, peerId] = plaintext.split(":");
+    if (!roomCode.startsWith(SYNC_ROOM_PREFIX) || !token) return null;
+    if (!peerId) {
+      throw new Error(
+        "This sync code is from an older version of the app - update both devices and generate a new code"
+      );
     }
+    return {
+      roomCode,
+      token,
+      peerId,
+      expires: Date.now() + SYNC_TIMEOUT,
+    };
   }
 
   return null;
@@ -559,6 +642,13 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
   if (payload.expires < Date.now()) {
     throw new Error("Sync code has expired");
   }
+  // No way to authenticate the source connection without this - refuse
+  // rather than pin to whichever peer joins the room first.
+  if (!payload.peerId && !payload.peerPrefix) {
+    throw new Error(
+      "This sync code is from an older version of the app - update both devices and generate a new code"
+    );
+  }
 
   const mode = payload.mode ?? "replace";
   console.log(
@@ -579,8 +669,18 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
 
     // Target sends ExportRequest after connecting
     _transport.on("connect", (peerId: string) => {
-      // Pin to the first source peer. Ignore any additional peer that joins
-      // this ephemeral room so it can't hand us a forged export.
+      // Pin ONLY to the peer whose peerId matches the QR/short code - the
+      // libp2p connection is Noise-authenticated to this peerId, so this is
+      // what stops the relay operator (or anyone else) from joining the
+      // ephemeral room first and impersonating the source. Any other peer
+      // is ignored entirely: never sent the ExportRequest, never trusted.
+      if (!matchesSourcePeer(payload, peerId)) {
+        console.warn(
+          "[Sync][Target] Ignoring peer that doesn't match the source:",
+          peerId.slice(0, 8)
+        );
+        return;
+      }
       if (_targetSourcePeerId && _targetSourcePeerId !== peerId) {
         console.warn(
           "[Sync][Target] Ignoring extra peer in sync room:",
@@ -625,7 +725,18 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
     });
 
     _transport.on("message", async (peerId: string, data: Uint8Array) => {
-      // Only accept sync traffic from the pinned source peer.
+      // Only accept sync traffic from the authenticated source peer - both
+      // the identity check (peerId matches the QR/short code) and the pin
+      // (peerId matches the one "connect" already accepted). The identity
+      // check alone would still be racy against a message arriving before
+      // "connect" pins _targetSourcePeerId.
+      if (!matchesSourcePeer(payload, peerId)) {
+        console.warn(
+          "[Sync][Target] Dropping message from non-source peer:",
+          peerId.slice(0, 8)
+        );
+        return;
+      }
       if (_targetSourcePeerId && peerId !== _targetSourcePeerId) {
         console.warn(
           "[Sync][Target] Dropping message from non-source peer:",
@@ -708,7 +819,7 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
           // Import all received data
           if (receivedIdentity || mode === "add") {
             try {
-              await importDatabase(
+              const { droppedRecords } = await importDatabase(
                 {
                   identity: receivedIdentity || undefined,
                   messages: (receivedData.messages || []) as Message[],
@@ -730,6 +841,14 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
                 },
                 mode
               );
+              if (droppedRecords > 0) {
+                // The sync itself succeeded - this is a partial-data note,
+                // not a failure, so it doesn't route through syncError/the
+                // error view.
+                console.warn(
+                  `[Sync][Target] Dropped ${droppedRecords} malformed record(s) from the source's export`
+                );
+              }
 
               console.log(
                 "[Sync][Target] Import complete, sending acknowledgment"
@@ -957,9 +1076,21 @@ export async function startScanning(
       (decodedText) => {
         try {
           const payload = JSON.parse(decodedText) as SyncPayload;
-          if (payload.roomCode && payload.token && payload.expires) {
+          // peerId is required: without it the target has nothing to pin
+          // the source connection to, and would trust whichever peer joins
+          // the ephemeral sync room first (see connectAsTarget).
+          if (
+            payload.roomCode &&
+            payload.token &&
+            payload.expires &&
+            payload.peerId
+          ) {
             stopScanning();
             onScan(payload);
+          } else if (payload.roomCode && payload.token && payload.expires) {
+            onError(
+              "This QR code is from an older version of the app - update both devices and generate a new code"
+            );
           } else {
             onError("Invalid QR code format");
           }

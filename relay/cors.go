@@ -88,6 +88,26 @@ func preflight(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// getOnly wraps a GET-only handler with proper method gating: a real
+// preflight response for OPTIONS (preflight was defined but never wired to
+// any route) and a 405 for anything else, before the handler runs and before
+// it can spend the caller's rate-limit budget. /og, /klipy/*, /plugin-proxy
+// and /turn-credentials are all read-only lookups; the mailbox endpoints stay
+// POST and keep their own handling.
+func getOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			h(w, r)
+		case http.MethodOptions:
+			preflight(w, r)
+		default:
+			w.Header().Set("Allow", "GET, OPTIONS")
+			apiError(w, r, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 // apiError returns a JSON error response with CORS headers
 func apiError(w http.ResponseWriter, r *http.Request, msg string, status int) {
 	response := map[string]string{"error": msg}

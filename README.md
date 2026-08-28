@@ -183,6 +183,20 @@ If updating an existing instance to a new deployment, open the SFU media range
 (default 61000-61499) in your firewall before redeploying, since the default
 range changed from 40000-40499.
 
+### Upgrading an existing instance
+
+The relay container runs as a non-root user (uid 1000) since 2026-08-28. A
+`relay_data` volume created by an older deploy is owned by root, and the relay
+cannot read its identity key from it - which would change the relay's peerId
+and break every client's `VITE_RELAY_MULTIADDR`. Fix the ownership once,
+before the first deploy of the new image:
+
+```bash
+docker run --rm -v <project>_relay_data:/data alpine chown -R 1000:1000 /data
+```
+
+(`docker volume ls | grep relay_data` shows the exact volume name.)
+
 ### TURN
 
 `TURN_SECRET` is shared between the relay and coturn. The relay's

@@ -1611,6 +1611,21 @@ function _handleSyncComplete(peerId: string, roomCode?: string): void {
 
 // ── Message handlers ──────────────────────────────────────────────────────────
 
+// Control characters (C0/C1) and bidi override/isolate characters: a wire
+// name is rendered as-is in the roster and chat, and either family can hide
+// or reorder text a user never typed - trojan-source-style in a nickname.
+const WIRE_NAME_STRIP_RE = /[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g;
+
+/**
+ * Same cap _handleRoomName already uses for a wire-supplied display string -
+ * there is no dedicated client-side max on the nickname field itself, so this
+ * mirrors the one precedent in this file rather than inventing a new number.
+ */
+function _normalizeWireName(name: unknown): string {
+  if (typeof name !== "string") return "";
+  return name.replace(WIRE_NAME_STRIP_RE, "").trim().slice(0, 64);
+}
+
 async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
   // Bind the DID to the peerId only on a signature over THIS connection's
   // peerId. The `did` field on its own is spoofable, and any peer could
@@ -1662,9 +1677,10 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
   // color. Explicit null (or junk that fails sanitizing) = "no color".
   const hasColorField = msg.color !== undefined;
   const color = hasColorField ? normalizeNicknameColor(msg.color) : undefined;
+  const name = _normalizeWireName(msg.name);
 
   const names = new Map(transportState.peerNames);
-  names.set(did, msg.name);
+  names.set(did, name);
   transportState.peerNames = names;
 
   const avatars = new Map(transportState.peerAvatars);
@@ -1717,7 +1733,7 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
       putPeerProfile({
         did,
         isMe: false,
-        nickname: msg.name,
+        nickname: name,
         pfpURL: avatarUrl,
         updatedAt: Date.now(),
         color: hasColorField ? (color ?? undefined) : existing?.color,
@@ -2541,6 +2557,23 @@ function _handleDmChatAsync(
   })();
 }
 
+/**
+ * Whether a connected peer is a member of any room we have joined, DIDs
+ * checked against the room's stored participant list. DM rooms are joined
+ * through the same _transport.joinRoom() path as shared rooms (see
+ * joinPhonebookDmRooms), so an open DM's counterparty passes this too -
+ * there is no separate DM case to special-case.
+ */
+async function _peerSharesRoomWithUs(peerId: string): Promise<boolean> {
+  const did = _peerIdToDid.get(peerId);
+  if (!did) return false;
+  for (const roomCode of _transport.rooms()) {
+    const participants = await getRoomParticipants(roomCode);
+    if (participants.includes(did)) return true;
+  }
+  return false;
+}
+
 _transport.on("message", (peerId, data, room) => {
   // Before ANY branch: the DM and file-signal paths return early, and a peer
   // we only ever DM with would otherwise read as permanently app-silent -
@@ -2595,10 +2628,28 @@ _transport.on("message", (peerId, data, room) => {
     const decoded = decode(data);
     if (isFileSignalWireMessage(decoded)) {
       if (decoded.payload.kind === "file-seeder") {
-        _fileTransport.registerSeeder(decoded.payload.file, peerId);
-        if (shouldAutoDownload(decoded.payload.file.mimeType)) {
-          _fileTransport.ensureDownload(decoded.payload.file);
-        }
+        // Unsolicited: a file-seeder is a direct send, not tied to a room or
+        // a signed message, so ANY connected peer could otherwise plant an
+        // infoHash/mime claim for us to fetch. Only a peer that actually
+        // shares a room with us (a DM room counts - see _peerSharesRoomWithUs)
+        // gets remembered as a seeder, and it is bounded per peer in
+        // webtorrent.ts. Fetching is stricter still: auto-download only a
+        // file we already hold a message for. The seeder is still recorded
+        // for unknown hashes because peers announce their inventory on
+        // connect, before we have opened the room the file belongs to.
+        const file = decoded.payload.file;
+        _peerSharesRoomWithUs(peerId)
+          .then((shared) => {
+            if (!shared) return;
+            _fileTransport.registerSeeder(file, peerId);
+            if (
+              shouldAutoDownload(file.mimeType) &&
+              transportState.fileTransfers.has(file.infoHash)
+            ) {
+              _fileTransport.ensureDownload(file);
+            }
+          })
+          .catch(() => {});
       } else {
         _fileTransport.handleSignal(peerId, decoded.payload);
       }

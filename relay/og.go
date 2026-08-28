@@ -38,10 +38,16 @@ var ogRewriteRules = []struct {
 		Hosts: []string{"instagram.com", "www.instagram.com"},
 		Rewrites: []func(*url.URL) string{
 			func(u *url.URL) string {
-				return fmt.Sprintf("https://d.vxinstagram.com%s%s", u.Path, u.RawQuery)
+				if u.RawQuery == "" {
+					return fmt.Sprintf("https://d.vxinstagram.com%s", u.Path)
+				}
+				return fmt.Sprintf("https://d.vxinstagram.com%s?%s", u.Path, u.RawQuery)
 			},
 			func(u *url.URL) string {
-				return fmt.Sprintf("https://www.ddinstagram.com%s%s", u.Path, u.RawQuery)
+				if u.RawQuery == "" {
+					return fmt.Sprintf("https://www.ddinstagram.com%s", u.Path)
+				}
+				return fmt.Sprintf("https://www.ddinstagram.com%s?%s", u.Path, u.RawQuery)
 			},
 		},
 	},

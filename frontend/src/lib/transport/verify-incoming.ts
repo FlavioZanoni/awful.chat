@@ -8,6 +8,13 @@
 import { canonicalContentV3, verifySignature } from "../messaging";
 import type { WireChatMessage } from "../types/message";
 
+/**
+ * ChatView has no client-side max on the composer body, so this is a floor
+ * picked to stop a peer wedging a pathological amount of data into storage
+ * under an otherwise-valid signature, not a multiple of some existing cap.
+ */
+export const MAX_CHAT_CONTENT_LENGTH = 16_384;
+
 export interface VerifyOpts {
   /** The AUTHENTICATED room this message is being filed under. */
   room?: string | null;
@@ -23,6 +30,15 @@ export async function verifyIncoming(
   wire: WireChatMessage,
   opts: VerifyOpts = {}
 ): Promise<boolean> {
+  // Ahead of everything else, signed or not: a valid signature (or an
+  // allowUnsigned sync batch from a trusted counterparty) only proves who
+  // sent it, never that it is a reasonable size to store and render.
+  if (
+    typeof wire.content !== "string" ||
+    wire.content.length > MAX_CHAT_CONTENT_LENGTH
+  ) {
+    return false;
+  }
   if (!wire.sig) return opts.allowUnsigned === true;
   // v3 ONLY, as of the 2026-08-28 sunset.
   //

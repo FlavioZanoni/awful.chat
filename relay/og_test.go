@@ -2,8 +2,40 @@ package main
 
 import (
 	"net"
+	"net/url"
 	"testing"
 )
+
+// The d.vxinstagram.com candidate concatenated Path and RawQuery with no
+// separator, so a real Instagram url with a query string (e.g. ?img_index=2
+// on a carousel post) produced an unparseable candidate that ogHTTPClient
+// could never actually fetch - silently falling through to the second
+// candidate every time. A bare path (no query) must not gain a trailing "?".
+func TestInstagramCandidateURLsHaveAQuerySeparator(t *testing.T) {
+	withQuery, err := url.Parse("https://www.instagram.com/p/abc123/?img_index=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := getCandidateUrls(withQuery)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 candidates, got %v", got)
+	}
+	if want := "https://d.vxinstagram.com/p/abc123/?img_index=2"; got[0] != want {
+		t.Errorf("candidate 0 = %q, want %q", got[0], want)
+	}
+	if want := "https://www.ddinstagram.com/p/abc123/?img_index=2"; got[1] != want {
+		t.Errorf("candidate 1 = %q, want %q", got[1], want)
+	}
+
+	noQuery, err := url.Parse("https://www.instagram.com/p/abc123/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = getCandidateUrls(noQuery)
+	if want := "https://d.vxinstagram.com/p/abc123/"; got[0] != want {
+		t.Errorf("candidate with no query gained a stray separator: %q, want %q", got[0], want)
+	}
+}
 
 func TestIsDisallowedIP(t *testing.T) {
 	// The ranges the stdlib predicates already covered, kept here so a future

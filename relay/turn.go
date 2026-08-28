@@ -80,7 +80,13 @@ func handleTurnCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	const ttl = 12 * 60 * 60 // 12h - comfortably longer than any call/transfer
+	// 2h, not the original 12h: this credential is carried in a plaintext
+	// turn: URL (no TLS TURN is offered - see defaultTurnURLs), so a shorter
+	// TTL bounds how long a credential that leaked off the wire stays usable.
+	// Still comfortably longer than any call or transfer, and the client
+	// refreshes well before expiry rather than waiting it out (see
+	// frontend/src/lib/transport for refreshTurnCredentials).
+	const ttl = 2 * 60 * 60 // 2h
 	expiry := time.Now().Unix() + ttl
 	// coturn's REST form is "<expiry>[:<id>]". The id half matters: coturn
 	// keys --user-quota on the whole username, so minting a bare timestamp put

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { verifyIncoming } from "./verify-incoming";
+import { MAX_CHAT_CONTENT_LENGTH, verifyIncoming } from "./verify-incoming";
 import { canonicalContentV3, canonicalContentV2 } from "../messaging";
 import { MessageType, type WireChatMessage } from "../types/message";
 import { hex, utf8 } from "../utils";
@@ -107,6 +107,26 @@ describe("verifyIncoming", () => {
     const sig = ed25519.sign(utf8(canonicalContentV2(w as never)), alice.priv);
     const signed = { ...w, sig: hex(sig), sigV: 2 } as WireChatMessage;
     expect(await verifyIncoming(signed, { room: ROOM })).toBe(false);
+  });
+
+  it("rejects content over the size cap, even genuinely signed", async () => {
+    const w = signV3(
+      wire({
+        senderId: alice.did,
+        senderDid: alice.did,
+        content: "a".repeat(MAX_CHAT_CONTENT_LENGTH + 1),
+      }),
+      alice.priv
+    );
+    expect(await verifyIncoming(w, { room: ROOM })).toBe(false);
+  });
+
+  it("rejects a non-string content field", async () => {
+    const w = {
+      ...signV3(wire({ senderId: alice.did, senderDid: alice.did }), alice.priv),
+      content: 12345,
+    } as unknown as WireChatMessage;
+    expect(await verifyIncoming(w, { room: ROOM })).toBe(false);
   });
 
   it("needs an authenticated room for v3 - never trusts the wire for it", async () => {

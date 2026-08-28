@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,21 @@ func TestSubstituteSecrets(t *testing.T) {
 	}
 	if out, _ := substituteSecrets("https://x/plain", secrets, "h"); out != "https://x/plain" {
 		t.Errorf("plain url mangled: %q", out)
+	}
+}
+
+// A caller url carrying userinfo (https://u:p@allowed.host/x) would otherwise
+// reach Go's http.Client unchanged, which sends Authorization: Basic derived
+// from it to whatever allowlisted host the caller names - letting any caller
+// pick the credential an allowlisted upstream sees.
+func TestPluginProxyRejectsUserinfoInURL(t *testing.T) {
+	resetRateLimiter(t)
+	t.Setenv("PLUGIN_PROXY_HOSTS", "allowed.host")
+	req := httptest.NewRequest(http.MethodGet, "/plugin-proxy?url="+url.QueryEscape("https://u:p@allowed.host/x"), nil)
+	rec := httptest.NewRecorder()
+	handlePluginProxy(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a url with userinfo, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

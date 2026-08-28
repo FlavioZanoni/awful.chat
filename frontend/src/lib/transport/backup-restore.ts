@@ -42,16 +42,67 @@ import {
   mergeImportedRoom,
   parseBackup,
   pfpFromJson,
+  sanitizeCollections,
   type AttachmentExport,
   type BackupFile,
   type DatabaseExport,
 } from "./backup";
 
+export interface ImportResult {
+  /** Records dropped by the per-record shape/size validator (see
+   * sanitizeCollections in backup.ts) across every collection - a backup or
+   * device-sync export is untrusted input, and this is what a caller can
+   * show the user instead of silently importing a partial dataset. */
+  droppedRecords: number;
+}
+
 export async function importDatabase(
   data: DatabaseExport,
   mode: "add" | "replace" = "replace"
-): Promise<void> {
+): Promise<ImportResult> {
   console.log(`[Sync] Importing database in ${mode} mode`);
+
+  // Every collection below arrived via JSON (a backup file or a
+  // device-sync frame) and is untrusted input: drop any record whose shape
+  // doesn't match what storage/the UI expect rather than writing it through
+  // unchecked. This is a cheap shape/size check, not signature verification
+  // - see sanitizeCollections in backup.ts for why.
+  const {
+    messages,
+    attachments,
+    pending,
+    watermarks,
+    yjsDocs,
+    rooms,
+    profiles,
+    savedGifs,
+    dropped: droppedRecords,
+  } = sanitizeCollections({
+    messages: data.messages,
+    attachments: data.attachments,
+    pending: data.pending,
+    watermarks: data.watermarks,
+    yjsDocs: data.yjsDocs,
+    rooms: data.rooms,
+    profiles: data.profiles,
+    savedGifs: data.savedGifs,
+  });
+  if (droppedRecords > 0) {
+    console.warn(
+      `[Sync] Dropped ${droppedRecords} malformed record(s) during import`
+    );
+  }
+  const sanitizedData: DatabaseExport = {
+    ...data,
+    messages,
+    attachments,
+    pending,
+    watermarks,
+    yjsDocs,
+    rooms,
+    profiles,
+    savedGifs,
+  };
 
   if (mode === "replace") {
     // Clear existing data first
@@ -77,10 +128,11 @@ export async function importDatabase(
   // happens to be true today.
   markAtRestSweepNeeded();
   try {
-    await importDatabaseInner(data, mode);
+    await importDatabaseInner(sanitizedData, mode);
   } finally {
     endPlaintextImport();
   }
+  return { droppedRecords };
 }
 
 async function importDatabaseInner(
@@ -247,11 +299,11 @@ export async function readBackupFile(file: File): Promise<BackupFile> {
 export async function applyBackup(
   data: BackupFile,
   mode: "add" | "replace"
-): Promise<void> {
+): Promise<ImportResult> {
   if (mode === "replace" && !data.identity) {
     throw new Error("This backup has no identity, so it cannot replace yours");
   }
-  await importDatabase(
+  return importDatabase(
     mode === "add" ? { ...data, identity: undefined } : data,
     mode
   );

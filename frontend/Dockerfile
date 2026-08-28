@@ -1,4 +1,6 @@
-FROM node:22-alpine AS base
+# Pinned minor: a floating :22-alpine changes what runs on every build with
+# no diff to review.
+FROM node:22.23-alpine AS base
 # pinned major: pnpm 11 changed ignored-build-script handling to a hard error
 RUN npm install -g pnpm@10
 WORKDIR /app
@@ -36,7 +38,9 @@ ENV PLUGIN_SOURCES=$PLUGIN_SOURCES
 RUN node scripts/fetch-plugins.mjs
 RUN pnpm build
 
-FROM nginx:alpine AS runner
+# Pinned minor: a floating :alpine changes what runs on every build with no
+# diff to review.
+FROM nginx:1.30-alpine AS runner
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

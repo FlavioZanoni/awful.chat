@@ -12,8 +12,18 @@
 
 services:
   coturn:
-    image: coturn/coturn:latest
+    # Pinned: a floating :latest changes what runs on every pull with no
+    # diff to review. 4.17.2 is the newest 4.x alpine tag as of this pin.
+    image: coturn/coturn:4.17.2-alpine
     restart: unless-stopped
+    # Only no-new-privileges here, not cap_drop: this is network_mode: host
+    # binding low, non-standard ports (3478, 5349, and the relay range), and
+    # the official image runs the coturn process as root by default - it
+    # never goes through a setuid/setcap drop to a non-root user, so there is
+    # no CAP_NET_BIND_SERVICE grant to preserve or capability list to trim.
+    # Left alone rather than guessed at.
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:

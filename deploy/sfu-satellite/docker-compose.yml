@@ -33,6 +33,13 @@ services:
     build:
       context: ../../sfu
     restart: unless-stopped
+    # Drops every capability and blocks privilege escalation. No read_only:
+    # mediasoup writes to tmp paths at runtime, not worth the breakage risk
+    # to verify today.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # Media ports are published directly: mediasoup announces PUBLIC_IP and
     # the port it allocated, and the browser sends UDP straight here. Nothing
     # proxies this traffic - only the signalling WebSocket goes through Caddy.
@@ -59,8 +66,16 @@ services:
       - sfu-net
 
   caddy:
-    image: caddy:2-alpine
+    # Pinned: a floating :2-alpine changes what runs on every pull with no
+    # diff to review.
+    image: caddy:2.11-alpine
     restart: unless-stopped
+    # Drops every capability and blocks privilege escalation. No read_only:
+    # not worth the breakage risk to verify today.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - sfu
     ports:

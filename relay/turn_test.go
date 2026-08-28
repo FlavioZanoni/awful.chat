@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTurnCredentials_NoSecretFallsBack(t *testing.T) {
@@ -92,6 +93,32 @@ func TestTurnCredentialsRateLimited(t *testing.T) {
 	}
 	if code := call(); code != http.StatusTooManyRequests {
 		t.Fatalf("request over the budget got %d, want 429", code)
+	}
+}
+
+// The credential travels in a plaintext turn: URL (no TLS TURN is offered),
+// so the TTL bounds how long a credential that leaked off the wire stays
+// usable. Regression guard for the 12h -> 2h reduction.
+func TestTurnCredentialsTTLIsTwoHours(t *testing.T) {
+	const secret = "test-secret-123"
+	t.Setenv("TURN_SECRET", secret)
+	t.Setenv("DOMAIN", "example.com")
+
+	body := turnBody(t)
+	const want = 2 * 60 * 60
+	if body.TTL != want {
+		t.Fatalf("ttl = %d, want %d (2h)", body.TTL, want)
+	}
+	expiry, _, found := strings.Cut(body.Username, ":")
+	if !found {
+		t.Fatalf("username %q carries no expiry half", body.Username)
+	}
+	exp, err := strconv.ParseInt(expiry, 10, 64)
+	if err != nil {
+		t.Fatalf("username %q does not start with a unix expiry: %v", body.Username, err)
+	}
+	if got := exp - time.Now().Unix(); got < want-5 || got > want {
+		t.Fatalf("expiry is %ds from now, want ~%ds", got, want)
 	}
 }
 

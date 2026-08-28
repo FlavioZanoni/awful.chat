@@ -21,9 +21,10 @@ import (
 // takes the mutex and the tests wait for a frame count instead of assuming the
 // write already happened.
 type fakeStream struct {
-	mu     sync.Mutex
-	frames [][]byte
-	reset  bool
+	mu           sync.Mutex
+	frames       [][]byte
+	reset        bool
+	readDeadline time.Time
 }
 
 func (f *fakeStream) Write(p []byte) (int, error) {
@@ -58,6 +59,30 @@ func (f *fakeStream) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.frames)
+}
+
+// SetReadDeadline and Read make fakeStream also satisfy rvReadStream, for the
+// idle-timeout test below. Read blocks until the deadline set by
+// SetReadDeadline elapses, then returns the same kind of error a real
+// net.Conn would return on an expired deadline - nothing else in fakeStream
+// ever sends read data, so readLoop's only way out is that timeout.
+func (f *fakeStream) SetReadDeadline(t time.Time) error {
+	f.mu.Lock()
+	f.readDeadline = t
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeStream) Read([]byte) (int, error) {
+	f.mu.Lock()
+	dl := f.readDeadline
+	f.mu.Unlock()
+	if !dl.IsZero() {
+		if d := time.Until(dl); d > 0 {
+			time.Sleep(d)
+		}
+	}
+	return 0, os.ErrDeadlineExceeded
 }
 
 // waitFrames blocks until at least n frames have been written, so a test never
@@ -763,5 +788,52 @@ func TestLifecycleLogLinesAreBudgetedAndRefill(t *testing.T) {
 	}
 	if ok, _ := l.allow(now.Add(lifecycleLogWindow)); !ok {
 		t.Fatal("lifecycle budget did not refill on the next window")
+	}
+}
+
+// A registered client that never sends another byte - the ordinary case, since
+// the rendezvous protocol has no periodic frame of its own - used to pin
+// readLoop's goroutine and the stream's registry entry forever. The idle
+// deadline has to end the loop, and handleStream's cleanup (mirrored here)
+// has to run: the stream reset and the peer pulled out of its rooms.
+func TestIdleRendezvousStreamIsClosedAfterTimeout(t *testing.T) {
+	orig := rendezvousIdleTimeout
+	rendezvousIdleTimeout = 20 * time.Millisecond
+	defer func() { rendezvousIdleTimeout = orig }()
+
+	r := newRegistry()
+	s := &fakeStream{}
+	c := addClient(r, "peer-idle", s)
+	// Registered out of band, not through readLoop: the deadline only
+	// applies to a stream that has not REGISTERed over the wire.
+	r.register(c, "room1")
+	if !roomHas(r, "room1", "peer-idle") {
+		t.Fatal("setup: peer should be in room1 before the idle timeout")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		// Mirrors handleStream: readLoop returns once the deadline trips,
+		// then the normal cleanup path runs.
+		r.readLoop(s, "peer-idle", c)
+		r.removeClient(c)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLoop did not return once the idle window elapsed")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !s.wasReset() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !s.wasReset() {
+		t.Fatal("an idle stream should be reset once the read deadline trips")
+	}
+	if roomHas(r, "room1", "peer-idle") {
+		t.Fatal("an idle stream's cleanup should remove it from its rooms")
 	}
 }

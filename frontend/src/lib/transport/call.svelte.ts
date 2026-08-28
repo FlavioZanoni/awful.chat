@@ -130,6 +130,17 @@ async function _joinCall(): Promise<void> {
     // person immediately and the rest a couple of minutes later.
     _transport.reconcileNow();
     await _voice.join(transportState.roomCode ?? "");
+    // Close the default-deny window right away: _voice.join() registers the
+    // inbound stream handler before we have handed it any roster, and that
+    // handler rejects everyone until setCallPeers() is called at least once.
+    // _video.join() below is a network round trip, and without this call the
+    // handler would sit open to any peer that can dial /voice/1.0.0 for its
+    // whole duration. transportState.inCall/.callRoomCode are not set yet at
+    // this point, so this first pass syncs an empty roster (default-deny with
+    // nobody admitted) - the real roster lands with the call below, and the
+    // reconcile tick (VOICE_RECONCILE_MS) plus the presence heartbeat pick up
+    // anyone still missing from there.
+    _syncVoiceRoster();
     // Voice is peer-to-peer; only camera and screen share go through the SFU.
     // Awaiting this unguarded meant a media server that was down (or a VPS
     // whose DNS had moved) failed the whole join, taking out calls that never

@@ -130,4 +130,58 @@ describe("storage at-rest crypto", () => {
       /locked/
     );
   });
+
+  // ── AAD row binding ─────────────────────────────────────────────────────
+  // A blob's additionalData is "<storeName> <primaryKey>", so lifting one
+  // row's _enc onto another row's envelope must fail the AES-GCM auth tag
+  // check, even though both were sealed under the same key.
+
+  it("a blob sealed for (messages, id 1) fails when presented under a different id in the same store", async () => {
+    const sealed1 = await sealRow(
+      { id: "m1", content: "for m1" },
+      STORE_SPECS.messages
+    );
+    const sealed2 = await sealRow(
+      { id: "m2", content: "for m2" },
+      STORE_SPECS.messages
+    );
+    // m2's envelope (its own clear/blinded fields), but m1's ciphertext.
+    const swapped = { ...sealed2, _enc: sealed1._enc };
+    await expect(openRow(swapped, STORE_SPECS.messages)).rejects.toThrow();
+  });
+
+  it("a blob sealed for (messages, id x1) fails when presented as (attachments, id x1)", async () => {
+    const messageRow = await sealRow(
+      { id: "x1", content: "message body" },
+      STORE_SPECS.messages
+    );
+    const attachmentRow = await sealRow(
+      { id: "x1", status: "complete", filename: "f" },
+      STORE_SPECS.attachments
+    );
+    // Same store-relative primary key value, different store.
+    const swapped = { ...attachmentRow, _enc: messageRow._enc };
+    await expect(
+      openRow(swapped, STORE_SPECS.attachments)
+    ).rejects.toThrow();
+  });
+
+  it("a legacy blob with no AAD/version marker still decrypts", async () => {
+    // Simulates a row written before AAD binding existed: sealed with a spec
+    // that carries no storeName/key, exactly like every StoreCryptoSpec used
+    // to look. The blob it produces has no `v` marker.
+    const legacySpec = { clear: ["id"] };
+    const legacy = await sealRow(
+      { id: "m1", content: "predates AAD" },
+      legacySpec
+    );
+    expect(legacy._enc.v).toBeUndefined();
+    // Opened with the CURRENT, AAD-carrying spec - decrypt must skip AAD
+    // because the blob itself says (via the missing `v`) it was never bound.
+    const opened = await openRow<{ id: string; content: string }>(
+      legacy,
+      STORE_SPECS.messages
+    );
+    expect(opened.content).toBe("predates AAD");
+  });
 });

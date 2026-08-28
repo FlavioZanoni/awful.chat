@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { applyBackup } from "./backup-restore";
 import { BACKUP_FORMAT, BACKUP_VERSION, type BackupFile } from "./backup";
 import {
+  getAllMessages,
   getAllRooms,
   getDB,
   getKeypairRecord,
@@ -205,5 +206,50 @@ describe("a restore must re-arm the sweep for the identity that unlocks", () => 
     );
     expect(stale).toEqual([]);
     delete (globalThis as Record<string, unknown>).localStorage;
+  });
+});
+
+// A backup file is untrusted input: a hand-edited or truncated file, or a
+// bug on the exporting device, can put per-record garbage into an otherwise
+// well-formed collection. parseBackup only coerces the collection itself to
+// an array - the per-record check lives in sanitizeCollections (backup.ts)
+// and applyBackup is what wires it in, so this pins that wiring rather than
+// re-testing the validator's own rules (see backup.test.ts for those).
+describe("applyBackup drops malformed records instead of importing them", () => {
+  it("keeps a well-formed message and drops a malformed one, reporting the count", async () => {
+    const backup = await backupFromAnIdentity();
+    const withMessages = {
+      ...backup,
+      messages: [
+        {
+          id: "good-message",
+          roomCode: "restoredroom0001",
+          senderId: "did:key:zAlice",
+          senderName: "Alice",
+          timestamp: 1,
+          lamport: 1,
+          type: "text",
+          content: "hello from the backup",
+          attachments: [],
+        },
+        // Missing roomCode/senderId and an unknown type - must not reach storage.
+        { id: "bad-message", type: "not_a_real_type", lamport: 1 },
+      ],
+    } as unknown as BackupFile;
+
+    const result = await applyBackup(withMessages, "replace");
+    expect(result.droppedRecords).toBe(1);
+
+    // Import runs with storage locked (see the restore-onto-a-fresh-device
+    // tests above); reading messages back needs the at-rest key.
+    await unlockIdentity(PASSWORD);
+    const stored = await getAllMessages("restoredroom0001");
+    expect(stored.map((m) => m.id)).toEqual(["good-message"]);
+  });
+
+  it("reports zero dropped records for an already well-formed backup", async () => {
+    const backup = await backupFromAnIdentity();
+    const result = await applyBackup(backup, "replace");
+    expect(result.droppedRecords).toBe(0);
   });
 });

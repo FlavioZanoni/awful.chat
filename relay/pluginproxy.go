@@ -399,6 +399,15 @@ func handlePluginProxy(w http.ResponseWriter, r *http.Request) {
 		apiError(w, r, "Only https urls", http.StatusBadRequest)
 		return
 	}
+	// A url like https://u:p@allowed.host/x is otherwise passed straight to
+	// Go's http.Client, which sends Authorization: Basic derived from it to
+	// whatever allowlisted host the caller names - a way to smuggle arbitrary
+	// caller-chosen credentials upstream through a proxy that is supposed to
+	// be the only thing handing out credentials.
+	if pre.User != nil {
+		apiError(w, r, "url must not contain userinfo", http.StatusBadRequest)
+		return
+	}
 	host := strings.ToLower(pre.Hostname())
 	if !allowed[host] {
 		apiError(w, r, "Host not allowlisted on this instance", http.StatusForbidden)

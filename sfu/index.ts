@@ -146,6 +146,11 @@ interface PeerState {
   // Directions that are already connected. Prevents repeated ms:connect-transport
   // calls for the same transport from issuing duplicate worker requests.
   connectedTransports: Set<"send" | "recv">;
+  // Per-direction reap timer for a transport that has been created but has not
+  // yet completed ms:connect-transport - see TRANSPORT_CONNECT_TIMEOUT_MS.
+  // Keyed by direction, not by transport, so replacing a transport naturally
+  // replaces its timer too.
+  transportReapTimers: Map<"send" | "recv", NodeJS.Timeout>;
   // produce()/consume() calls that have been started but not yet recorded in
   // the maps above. ws hands this listener the next frame without awaiting the
   // previous one, so a ceiling that only reads producers.size / consumers.size
@@ -202,6 +207,17 @@ const MAX_CUMULATIVE_PRODUCES_PER_SESSION = 256;
 // one costs a forwarded stream, so an unbounded ms:consume loop is bandwidth
 // amplification as well as memory.
 const MAX_CONSUMERS_PER_PEER = 256;
+// A WebRtcTransport binds a UDP+TCP port pair out of the 500-port RTC range
+// at creation, before either side has proven it can complete a handshake -
+// join + ms:create-transport on a raw websocket that only answers pings is
+// enough to hold one open. Left unbounded that walks the range empty for
+// every room on the instance, since the port pair is otherwise only freed
+// when the peer leaves. 20s is generous for a real ICE/DTLS handshake and
+// short enough that the flood can't outrun the reap.
+const TRANSPORT_CONNECT_TIMEOUT_MS = parseInt(
+  process.env.SFU_TRANSPORT_CONNECT_TIMEOUT_MS ?? "20000",
+  10,
+);
 // roomCode and peerId become Map keys and are echoed into the logs. Real ones
 // are a 16-char hex room code (8 bytes, or "dm-" + 40 hex for DMs) and a
 // base58 libp2p peer id; anything long, non-string or carrying control
@@ -399,6 +415,59 @@ async function createWebRtcTransport(
   });
 }
 
+// Reaps a send/recv transport that has proven it will never carry media -
+// either it sat unconnected past TRANSPORT_CONNECT_TIMEOUT_MS, or mediasoup
+// reported its ICE/DTLS handshake failed or its worker-side object closed out
+// from under us. `transport` is the exact instance the caller is reacting to;
+// if it is no longer the peer's current transport for `direction` (already
+// replaced, or already reaped), this is a stale, late-firing event and must
+// not touch the peer's live transport or send a second error.
+function reapTransport(
+  peer: PeerState,
+  direction: "send" | "recv",
+  transport: mediasoup.types.WebRtcTransport,
+  reason: string,
+): void {
+  const current = direction === "send" ? peer.sendTransport : peer.recvTransport;
+  if (current !== transport) return;
+
+  clearTransportReapTimer(peer, direction);
+  if (direction === "send") {
+    peer.sendTransport = null;
+  } else {
+    peer.recvTransport = null;
+  }
+  peer.connectedTransports.delete(direction);
+  // mediasoup may have closed the transport itself (e.g. the worker died a
+  // transport-local death); close() is a no-op on an already-closed
+  // transport, but check anyway so the intent - drop the reference, don't
+  // reissue a worker request - reads directly.
+  if (!transport.closed) transport.close();
+  send(peer.ws, { type: "ms:error", reason });
+}
+
+function armTransportReapTimer(
+  peer: PeerState,
+  direction: "send" | "recv",
+  transport: mediasoup.types.WebRtcTransport,
+): void {
+  const timer = setTimeout(() => {
+    peer.transportReapTimers.delete(direction);
+    reapTransport(peer, direction, transport, "transport-timeout");
+  }, TRANSPORT_CONNECT_TIMEOUT_MS);
+  // A pending reap timer must not be the reason the process stays alive.
+  timer.unref();
+  peer.transportReapTimers.set(direction, timer);
+}
+
+function clearTransportReapTimer(peer: PeerState, direction: "send" | "recv"): void {
+  const timer = peer.transportReapTimers.get(direction);
+  if (timer) {
+    clearTimeout(timer);
+    peer.transportReapTimers.delete(direction);
+  }
+}
+
 // ── Message handlers ──────────────────────────────────────────────────────────
 
 async function handleGetCapabilities(peer: PeerState): Promise<void> {
@@ -474,6 +543,9 @@ async function handleCreateTransport(
     // this direction - otherwise the retry this branch exists to serve gets a
     // transport whose connect is silently refused, and no media ever flows.
     peer.connectedTransports.delete(msg.direction);
+    // The previous transport's own reap timer is for a transport that is now
+    // closed and discarded - let the fresh one below get its own.
+    clearTransportReapTimer(peer, msg.direction);
   }
 
   if (msg.direction === "send") {
@@ -481,6 +553,24 @@ async function handleCreateTransport(
   } else {
     peer.recvTransport = transport;
   }
+
+  // This transport already holds a UDP+TCP pair out of the RTC range; if
+  // ms:connect-transport never lands, reap it rather than wait for the peer
+  // to leave.
+  armTransportReapTimer(peer, msg.direction, transport);
+  // Belt and suspenders on top of the timer: a handshake that outright fails,
+  // or a transport the worker closes on its own, should give the port back
+  // immediately rather than ride out the rest of the timeout.
+  transport.on("icestatechange", (iceState) => {
+    if (iceState === "closed") {
+      reapTransport(peer, msg.direction, transport, "transport-timeout");
+    }
+  });
+  transport.on("dtlsstatechange", (dtlsState) => {
+    if (dtlsState === "failed" || dtlsState === "closed") {
+      reapTransport(peer, msg.direction, transport, "transport-timeout");
+    }
+  });
 
   const options: ClientTransportOptions = {
     id: transport.id,
@@ -532,11 +622,26 @@ async function handleConnectTransport(
 
   await transport.connect({ dtlsParameters: msg.dtlsParameters });
   peer.connectedTransports.add(msg.direction);
+  // The transport proved it can complete a handshake; it no longer needs the
+  // reap timer that exists to close it if this never happened.
+  clearTransportReapTimer(peer, msg.direction);
 }
 
 async function handleProduce(peer: PeerState, msg: MSProduce): Promise<void> {
   if (!peer.sendTransport) {
     console.warn(`[sfu] produce: no send transport for peer ${peer.peerId}`);
+    return;
+  }
+
+  // The type declares source as "camera" | "screen", but that only binds the
+  // client; nothing stops a raw socket from sending anything JSON allows. It
+  // ends up in appData and echoed back to every other peer as ms:new-producer
+  // / ms:producer-closed, so junk here reaches every client in the room.
+  if (msg.source !== "camera" && msg.source !== "screen") {
+    console.warn(
+      `[sfu] produce: invalid source from peer ${peer.peerId}`,
+    );
+    send(peer.ws, { type: "ms:error", reason: "invalid-produce" });
     return;
   }
 
@@ -715,6 +820,11 @@ async function handleConsume(peer: PeerState, msg: MSConsume): Promise<void> {
       console.warn(
         `[sfu] cannot consume producer ${msg.producerId} for peer ${peer.peerId}`,
       );
+      // Deliberately no ms:error: the client treats every ms:error as a
+      // session refusal (mediasoup.ts failSession), and a producer that went
+      // away between ms:new-producer and this consume is a normal race, not a
+      // reason to drop video for the whole call. The client's request() times
+      // out on its own.
       return;
     }
 
@@ -871,6 +981,11 @@ function handlePeerLeft(peer: PeerState): void {
 
   peer.sendTransport?.close();
   peer.recvTransport?.close();
+  // Both transports are gone (or were never built); their reap timers would
+  // be no-ops when they fire (reapTransport checks the transport is still
+  // current), but there's no reason to let them sit on the event loop.
+  clearTransportReapTimer(peer, "send");
+  clearTransportReapTimer(peer, "recv");
 
   room.delete(peer.peerId);
   console.log(
@@ -1135,6 +1250,7 @@ async function main(): Promise<void> {
           notifiedClosedProducers: new Set(),
           transportsInFlight: new Set(),
           connectedTransports: new Set(),
+          transportReapTimers: new Map(),
           producersInFlight: 0,
           consumersInFlight: 0,
           cumulativeProduces: 0,
@@ -1172,6 +1288,8 @@ async function main(): Promise<void> {
           }
           oldPeer.sendTransport?.close();
           oldPeer.recvTransport?.close();
+          clearTransportReapTimer(oldPeer, "send");
+          clearTransportReapTimer(oldPeer, "recv");
           oldPeer.ws.terminate();
         }
         room.set(peer.peerId, peer);

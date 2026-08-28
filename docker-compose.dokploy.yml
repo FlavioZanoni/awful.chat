@@ -3,6 +3,13 @@ services:
     build:
       context: ./relay
     restart: unless-stopped
+    # Drops every capability and blocks privilege escalation - this process
+    # never needs raw sockets, chown, or setuid. No read_only: not worth the
+    # breakage risk to verify today.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # Nothing rotates docker's json-file driver by default, so any log path a
     # remote party can drive - and the relay has several - fills the host
     # volume and takes every other service down with it. 30 MB per service.
@@ -102,6 +109,13 @@ services:
     build:
       context: ./sfu
     restart: unless-stopped
+    # Drops every capability and blocks privilege escalation. No read_only:
+    # mediasoup writes to tmp paths at runtime, not worth the breakage risk
+    # to verify today.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # Nothing rotates docker's json-file driver by default, so any log path a
     # remote party can drive - and the relay has several - fills the host
     # volume and takes every other service down with it. 30 MB per service.
@@ -187,8 +201,18 @@ services:
   # Keep every argument below a real flag: this is a folded block, so a "#"
   # line here becomes a literal argument rather than a comment.
   coturn:
-    image: coturn/coturn:latest
+    # Pinned: a floating :latest changes what runs on every pull with no
+    # diff to review. 4.17.2 is the newest 4.x alpine tag as of this pin.
+    image: coturn/coturn:4.17.2-alpine
     restart: unless-stopped
+    # Only no-new-privileges here, not cap_drop: this is network_mode: host
+    # binding low, non-standard ports (3478, 5349, and the relay range), and
+    # the official image runs the coturn process as root by default - it
+    # never goes through a setuid/setcap drop to a non-root user, so there is
+    # no CAP_NET_BIND_SERVICE grant to preserve or capability list to trim.
+    # Left alone rather than guessed at.
+    security_opt:
+      - no-new-privileges:true
     # Nothing rotates docker's json-file driver by default, so any log path a
     # remote party can drive - and the relay has several - fills the host
     # volume and takes every other service down with it. 30 MB per service.
@@ -243,6 +267,21 @@ services:
         # External plugins fetched at build time; see frontend/plugins/README.md
         - PLUGIN_SOURCES=${PLUGIN_SOURCES:-}
     restart: unless-stopped
+    # Drops every capability except what the stock nginx image needs: the
+    # master starts as root and setuid/setgids its workers to the nginx user
+    # (SETUID, SETGID), and the entrypoint chowns its cache dirs (CHOWN).
+    # Port 80 needs no NET_BIND_SERVICE: docker sets
+    # ip_unprivileged_port_start=0 inside a non-host network namespace. No
+    # read_only: nginx writes to tmp paths at runtime, not worth the breakage
+    # risk to verify today.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
     # Nothing rotates docker's json-file driver by default, so any log path a
     # remote party can drive - and the relay has several - fills the host
     # volume and takes every other service down with it. 30 MB per service.

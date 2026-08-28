@@ -20,11 +20,30 @@
  * everything else is one AES-GCM blob per record (fresh 12-byte IV each
  * write), with ArrayBuffer fields (file bytes, avatars) encrypted as raw
  * buffers beside it - base64ing megabytes into JSON would triple the work.
+ *
+ * AAD row binding: AES-GCM alone only proves a blob was sealed under this
+ * key, not which row it came from - raw IndexedDB access could swap the
+ * `_enc` (or `_encBytes[field]`) blob between two rows of the same store, or
+ * across stores, and openRow would decrypt it and hand back the swapped
+ * content under the wrong id/sender. Every blob is now sealed with
+ * additionalData binding it to "<storeName> <primaryKey>" (bytes fields add
+ * a third " <field>" segment), taken from StoreCryptoSpec.storeName/key - so
+ * a swapped blob decrypts under the wrong AAD and AES-GCM's auth tag check
+ * fails closed. Blobs carry `v: 2` when sealed this way; decrypt only
+ * applies AAD when it sees that marker. Rows sealed before this change (no
+ * `v`, no AAD) stay swappable between rows of the same store/shape until
+ * they are next written - accepted because closing that gap needs no flag or
+ * schema bump, just the ordinary "everything gets resealed on next write"
+ * path this file already relies on for the blinding migration.
  */
 
 interface EncBlob {
   iv: Uint8Array;
   ct: ArrayBuffer;
+  /** Present (2) when `ct` was sealed with AAD binding it to its row (see
+   *  above). Absent on rows sealed before AAD binding existed - those decrypt
+   *  WITHOUT additionalData, exactly as they were sealed. */
+  v?: 2;
 }
 
 export interface SealedRow {
@@ -59,6 +78,17 @@ export interface StoreCryptoSpec {
   blind?: string[];
   /** ArrayBuffer fields encrypted as raw buffers instead of via JSON. */
   bytes?: string[];
+  /**
+   * This store's name and the name of its keyPath field, used together to
+   * bind every ciphertext blob to the row it belongs to (see the AAD row
+   * binding note in the header comment). Both optional, and only meaningful
+   * together: a spec that omits either (the DM offline queue's ad hoc spec,
+   * which seals one blob outside any IndexedDB store) gets no AAD, same as a
+   * legacy pre-binding row - there is only ever one such blob, so nothing
+   * else exists to swap it with.
+   */
+  storeName?: string;
+  key?: string;
 }
 
 let _key: CryptoKey | null = null;
@@ -213,18 +243,66 @@ export function isStorageLockedError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("storage is locked");
 }
 
-async function encrypt(key: CryptoKey, data: BufferSource): Promise<EncBlob> {
+async function encrypt(
+  key: CryptoKey,
+  data: BufferSource,
+  aad?: Uint8Array<ArrayBuffer>
+): Promise<EncBlob> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);
-  return { iv, ct };
+  const ct = await crypto.subtle.encrypt(
+    aad
+      ? { name: "AES-GCM", iv, additionalData: aad }
+      : { name: "AES-GCM", iv },
+    key,
+    data
+  );
+  return aad ? { iv, ct, v: 2 } : { iv, ct };
 }
 
-async function decrypt(key: CryptoKey, blob: EncBlob): Promise<ArrayBuffer> {
+async function decrypt(
+  key: CryptoKey,
+  blob: EncBlob,
+  aad?: Uint8Array<ArrayBuffer>
+): Promise<ArrayBuffer> {
+  // Only apply AAD when the blob was sealed with it: passing additionalData
+  // that was never bound in at seal time changes the auth tag computation
+  // and turns a perfectly good legacy (pre-v2) row into a decrypt failure.
+  const useAad = blob.v === 2 ? aad : undefined;
   return crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: blob.iv as Uint8Array<ArrayBuffer> },
+    useAad
+      ? {
+          name: "AES-GCM",
+          iv: blob.iv as Uint8Array<ArrayBuffer>,
+          additionalData: useAad,
+        }
+      : { name: "AES-GCM", iv: blob.iv as Uint8Array<ArrayBuffer> },
     key,
     blob.ct
   );
+}
+
+/**
+ * The AAD for one blob: "<storeName> <primaryKey>", plus a " <field>"
+ * segment for an _encBytes entry. Reads spec.key off the SEALED row - which,
+ * for a store whose keyPath is itself blinded (rooms, profiles, phonebook,
+ * yjsDocs), is the hash, not the plaintext - because that is the one form
+ * available on both sides: sealRow has already written it into `out` by the
+ * time this runs, and openRow sees it directly on the stored row. Returns
+ * undefined (no AAD) when the spec does not carry storeName/key, or when the
+ * row does not (yet) have a value for that field.
+ */
+function rowAad(
+  spec: StoreCryptoSpec,
+  row: Record<string, unknown>,
+  field?: string
+): Uint8Array<ArrayBuffer> | undefined {
+  if (!spec.storeName || !spec.key) return undefined;
+  const keyVal = row[spec.key];
+  if (keyVal === undefined || keyVal === null) return undefined;
+  const s = field
+    ? `${spec.storeName} ${String(keyVal)} ${field}`
+    : `${spec.storeName} ${String(keyVal)}`;
+  return new TextEncoder().encode(s);
 }
 
 export function isSealed(row: unknown): row is SealedRow {
@@ -247,7 +325,7 @@ export async function sealRow<T extends Record<string, unknown>>(
   const rest: Record<string, unknown> = {};
   const byteSet = new Set(spec.bytes ?? []);
   const clearSet = new Set(spec.clear);
-  let encBytes: Record<string, EncBlob> | undefined;
+  const byteBufs: Record<string, Uint8Array<ArrayBuffer>> = {};
 
   const blindSet = new Set(spec.blind ?? []);
 
@@ -261,17 +339,33 @@ export async function sealRow<T extends Record<string, unknown>>(
       out[k] = await blindValue(String(v));
       rest[k] = v;
     } else if (byteSet.has(k)) {
-      const buf = new Uint8Array(
+      // Buffered rather than encrypted here: AAD needs spec.key's value, and
+      // that field (clear or blind) may not have been visited yet in this
+      // same loop - Object.entries order follows `record`'s own key order,
+      // not spec's, so the keyPath field is not guaranteed to come first.
+      byteBufs[k] = new Uint8Array(
         v instanceof ArrayBuffer ? v : (v as Uint8Array<ArrayBuffer>).slice()
       ) as Uint8Array<ArrayBuffer>;
-      (encBytes ??= {})[k] = await encrypt(key, buf);
     } else {
       rest[k] = v;
     }
   }
 
-  out._enc = await encrypt(key, new TextEncoder().encode(JSON.stringify(rest)));
-  if (encBytes) out._encBytes = encBytes;
+  // `out` now carries the keyPath field in its ON-DISK form (blinded already
+  // if spec.key is itself a `blind` field), so rowAad reads the same value
+  // openRow will see later.
+  out._enc = await encrypt(
+    key,
+    new TextEncoder().encode(JSON.stringify(rest)),
+    rowAad(spec, out)
+  );
+  if (Object.keys(byteBufs).length > 0) {
+    const encBytes: Record<string, EncBlob> = {};
+    for (const [k, buf] of Object.entries(byteBufs)) {
+      encBytes[k] = await encrypt(key, buf, rowAad(spec, out, k));
+    }
+    out._encBytes = encBytes;
+  }
   return out as SealedRow;
 }
 
@@ -286,7 +380,10 @@ export async function openRow<T>(
 ): Promise<T> {
   if (!isSealed(row)) return row as T;
   const key = requireKey();
-  const json = new TextDecoder().decode(await decrypt(key, row._enc));
+  const rowObj = row as unknown as Record<string, unknown>;
+  const json = new TextDecoder().decode(
+    await decrypt(key, row._enc, rowAad(spec, rowObj))
+  );
   const rest = JSON.parse(json) as Record<string, unknown>;
   const out: Record<string, unknown> = { ...rest };
   for (const k of spec.clear) {
@@ -294,7 +391,7 @@ export async function openRow<T>(
   }
   if (row._encBytes && !opts?.skipBytes) {
     for (const [k, blob] of Object.entries(row._encBytes)) {
-      out[k] = await decrypt(key, blob);
+      out[k] = await decrypt(key, blob, rowAad(spec, rowObj, k));
     }
   }
   return out as T;
@@ -341,8 +438,15 @@ export async function openRows<T>(
 // wanting a decrypt (unread counts, watermark sweeps, page-fill filters).
 // Everything content-bearing stays inside the blob.
 
+// storeName/key on every entry below feed the AAD row binding (see the
+// header comment): storeName is just the object key restated as a literal
+// (spec objects don't otherwise know their own name), key is the IndexedDB
+// keyPath field name for that store.
+
 export const STORE_SPECS = {
   messages: {
+    storeName: "messages",
+    key: "id",
     // id stays clear: it is the primary key, and peers already know it - the
     // same id travels on the wire with every message. lamport stays clear
     // because it is the RANGE half of the [roomCode, lamport] compound index,
@@ -356,6 +460,8 @@ export const STORE_SPECS = {
     blind: ["roomCode", "senderId"],
   },
   attachments: {
+    storeName: "attachments",
+    key: "id",
     clear: ["id", "status"],
     // infoHash identifies the file in the torrent swarm, and files are seeded
     // unencrypted - so a clear infohash plus a clear room code was a working
@@ -368,26 +474,38 @@ export const STORE_SPECS = {
     bytes: ["data"],
   },
   rooms: {
+    storeName: "rooms",
+    // Also the primary key of this store, so the key path holds the hash -
+    // and that hash is exactly what rowAad reads for AAD, same as openRow
+    // sees it on disk.
+    key: "roomCode",
     clear: ["type"],
-    // Also the primary key of this store, so the key path holds the hash.
     blind: ["roomCode"],
     bytes: ["pfpData"],
   },
   profiles: {
+    storeName: "profiles",
+    key: "did",
     clear: ["isMe"],
     blind: ["did"],
     bytes: ["pfpData", "bannerData"],
   },
   phonebook: {
+    storeName: "phonebook",
+    key: "peerId",
     blind: ["peerId"],
     clear: [],
   },
   savedGifs: {
+    storeName: "savedGifs",
+    key: "id",
     clear: ["id"],
     blind: ["gifId"],
     bytes: ["data"],
   },
   pending: {
+    storeName: "pending",
+    key: "id",
     clear: ["id"],
     blind: ["to"],
   },
@@ -395,9 +513,11 @@ export const STORE_SPECS = {
   // key path carried the room code in plaintext even though the update beside
   // it was encrypted; it is blinded as "channel:{hash}".
   yjsDocs: {
+    storeName: "yjsDocs",
     // The id is "channel:{roomCode}", so leaving it clear published the room
     // code in the primary key of the one store whose own comment calls its
     // contents channel content. It is blinded as "channel:{hash}".
+    key: "id",
     blind: ["id"],
     clear: [],
     bytes: ["update"],
@@ -410,6 +530,8 @@ export const STORE_SPECS = {
   // comparison in setWatermark still works inside its write transaction,
   // where nothing can be decrypted.
   watermarks: {
+    storeName: "watermarks",
+    key: "id",
     // maxLamport, NOT "lamport" - the field name matters. setWatermark's
     // never-regress check compares it against the stored row INSIDE the
     // write transaction, where nothing can be decrypted, so sealing it made

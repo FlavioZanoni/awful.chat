@@ -129,6 +129,18 @@ const (
 	membershipOpWindow = time.Minute
 )
 
+// rendezvousIdleTimeout closes a stream that has REGISTERed nothing yet and
+// sends nothing for this long. Only unregistered streams get a deadline: the
+// rendezvous protocol carries no periodic frame of its own - REGISTER and
+// UNREGISTER only fire on a room change - so a registered tab legitimately
+// sends nothing for hours, and cutting it would make its rooms see it leave
+// and rejoin on every timer tick. A registered stream is already bounded
+// (maxRoomsPerPeer, maxStreamsPerPeer, connmgr); what was unbounded was a
+// peer opening up to maxStreamsPerPeer streams and never sending a byte,
+// pinning a goroutine and a registry entry each with nothing to reclaim
+// them. A package-level var, not a const, so tests can shrink it.
+var rendezvousIdleTimeout = time.Minute
+
 // connectedClient is ONE rendezvous stream, not one peer. A peerId can hold
 // several at once - the user's other tab - and each one owns only the rooms it
 // registered itself.
@@ -780,6 +792,17 @@ func (r *registry) disconnectPeer(peerId string) {
 
 // ── Stream handler ────────────────────────────────────────────────────────────
 
+// rvReadStream is what the read loop needs from a stream, split from
+// rvStream (the write side, used by addStream/connectedClient/writeLoop) so a
+// fake implementing just these methods can drive readLoop - including the
+// idle-timeout path - without a real libp2p connection. network.Stream
+// satisfies this implicitly.
+type rvReadStream interface {
+	rvStream
+	io.Reader
+	SetReadDeadline(time.Time) error
+}
+
 func (r *registry) handleStream(s network.Stream) {
 	peerId := s.Conn().RemotePeer().String()
 	lifecycleLogf("[rv] %s opened rendezvous stream", short(peerId))
@@ -798,6 +821,20 @@ func (r *registry) handleStream(s network.Stream) {
 		return
 	}
 
+	r.readLoop(s, peerId, c)
+
+	// The count matters now that a peerId can hold several streams: "stream
+	// closed" alone no longer means the peer is gone. removeClient is also
+	// what tears the stream down (via c.shutdown) - the idle-timeout case
+	// above ends up here exactly like any other read error.
+	lifecycleLogf("[rv] %s stream closed (%d still open)", short(peerId), r.removeClient(c))
+}
+
+// readLoop reassembles length-prefixed frames from a rendezvous stream and
+// dispatches each one, until s.Read errors - including an idle timeout, see
+// rendezvousIdleTimeout. Split out of handleStream so a fake satisfying only
+// rvReadStream can exercise it in tests.
+func (r *registry) readLoop(s rvReadStream, peerId string, c *connectedClient) {
 	// Read loop - reassemble length-prefixed frames
 	const maxMsgLen = 8192 // Max size for a single frame (REGISTER/UNREGISTER payloads are tiny)
 	buf := make([]byte, 0, 512)
@@ -818,8 +855,19 @@ func (r *registry) handleStream(s network.Stream) {
 		}
 	}
 
+	// Set once the stream has registered a room; from then on it is a
+	// legitimate quiet participant and gets no deadline.
+	registered := false
+
 readLoop:
 	for {
+		// A stream that never registers would otherwise pin this goroutine
+		// and its registry entry forever - see rendezvousIdleTimeout.
+		if registered {
+			s.SetReadDeadline(time.Time{})
+		} else {
+			s.SetReadDeadline(time.Now().Add(rendezvousIdleTimeout))
+		}
 		n, err := s.Read(tmp)
 		if err != nil {
 			break
@@ -870,6 +918,7 @@ readLoop:
 				}
 				if msg.Type == "REGISTER" {
 					r.register(c, msg.Room)
+					registered = true
 				} else {
 					r.unregister(c, msg.Room)
 				}
@@ -878,10 +927,6 @@ readLoop:
 			}
 		}
 	}
-
-	// The count matters now that a peerId can hold several streams: "stream
-	// closed" alone no longer means the peer is gone.
-	lifecycleLogf("[rv] %s stream closed (%d still open)", short(peerId), r.removeClient(c))
 }
 
 // Connection ceiling for the whole relay. The low mark is where the connection
@@ -1028,13 +1073,13 @@ func main() {
 	apiPort := "8081"
 	go func() {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/og", handleOgPreview)
+		mux.HandleFunc("/og", getOnly(handleOgPreview))
 		// the frontend fetches /og/preview (path inherited from the old signal server)
-		mux.HandleFunc("/og/preview", handleOgPreview)
-		mux.HandleFunc("/klipy/search", handleKlipySearch)
-		mux.HandleFunc("/klipy/trending", handleKlipyTrending)
-		mux.HandleFunc("/turn-credentials", handleTurnCredentials)
-		mux.HandleFunc("/plugin-proxy", handlePluginProxy)
+		mux.HandleFunc("/og/preview", getOnly(handleOgPreview))
+		mux.HandleFunc("/klipy/search", getOnly(handleKlipySearch))
+		mux.HandleFunc("/klipy/trending", getOnly(handleKlipyTrending))
+		mux.HandleFunc("/turn-credentials", getOnly(handleTurnCredentials))
+		mux.HandleFunc("/plugin-proxy", getOnly(handlePluginProxy))
 		mux.HandleFunc("/mailbox/deposit", handleMailboxDeposit)
 		mux.HandleFunc("/mailbox/collect", handleMailboxCollect)
 		mux.HandleFunc("/mailbox/ack", handleMailboxAck)
