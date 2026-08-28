@@ -27,6 +27,8 @@ ARG VITE_SFU_URLS
 # Comma/space separated plugin sources (github urls, user/repo[#ref]) fetched
 # into plugins/ before the build - see plugins/README.md. Empty = built-ins only.
 ARG PLUGIN_SOURCES
+# Set to 1 to let an unpinned source (no #ref) through fetch-plugins.
+ARG PLUGIN_SOURCES_ALLOW_UNPINNED
 
 ENV VITE_SIGNAL_URL=$VITE_SIGNAL_URL
 ENV VITE_API_URL=$VITE_API_URL
@@ -34,6 +36,7 @@ ENV VITE_RELAY_MULTIADDR=$VITE_RELAY_MULTIADDR
 ENV VITE_SFU_URL=$VITE_SFU_URL
 ENV VITE_SFU_URLS=$VITE_SFU_URLS
 ENV PLUGIN_SOURCES=$PLUGIN_SOURCES
+ENV PLUGIN_SOURCES_ALLOW_UNPINNED=$PLUGIN_SOURCES_ALLOW_UNPINNED
 
 RUN node scripts/fetch-plugins.mjs
 RUN pnpm build

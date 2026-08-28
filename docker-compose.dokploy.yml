@@ -266,6 +266,8 @@ services:
         - VITE_SFU_URLS=${VITE_SFU_URLS:-}
         # External plugins fetched at build time; see frontend/plugins/README.md
         - PLUGIN_SOURCES=${PLUGIN_SOURCES:-}
+        # Unpinned sources fail the build unless this is 1 (ships HEAD).
+        - PLUGIN_SOURCES_ALLOW_UNPINNED=${PLUGIN_SOURCES_ALLOW_UNPINNED:-}
     restart: unless-stopped
     # Drops every capability except what the stock nginx image needs: the
     # master starts as root and setuid/setgids its workers to the nginx user
