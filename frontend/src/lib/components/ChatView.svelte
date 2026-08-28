@@ -97,6 +97,7 @@
   import { isPluginEnabled } from "$lib/plugins/prefs.svelte";
   import type { HostApi } from "$lib/plugins/api";
   import { seededRandom } from "$lib/utils";
+  import { getQuotableText } from "$lib/quote-helper";
 
   $effect(() => {
     loadProfile();
@@ -608,10 +609,7 @@
           ? {
               id: replyTarget.id,
               senderName: displayName(replyTarget),
-              content:
-                replyTarget.content.length > 160
-                  ? `${replyTarget.content.slice(0, 157)}...`
-                  : replyTarget.content,
+              content: getQuotableText(replyTarget),
             }
           : undefined,
       }).finally(() => {
@@ -678,19 +676,43 @@
     }, 900);
   }
 
-  function handleGifSelect(url: string) {
-    sendMessage(url);
+  function sendOrReplyWithMessage(content: string): void {
+    // Send a message (text or URL) with reply context if set. Mirrors the
+    // reply branching logic from submit() so GIF selections preserve reply targets.
+    if (replyTarget) {
+      sendReply(content, replyTarget);
+    } else {
+      sendMessage(content);
+    }
+    // Clear reply state exactly as submit() does.
+    replyTargetId = null;
     autoScroll = true;
+  }
+
+  function handleGifSelect(url: string) {
+    sendOrReplyWithMessage(url);
   }
 
   function handleGifFileSelect(file: File) {
     // A saved uploaded gif re-enters as a fresh file send: re-seeded, and
     // inlined into the message when small enough.
     sendingFiles = [file.name];
-    sendFiles([file])
+    sendFiles([file], "", {
+      replyTo: replyTarget
+        ? {
+            id: replyTarget.id,
+            senderName: displayName(replyTarget),
+            content: getQuotableText(replyTarget),
+          }
+        : undefined,
+    })
       .catch(() => {})
-      .finally(() => (sendingFiles = []));
-    autoScroll = true;
+      .finally(() => {
+        sendingFiles = [];
+        // Clear reply state exactly as submit() does.
+        replyTargetId = null;
+        autoScroll = true;
+      });
   }
 
   async function handleLoadMore() {
@@ -1177,8 +1199,11 @@
   function quoted(r: ReplyTo): { name: string; content: string } {
     const held = messageById.get(r.id);
     if (held) {
-      return { name: displayName(held), content: held.content };
+      // Use quotable text for held messages so image-only messages show
+      // [image] instead of empty content. Held message is the source of truth.
+      return { name: displayName(held), content: getQuotableText(held) };
     }
+    // Snapshot from the wire is already built with quotable text
     return { name: r.senderName, content: r.content };
   }
 
@@ -1349,7 +1374,7 @@
 -->
 <div
   use:viewportHeight
-  style="--chat-font-size: {displayPrefs.chatFontSize}px; --chat-font-family: {chatFontStack}"
+  style="--chat-font-family: {chatFontStack}"
   class="relative flex flex-col bg-background text-foreground font-(family-name:--chat-font-family) overflow-hidden"
   role="main"
   ondragenter={handleRootDragEnter}
@@ -1579,6 +1604,7 @@
     <div
       bind:this={messagesEl}
       onscroll={handleScroll}
+      style="--chat-font-size: {displayPrefs.chatFontSize}px"
       class="chat-messages flex-1 overflow-y-auto overflow-x-hidden px-4 py-2 min-h-0"
     >
       {#if hasMoreHistory && visibleMessages.length > 0}
@@ -1732,7 +1758,7 @@
                           onkeydown={(e) => {
                             if (e.key === "Enter") openProfileFromMessage(msg);
                           }}
-                          class="cursor-pointer text-sm font-medium text-primary {displayPrefs.italicOwnName
+                          class="cursor-pointer text-(length:--chat-font-size) font-medium text-primary {displayPrefs.italicOwnName
                             ? 'italic'
                             : ''} {effectStyle.class}"
                           style={effectStyle.style || (profileStore.color ? `color: ${profileStore.color}` : "")}
@@ -1762,7 +1788,7 @@
                           onkeydown={(e) => {
                             if (e.key === "Enter") openProfileFromMessage(msg);
                           }}
-                          class="cursor-pointer text-sm font-medium text-foreground {effectStyle.class}"
+                          class="cursor-pointer text-(length:--chat-font-size) font-medium text-foreground {effectStyle.class}"
                           style={effectStyle.style || (color ? `color: ${color}` : "")}
                         >
                           {displayName(msg)}
@@ -1929,7 +1955,7 @@
           >
           <span class="mx-1">•</span>
           <span class="truncate"
-            >{humanizeMentions(replyTarget.content, resolveMentionDisplayName)}</span
+            >{humanizeMentions(getQuotableText(replyTarget), resolveMentionDisplayName)}</span
           >
         </div>
         <Tip text="Cancel reply (Esc)">

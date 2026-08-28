@@ -26,6 +26,39 @@ import { setTransmissionOutputVolume } from "./transmission.svelte";
 let _voiceOutputBeforeDeafen = 1;
 let _videoOutputBeforeDeafen = 1;
 let _mutedBeforeDeafen = false;
+let _errorClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Helper function to detect NotAllowedError (permission denied) and return
+// a user-friendly message. NotAllowedError text differs between browsers -
+// Firefox says "Permission denied by user", Chrome says "Permission denied",
+// Safari varies. This unifies the messaging and hints at the remedy.
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.name === "NotAllowedError") {
+      return "Microphone or camera permission denied. Re-grant permission in browser settings to continue.";
+    }
+    return err.message;
+  }
+  return String(err);
+}
+
+// Set an error message and schedule it to auto-clear after 10 seconds.
+// This prevents permission errors (and other transient states) from lingering
+// indefinitely on screen. The timer is cleared if the user attempts the
+// operation again, or if they leave the call.
+function setErrorWithAutoClear(message: string): void {
+  // Clear any existing timer to avoid multiple timeouts.
+  if (_errorClearTimer) clearTimeout(_errorClearTimer);
+  transportState.error = message;
+  _errorClearTimer = setTimeout(() => {
+    // Only clear OUR message. transportState.error is shared - dm.svelte.ts
+    // and transmission.svelte.ts write it too - so an unconditional null here
+    // would silently wipe a newer, unrelated error that arrived within the
+    // window, and cut its display short.
+    if (transportState.error === message) transportState.error = null;
+    _errorClearTimer = null;
+  }, 10000);
+}
 
 export function _sendCallState(peerId?: string): void {
   const payload = encode({
@@ -116,6 +149,9 @@ export function joinCall(): Promise<void> {
 let _presenceHeartbeat: ReturnType<typeof setInterval> | null = null;
 
 async function _joinCall(): Promise<void> {
+  // Clear any pending error timeout and reset the error state. Attempting
+  // the operation again makes any stale error irrelevant.
+  if (_errorClearTimer) clearTimeout(_errorClearTimer);
   transportState.error = null;
   try {
     // Ensure transport is connected before joining voice
@@ -183,12 +219,21 @@ async function _joinCall(): Promise<void> {
     transportState.localMicStream = null;
     transportState.cameraOff = true;
     transportState.screenSharing = false;
-    transportState.error = err instanceof Error ? err.message : String(err);
+    // Set error with auto-clear: transient permission errors should not persist
+    // indefinitely on screen. If the join fails for another reason, the error
+    // still clears after 10 seconds or when the user attempts to join again.
+    setErrorWithAutoClear(getErrorMessage(err));
     throw err;
   }
 }
 
 export function leaveCall(): void {
+  // Clear any pending error auto-clear timer and the error itself. Once the
+  // user leaves the call, any call-related error (like a permission denial
+  // during camera startup) becomes stale.
+  if (_errorClearTimer) clearTimeout(_errorClearTimer);
+  transportState.error = null;
+
   releaseWakeLock();
   if (_presenceHeartbeat) {
     clearInterval(_presenceHeartbeat);
@@ -241,6 +286,9 @@ export function toggleMute(): void {
 }
 
 export async function startCamera(): Promise<void> {
+  // Clear any pending error timeout and reset the error state. Attempting
+  // the operation again makes any stale error irrelevant.
+  if (_errorClearTimer) clearTimeout(_errorClearTimer);
   transportState.error = null;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -266,7 +314,11 @@ export async function startCamera(): Promise<void> {
       throw err;
     }
   } catch (err) {
-    transportState.error = err instanceof Error ? err.message : String(err);
+    // Set error with auto-clear: permission errors should not persist
+    // indefinitely on screen. The user is still in the call after camera
+    // startup fails, so the error clears when they retry or when the timer
+    // expires.
+    setErrorWithAutoClear(getErrorMessage(err));
     throw err;
   }
 }
@@ -285,6 +337,9 @@ export async function toggleCamera(): Promise<void> {
 }
 
 export async function startScreenShare(): Promise<void> {
+  // Clear any pending error timeout and reset the error state. Attempting
+  // the operation again makes any stale error irrelevant.
+  if (_errorClearTimer) clearTimeout(_errorClearTimer);
   transportState.error = null;
   if (!navigator.mediaDevices.getDisplayMedia) {
     throw new Error("Screen sharing is not supported on this device");
@@ -342,7 +397,11 @@ export async function startScreenShare(): Promise<void> {
       throw err;
     }
   } catch (err) {
-    transportState.error = err instanceof Error ? err.message : String(err);
+    // Set error with auto-clear: permission errors should not persist
+    // indefinitely on screen. The user is still in the call after screen share
+    // startup fails, so the error clears when they retry or when the timer
+    // expires.
+    setErrorWithAutoClear(getErrorMessage(err));
     throw err;
   }
 }

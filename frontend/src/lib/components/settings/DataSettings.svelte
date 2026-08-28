@@ -26,6 +26,8 @@
     type BackupFile,
     type BackupSummary,
   } from "$lib/transport/sync.svelte";
+  import { roomsStore } from "$lib/rooms.svelte";
+  import { resolveDmRoomDisplayName } from "$lib/dm-display-name";
 
   interface Props {
     activeTab?: string;
@@ -37,11 +39,42 @@
   let metricsError = $state(false);
   let confirmErase = $state(false);
 
+  /**
+   * Enhance room names in metrics by resolving DM rooms to their
+   * counterparty's display name instead of the raw room code.
+   */
+  function enhanceMetricsWithDmNames(m: StorageMetrics): StorageMetrics {
+    return {
+      ...m,
+      rooms: m.rooms.map((room) => {
+        // Only process if the room name looks like a DM room code.
+        if (!room.name.startsWith("dm-")) {
+          return room;
+        }
+        // Look up the DMRoom record by room code to get participantDid.
+        const dmRoom = roomsStore.dmRooms.find(
+          (r) => r.roomCode === room.name
+        );
+        // Resolve the display name using the helper.
+        const displayName = resolveDmRoomDisplayName(
+          room.name,
+          dmRoom,
+          roomsStore.phonebook
+        );
+        return {
+          ...room,
+          name: displayName,
+        };
+      }),
+    };
+  }
+
   $effect(() => {
     if (activeTab === "data" && !metrics && !metricsError) {
       getStorageMetrics()
         .then((m) => {
-          metrics = m;
+          // Enhance room names with DM counterparty display names.
+          metrics = enhanceMetricsWithDmNames(m);
         })
         .catch((err) => {
           // Failing silently left "Loading metrics..." forever - and with it

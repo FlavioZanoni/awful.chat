@@ -45,7 +45,7 @@ export interface Room {
   participantLastSeen?: Record<string, number>; // DID -> timestamp of last seen
 }
 
-const PARTICIPANT_INACTIVE_DAYS = 7;
+const PARTICIPANT_INACTIVE_DAYS = 30;
 const PARTICIPANT_INACTIVE_MS = PARTICIPANT_INACTIVE_DAYS * 24 * 60 * 60 * 1000;
 
 export interface DMRoom extends Room {
@@ -1439,8 +1439,20 @@ export async function cleanupInactiveParticipants(
     const cutoff = Date.now() - PARTICIPANT_INACTIVE_MS;
     const participantLastSeen = room.participantLastSeen ?? {};
     const participants = new Set(room.participants ?? []);
+    const now = Date.now();
     for (const peerId of participants) {
-      const lastSeen = participantLastSeen[peerId] ?? 0;
+      // A missing timestamp must not mean infinitely stale: nothing recorded
+      // one until this feature shipped, so reading it as 0 would delete every
+      // existing member on the first pass. It is BACKFILLED rather than merely
+      // defaulted, because a default that is never written makes such a member
+      // immortal - each pass would re-read undefined, re-default to now, and
+      // the 30 day rule could never apply to anyone who left and never came
+      // back. Writing it starts their clock here instead.
+      let lastSeen = participantLastSeen[peerId];
+      if (lastSeen === undefined) {
+        lastSeen = now;
+        participantLastSeen[peerId] = now;
+      }
       if (lastSeen < cutoff) {
         participants.delete(peerId);
         delete participantLastSeen[peerId];

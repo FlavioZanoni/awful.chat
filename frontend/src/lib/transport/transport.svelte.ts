@@ -1,5 +1,6 @@
 import { MediasoupVideo } from "./mediasoup";
 import { identityStore } from "../identity/identity.svelte";
+import { getQuotableText } from "../quote-helper";
 import { _noteRefused, _withRefused } from "./refused-lamports";
 import { blindValue } from "../storage-crypto";
 import {
@@ -2296,6 +2297,11 @@ _transport.on("roomPeers", (room, peerIds) => {
   if (!_transport.rooms().includes(room)) return;
   for (const pid of peerIds) {
     if (!_peerIdToDid.has(pid)) continue;
+    const did = _peerIdToDid.get(pid);
+    if (!did) continue;
+    // Record that this participant is seen now. addRoomParticipant handles both
+    // new additions and updating the timestamp for existing participants.
+    addRoomParticipant(room, did).catch(() => {});
     _sendDigestForRoom(pid, room).catch(() => {});
   }
 });
@@ -2867,6 +2873,16 @@ export async function connect() {
  */
 async function _joinSavedRooms(): Promise<void> {
   const rooms = await getAllRooms();
+  // Clean up inactive participants once per session, early. This runs after
+  // connecting but before the user opens any room, so it avoids blocking the
+  // hot path of opening a room. Members not seen in 30 days are removed; this
+  // prevents the participant list from growing unbounded over time.
+  for (const room of rooms) {
+    const removed = await cleanupInactiveParticipants(room.roomCode);
+    if (removed.length > 0) {
+      console.log("[room] removed inactive participants from", room.roomCode, ":", removed);
+    }
+  }
   for (const room of rooms) {
     // DMs are handled by joinPhonebookDmRooms, which derives the room code
     // from the DID rather than trusting a stored one.
@@ -2930,14 +2946,7 @@ export async function joinRoom(roomCode: string): Promise<boolean> {
     transportState.peers = _transport.peers();
     const selfDid = identityStore.did ?? _transport.selfId();
     const savedParticipants = await getRoomParticipants(roomCode);
-    // Clean up inactive participants (not seen in 7 days)
-    const removedInactive = await cleanupInactiveParticipants(roomCode);
-    if (removedInactive.length > 0) {
-      console.log("[room] removed inactive participants:", removedInactive);
-    }
-    const participants = new Set(
-      savedParticipants.filter((p) => !removedInactive.includes(p))
-    );
+    const participants = new Set(savedParticipants);
     participants.add(selfDid);
     if (!stillCurrent()) return false;
     transportState.roomUsers = [
@@ -3188,10 +3197,13 @@ export async function sendMessage(
 }
 
 export async function sendReply(text: string, target: Message): Promise<void> {
-  const snapshot =
-    target.content.length > 160
-      ? `${target.content.slice(0, 157)}...`
-      : target.content;
+  // The same helper the composer preview and the render path use. Building the
+  // snapshot by hand here left an image-only target quoting an EMPTY string,
+  // which is the bug this fixes - and this is the ordinary text-reply path, so
+  // it is the one that matters most. A peer holding the original still renders
+  // it correctly (quoted() prefers the held message), but anyone receiving it
+  // by backfill, or on a fresh device, has only this snapshot to go on.
+  const snapshot = getQuotableText(target);
   await sendMessage(text, {
     type: MessageType.Reply,
     replyTo: {

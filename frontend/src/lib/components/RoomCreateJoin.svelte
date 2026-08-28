@@ -128,7 +128,8 @@
             </CardDescription>
           </div>
 
-          {#if displayPrefs.showConnectionInfo}
+          <!-- Connection status pill: always shown, not gated on showConnectionInfo.
+               That setting controls only the floating panel on the right. -->
           {#if relayConnected}
             <div
               class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-muted text-xs"
@@ -143,7 +144,6 @@
               <span class="size-2 rounded-full bg-amber-300"></span>
               <span class="text-muted-foreground">Connecting...</span>
             </div>
-          {/if}
           {/if}
         </div>
       </CardHeader>

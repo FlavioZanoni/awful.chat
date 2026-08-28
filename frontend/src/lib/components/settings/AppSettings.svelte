@@ -378,9 +378,9 @@ async function loadLocalFonts(): Promise<void> {
     <div class="flex flex-col gap-1 min-w-0">
       <span class="text-xs font-mono">Connection &amp; relay indicators</span>
       <span class="text-xs font-mono text-muted-foreground leading-relaxed">
-        Off hides the transport status overlay, the "Relayed" peer badges, the
-        sidebar connection dot and the room "Connected" pill. Turn it on to see
-        relay and connection state.
+        Off hides the floating call-stats panel on the right, which shows relay
+        state and per-peer connection details. The connection dot, the room
+        "Connected" pill and the "Relayed" badges are not affected.
       </span>
     </div>
     <Switch
