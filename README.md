@@ -9,6 +9,11 @@
   No accounts, no phone numbers, no server that can read your messages.
 </p>
 
+<p align="center">
+  <a href="https://github.com/awful-org/awful.chat/actions/workflows/ci.yml"><img src="https://github.com/awful-org/awful.chat/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://github.com/awful-org/awful.chat/actions/workflows/security.yml"><img src="https://github.com/awful-org/awful.chat/actions/workflows/security.yml/badge.svg" alt="security"></a>
+</p>
+
 Your identity is a BIP39 mnemonic that never leaves your device. Messages
 travel peer-to-peer over libp2p with end-to-end encryption, files move
 browser-to-browser over WebTorrent, and voice is direct WebRTC. The servers
