@@ -189,8 +189,14 @@ self.addEventListener("fetch", (event) => {
   // Without this the app simply does not open offline: precacheAndRoute only
   // matches exact URLs, so /app and /r/<code> miss the cache entirely even
   // though every message already lives on the device.
+  // A path with a file extension is a real file, not an app route:
+  // /third-party-notices.txt opened in a new tab is a navigation too, and
+  // answering it with the shell showed the app where the licenses should be.
+  // nginx already falls back to index.html for anything it cannot find.
   if (request.mode === "navigate") {
-    event.respondWith(handleNavigation(request));
+    if (!/\.[a-z0-9]+$/i.test(new URL(request.url).pathname)) {
+      event.respondWith(handleNavigation(request));
+    }
     return;
   }
 
