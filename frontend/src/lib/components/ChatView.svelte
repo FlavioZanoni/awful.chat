@@ -98,6 +98,7 @@
   import type { HostApi } from "$lib/plugins/api";
   import { seededRandom } from "$lib/utils";
   import { getQuotableText } from "$lib/quote-helper";
+  import { createInvite, formatShortCode } from "$lib/invite";
 
   $effect(() => {
     loadProfile();
@@ -846,8 +847,32 @@
     void addFilesToStage(e.dataTransfer.files);
   }
 
+  let copyMenuOpen = $state(false);
+  // Header short code: minted for THIS room on first use and dropped on a
+  // room switch, since it aliases one room code.
+  let shortCode = $state<string | null>(null);
+  let shortCodeFor = $state<string | null>(null);
+  let shortCodeError = $state<string | null>(null);
+
   async function copyCode() {
+    copyMenuOpen = false;
     await navigator.clipboard.writeText(window.location.href);
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+  }
+
+  async function copyShortCode() {
+    copyMenuOpen = false;
+    shortCodeError = null;
+    if (shortCodeFor !== roomCode) shortCode = null;
+    try {
+      shortCode ??= (await createInvite(roomCode)).code;
+      shortCodeFor = roomCode;
+    } catch {
+      shortCodeError = "Relay not reachable";
+      return;
+    }
+    await navigator.clipboard.writeText(formatShortCode(shortCode));
     copied = true;
     setTimeout(() => (copied = false), 2000);
   }
@@ -1354,10 +1379,15 @@
 </script>
 
 <svelte:window
-  onclick={closeUserMenu}
+  onclick={(e) => {
+    closeUserMenu();
+    if (copyMenuOpen && !(e.target as HTMLElement).closest("[data-copy-menu]"))
+      copyMenuOpen = false;
+  }}
   onkeydown={(e) => {
     if (e.key === "Escape") {
       closeUserMenu();
+      copyMenuOpen = false;
       reactionPickerFor = null;
       activeMessageId = null;
     }
@@ -1424,24 +1454,60 @@
       </div>
       <div class="flex items-center gap-2 shrink-0">
         {#if !isDmChat}
-          <Tip text={copied ? "Copied" : "Copy room code"}>
-            {#snippet children(props)}
-          <button
-            {...props}
-            type="button"
-            onclick={copyCode}
-            aria-label="Copy room code"
-            class="hidden sm:flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <code>{roomCode}</code>
-            {#if copied}
-              <Check class="size-3 text-primary" />
-            {:else}
-              <Copy class="size-3 mb-0.5" />
+          <div class="relative hidden sm:block" data-copy-menu>
+            <Tip text={copied ? "Copied" : "Copy invite"}>
+              {#snippet children(props)}
+            <button
+              {...props}
+              type="button"
+              onclick={() => (copyMenuOpen = !copyMenuOpen)}
+              aria-label="Copy invite"
+              aria-haspopup="menu"
+              aria-expanded={copyMenuOpen}
+              class="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <code>{roomCode}</code>
+              {#if copied}
+                <Check class="size-3 text-primary" />
+              {:else}
+                <Copy class="size-3 mb-0.5" />
+              {/if}
+            </button>
+              {/snippet}
+            </Tip>
+            {#if copyMenuOpen}
+              <div
+                role="menu"
+                class="absolute right-0 top-full mt-2 z-20 w-56 rounded-lg border border-border bg-popover text-popover-foreground shadow-md p-1"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onclick={copyCode}
+                  class="w-full text-left rounded-md px-2 py-1.5 text-sm hover:bg-muted cursor-pointer"
+                >
+                  Copy link
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onclick={copyShortCode}
+                  class="w-full text-left rounded-md px-2 py-1.5 text-sm hover:bg-muted cursor-pointer"
+                >
+                  Copy short code
+                  <span class="block text-xs text-muted-foreground">
+                    {#if shortCode && shortCodeFor === roomCode}
+                      {formatShortCode(shortCode)} - works for 5 minutes
+                    {:else if shortCodeError}
+                      {shortCodeError}
+                    {:else}
+                      Works for 5 minutes
+                    {/if}
+                  </span>
+                </button>
+              </div>
             {/if}
-          </button>
-            {/snippet}
-          </Tip>
+          </div>
         {/if}
         {#if !inCall}
           <Tip text="Join call">
