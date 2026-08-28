@@ -9,7 +9,7 @@ import { MessageType, type Message } from "$lib/types/message";
  * and sent result always agree on what appears in the quote.
  */
 export function getQuotableText(msg: Message): string {
-  // If content exists and is not a URL (from GIF picker), use it
+  // Text quotes as itself; a bare image link (the GIF picker) does not.
   if (msg.content && !isUrlLike(msg.content)) {
     return trimContent(msg.content);
   }
@@ -34,9 +34,19 @@ function trimContent(text: string): string {
 }
 
 /**
- * Detect whether a string is a URL. Used to identify GIF/image URLs from the
- * GIF picker, which sets the message content to a bare URL.
+ * A bare image link is what the GIF picker sends, and MsgRender renders it as
+ * the picture rather than the text (same rule as its isGifUrl: the whole
+ * message is the URL and the pathname ends in .gif/.webp). Any other link is
+ * ordinary text and quotes as itself - a shared article is not an "[image]".
  */
 function isUrlLike(text: string): boolean {
-  return text.startsWith("http://") || text.startsWith("https://");
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+    return false;
+  }
+  try {
+    return /\.(gif|webp)$/i.test(new URL(trimmed).pathname);
+  } catch {
+    return false;
+  }
 }

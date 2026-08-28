@@ -45,10 +45,16 @@ describe("quote helper", () => {
     expect(getQuotableText(msg)).toBe("[image]");
   });
 
-  it("returns [image] for HTTP URLs too", () => {
-    const httpUrl = "http://example.com/image.png";
+  it("returns [image] for a bare http gif/webp link too", () => {
+    const httpUrl = "http://example.com/image.webp?w=200";
     const msg = makeMessage({ content: httpUrl });
     expect(getQuotableText(msg)).toBe("[image]");
+  });
+
+  it("quotes a shared link as itself - only image links are pictures", () => {
+    const link = "https://example.com/some-article";
+    const msg = makeMessage({ content: link });
+    expect(getQuotableText(msg)).toBe(link);
   });
 
   it("returns [image] for empty messages with no attachments", () => {
@@ -162,8 +168,8 @@ describe("quote helper", () => {
   });
 
   it("distinguishes between URLs and text mentioning http", () => {
-    // A proper URL starting with https:// is treated as image
-    const urlMsg = makeMessage({ content: "https://example.com/image" });
+    // A bare image URL is treated as the picture it renders as
+    const urlMsg = makeMessage({ content: "https://example.com/image.gif" });
     expect(getQuotableText(urlMsg)).toBe("[image]");
 
     // Text that mentions https but doesn't start with it is preserved
