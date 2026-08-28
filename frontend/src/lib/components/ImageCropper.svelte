@@ -1,17 +1,17 @@
 <script lang="ts">
   /**
-   * Interactive crop editor. The image sits behind a fixed crop frame; the
-   * user pans it by dragging and zooms with the slider or the wheel. Apply
-   * emits a normalized crop rectangle - the heavy pixel work happens in the
-   * caller through `cropImageToDataUrl`.
+   * Interactive crop editor. The image sits behind a fixed crop frame; the user
+   * pans it by dragging, zooms with the slider or the wheel, and rotates it with
+   * the rotation slider. Apply emits a {@link CropView} - the heavy pixel work
+   * happens in the caller through `cropImageToDataUrl`.
    *
    * An animated GIF keeps playing while it is framed, so the user sees exactly
    * what they crop.
    */
-  import { RotateCcw } from "@lucide/svelte";
+  import { RotateCcw, RotateCw } from "@lucide/svelte";
   import Button from "$lib/components/ui/button/button.svelte";
-  import type { CropRect } from "$lib/crop";
-  import { coverBaseScale, clampOffset, rectFromView } from "$lib/crop-geometry";
+  import type { CropView } from "$lib/crop";
+  import { coverScale, clampPan } from "$lib/crop-geometry";
 
   interface Props {
     src: string;
@@ -20,7 +20,7 @@
     /** Show the frame as a circle (avatar) instead of a rectangle (banner). */
     circle?: boolean;
     onCancel: () => void;
-    onApply: (rect: CropRect) => void;
+    onApply: (view: CropView) => void;
     /** True while the caller re-encodes the crop. */
     busy?: boolean;
   }
@@ -31,35 +31,42 @@
   // Frame footprint on screen, fitted into the dialog content area.
   const MAX_W = 288;
   const MAX_H = 232;
-  const frameW = $derived(
-    Math.round(Math.min(MAX_W, MAX_H * aspect))
-  );
+  const frameW = $derived(Math.round(Math.min(MAX_W, MAX_H * aspect)));
   const frameH = $derived(Math.round(frameW / aspect));
 
   const MAX_ZOOM = 4;
   let natW = $state(0);
   let natH = $state(0);
-  let baseScale = $state(1);
   let zoom = $state(1);
-  let offsetX = $state(0);
-  let offsetY = $state(0);
+  let angleDeg = $state(0);
+  let panX = $state(0);
+  let panY = $state(0);
   let loadError = $state(false);
 
+  const baseScale = $derived(coverScale(natW, natH, frameW, frameH, angleDeg));
   const scale = $derived(baseScale * zoom);
   const ready = $derived(natW > 0 && natH > 0);
 
-  function recenter() {
-    const dispW = natW * scale;
-    const dispH = natH * scale;
-    offsetX = clampOffset((frameW - dispW) / 2, dispW, frameW);
-    offsetY = clampOffset((frameH - dispH) / 2, dispH, frameH);
+  function currentView(): CropView {
+    return { natW, natH, frameW, frameH, scale, panX, panY, angleDeg };
   }
 
-  function reset() {
+  // Whenever the scale or the angle changes, the pan can fall outside the
+  // covered range - pull it back in. clampPan is idempotent, so this settles.
+  $effect(() => {
     if (!ready) return;
-    baseScale = coverBaseScale(natW, natH, frameW, frameH);
+    const c = clampPan(currentView());
+    if (Math.abs(c.panX - panX) > 1e-6 || Math.abs(c.panY - panY) > 1e-6) {
+      panX = c.panX;
+      panY = c.panY;
+    }
+  });
+
+  function reset() {
     zoom = 1;
-    recenter();
+    angleDeg = 0;
+    panX = 0;
+    panY = 0;
   }
 
   function onImgLoad(e: Event) {
@@ -70,23 +77,20 @@
     if (!loadError) reset();
   }
 
-  // Keep the frame centre fixed while zooming so the image does not jump.
-  function applyZoom(nextZoom: number) {
-    const clamped = Math.min(MAX_ZOOM, Math.max(1, nextZoom));
-    const oldScale = scale;
-    const newScale = baseScale * clamped;
-    const focalX = (frameW / 2 - offsetX) / oldScale;
-    const focalY = (frameH / 2 - offsetY) / oldScale;
-    zoom = clamped;
-    const dispW = natW * newScale;
-    const dispH = natH * newScale;
-    offsetX = clampOffset(frameW / 2 - focalX * newScale, dispW, frameW);
-    offsetY = clampOffset(frameH / 2 - focalY * newScale, dispH, frameH);
+  function applyZoom(next: number) {
+    zoom = Math.min(MAX_ZOOM, Math.max(1, next));
   }
 
   function onWheel(e: WheelEvent) {
     e.preventDefault();
     applyZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+  }
+
+  function rotateBy(delta: number) {
+    let a = (angleDeg + delta) % 360;
+    if (a > 180) a -= 360;
+    if (a < -180) a += 360;
+    angleDeg = a;
   }
 
   let dragging = false;
@@ -103,10 +107,13 @@
 
   function onPointerMove(e: PointerEvent) {
     if (!dragging) return;
-    const dispW = natW * scale;
-    const dispH = natH * scale;
-    offsetX = clampOffset(offsetX + (e.clientX - lastX), dispW, frameW);
-    offsetY = clampOffset(offsetY + (e.clientY - lastY), dispH, frameH);
+    const c = clampPan({
+      ...currentView(),
+      panX: panX + (e.clientX - lastX),
+      panY: panY + (e.clientY - lastY),
+    });
+    panX = c.panX;
+    panY = c.panY;
     lastX = e.clientX;
     lastY = e.clientY;
   }
@@ -118,9 +125,7 @@
 
   function apply() {
     if (!ready) return;
-    onApply(
-      rectFromView({ natW, natH, frameW, frameH, scale, offsetX, offsetY })
-    );
+    onApply(currentView());
   }
 </script>
 
@@ -154,14 +159,18 @@
           draggable="false"
           onload={onImgLoad}
           onerror={() => (loadError = true)}
-          class="pointer-events-none absolute left-0 top-0 max-w-none origin-top-left"
-          style="width:{natW}px;height:{natH}px;transform:translate({offsetX}px,{offsetY}px) scale({scale});"
+          class="pointer-events-none absolute max-w-none"
+          style="width:{natW}px;height:{natH}px;left:{(frameW - natW) /
+            2}px;top:{(frameH - natH) /
+            2}px;transform-origin:center;transform:translate({panX}px,{panY}px) rotate({angleDeg}deg) scale({scale});"
         />
       </div>
     </div>
 
     <div class="flex w-full items-center gap-3 px-1">
-      <span class="text-xs font-mono text-muted-foreground select-none">Zoom</span>
+      <span class="w-12 text-xs font-mono text-muted-foreground select-none"
+        >Zoom</span
+      >
       <input
         type="range"
         min="1"
@@ -181,6 +190,32 @@
         class="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40"
       >
         <RotateCcw class="size-4" />
+      </button>
+    </div>
+
+    <div class="flex w-full items-center gap-3 px-1">
+      <span class="w-12 text-xs font-mono text-muted-foreground select-none"
+        >Rotate</span
+      >
+      <input
+        type="range"
+        min="-180"
+        max="180"
+        step="1"
+        value={angleDeg}
+        oninput={(e) => (angleDeg = Number((e.target as HTMLInputElement).value))}
+        disabled={!ready}
+        aria-label="Rotate"
+        class="h-1.5 flex-1 cursor-pointer accent-primary"
+      />
+      <button
+        type="button"
+        onclick={() => rotateBy(90)}
+        disabled={!ready}
+        aria-label="Rotate 90 degrees"
+        class="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40"
+      >
+        <RotateCw class="size-4" />
       </button>
     </div>
   {/if}

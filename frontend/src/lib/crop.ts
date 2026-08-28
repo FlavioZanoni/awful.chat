@@ -1,23 +1,37 @@
 /**
  * Crop an image or an animated GIF to a fixed output size.
  *
- * A static image is drawn once onto a canvas and exported as WebP. An animated
- * GIF is decoded frame by frame, each full frame is composited (GIF frames are
- * patches with disposal rules), cropped, and the sequence is re-encoded as a
- * new GIF so the animation survives the crop.
+ * The cropper shows the image behind a fixed frame; the user pans, zooms, and
+ * rotates it. That view is described by a {@link CropView} - an absolute scale,
+ * a pan of the image center, and a rotation angle. The pipeline reproduces the
+ * exact same transform on a canvas, so what the user frames is what they get.
  *
- * The crop rectangle is normalized to the natural image size, so the caller
- * (the cropper UI) never needs the real pixel dimensions.
+ * A static image is rendered once and exported as WebP. An animated GIF is
+ * decoded frame by frame, each full frame is composited (GIF frames are patches
+ * with disposal rules), rendered through the same transform, and the sequence
+ * is re-encoded, so the animation survives the crop.
  */
 import { parseGIF, decompressFrames, type ParsedFrame } from "gifuct-js";
 import { GIFEncoder, quantize, applyPalette } from "gifenc";
 
-/** A crop region in [0,1] coordinates, relative to the natural image size. */
-export interface CropRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+/**
+ * The cropper view. Pan and angle place the image inside the crop frame; the
+ * frame maps onto the output. The transform is applied about the image center.
+ */
+export interface CropView {
+  /** Natural image size in pixels. */
+  natW: number;
+  natH: number;
+  /** Crop frame size in pixels, as shown on screen. Same aspect as the output. */
+  frameW: number;
+  frameH: number;
+  /** Absolute display scale applied to the natural image. */
+  scale: number;
+  /** Image center offset from the frame center, in frame pixels. */
+  panX: number;
+  panY: number;
+  /** Rotation in degrees, clockwise. */
+  angleDeg: number;
 }
 
 export interface CropTarget {
@@ -31,9 +45,6 @@ export interface CropTarget {
    */
   maxBytes: number;
 }
-
-/** The full crop region - the identity crop that selects the whole image. */
-export const FULL_CROP: CropRect = { x: 0, y: 0, w: 1, h: 1 };
 
 function isGifBytes(b: Uint8Array): boolean {
   // "GIF87a" or "GIF89a"
@@ -80,10 +91,33 @@ function get2d(
   return ctx;
 }
 
+/**
+ * Draw `source` into the output canvas with the cropper's transform. The output
+ * canvas is the crop frame scaled to the output size; inside it the image is
+ * translated, rotated, and scaled about its center - the same as the CSS
+ * transform the cropper shows.
+ */
+function renderView(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource & { width: number; height: number },
+  view: CropView,
+  outW: number,
+  outH: number
+): void {
+  ctx.clearRect(0, 0, outW, outH);
+  ctx.save();
+  ctx.scale(outW / view.frameW, outH / view.frameH);
+  ctx.translate(view.frameW / 2 + view.panX, view.frameH / 2 + view.panY);
+  ctx.rotate((view.angleDeg * Math.PI) / 180);
+  ctx.scale(view.scale, view.scale);
+  ctx.drawImage(source, -source.width / 2, -source.height / 2);
+  ctx.restore();
+}
+
 async function cropStatic(
   bytes: Uint8Array,
   type: string,
-  rect: CropRect,
+  view: CropView,
   target: CropTarget
 ): Promise<string> {
   // Decode through a same-origin blob URL. Drawing a cross-origin <img>
@@ -101,17 +135,7 @@ async function cropStatic(
     canvas.width = target.outWidth;
     canvas.height = target.outHeight;
     const ctx = get2d(canvas);
-    ctx.drawImage(
-      img,
-      rect.x * img.naturalWidth,
-      rect.y * img.naturalHeight,
-      rect.w * img.naturalWidth,
-      rect.h * img.naturalHeight,
-      0,
-      0,
-      target.outWidth,
-      target.outHeight
-    );
+    renderView(ctx, img, view, target.outWidth, target.outHeight);
 
     const webp = canvas.toDataURL("image/webp", 0.92);
     // A browser without WebP encode returns a PNG data URL from the WebP call.
@@ -125,7 +149,7 @@ function encodeGif(
   frames: ParsedFrame[],
   fullW: number,
   fullH: number,
-  rect: CropRect,
+  view: CropView,
   outW: number,
   outH: number
 ): Uint8Array {
@@ -141,11 +165,6 @@ function encodeGif(
   out.width = outW;
   out.height = outH;
   const octx = get2d(out, true);
-
-  const sx = rect.x * fullW;
-  const sy = rect.y * fullH;
-  const sw = rect.w * fullW;
-  const sh = rect.h * fullH;
 
   const enc = GIFEncoder();
   let prev: ParsedFrame | null = null;
@@ -180,10 +199,9 @@ function encodeGif(
     );
     fctx.drawImage(patchCanvas, dims.left, dims.top);
 
-    // Every output frame is a complete cropped image, so encode it whole and
-    // restore to a transparent background between frames.
-    octx.clearRect(0, 0, outW, outH);
-    octx.drawImage(full, sx, sy, sw, sh, 0, 0, outW, outH);
+    // Every output frame is a complete transformed image, so encode it whole
+    // and restore to a transparent background between frames.
+    renderView(octx, full, view, outW, outH);
     const rgba = octx.getImageData(0, 0, outW, outH).data;
 
     const palette = quantize(rgba, 256, { format: "rgba4444" });
@@ -205,7 +223,7 @@ function encodeGif(
 
 async function cropGif(
   bytes: Uint8Array,
-  rect: CropRect,
+  view: CropView,
   target: CropTarget
 ): Promise<string> {
   const parsed = parseGIF(bytes.buffer as ArrayBuffer);
@@ -219,26 +237,26 @@ async function cropGif(
   // output and try again, keeping the smallest attempt as the floor.
   const scales = [1, 0.8, 0.6, 0.45];
   let encoded: Uint8Array | null = null;
-  for (const scale of scales) {
-    const outW = Math.max(2, Math.round(target.outWidth * scale));
-    const outH = Math.max(2, Math.round(target.outHeight * scale));
-    encoded = encodeGif(frames, fullW, fullH, rect, outW, outH);
+  for (const s of scales) {
+    const outW = Math.max(2, Math.round(target.outWidth * s));
+    const outH = Math.max(2, Math.round(target.outHeight * s));
+    encoded = encodeGif(frames, fullW, fullH, view, outW, outH);
     if (encoded.length <= target.maxBytes) break;
   }
   return "data:image/gif;base64," + toBase64(encoded!);
 }
 
 /**
- * Crop `src` (a data URL, blob URL, or CORS-reachable URL) to `target` and
+ * Crop `src` (a data URL, blob URL, or CORS-reachable URL) with `view` and
  * return a data URL. An animated GIF stays animated; anything else becomes a
  * static WebP. Rejects when the source cannot be fetched or decoded.
  */
 export async function cropImageToDataUrl(
   src: string,
-  rect: CropRect,
+  view: CropView,
   target: CropTarget
 ): Promise<string> {
   const { bytes, type } = await fetchBytes(src);
-  if (isGifBytes(bytes)) return cropGif(bytes, rect, target);
-  return cropStatic(bytes, type, rect, target);
+  if (isGifBytes(bytes)) return cropGif(bytes, view, target);
+  return cropStatic(bytes, type, view, target);
 }

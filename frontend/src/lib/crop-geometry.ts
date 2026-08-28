@@ -1,68 +1,65 @@
 /**
  * Pure geometry for the image cropper. The cropper shows the image behind a
- * fixed crop frame; the user pans and zooms the image. These helpers convert
- * that view state into a normalized {@link CropRect} and keep the image large
- * enough to always cover the frame.
+ * fixed crop frame; the user pans, zooms, and rotates it. These helpers keep
+ * the image large enough to cover the frame at any angle and keep the pan
+ * inside the covered range.
+ *
+ * The transform is applied about the image center: a natural-image point p
+ * (relative to the center) maps to the frame point
+ *   center + pan + R(angle) * (scale * p).
  *
  * Kept DOM-free so the math is unit-testable.
  */
-import type { CropRect } from "./crop";
+import type { CropView } from "./crop";
 
-export interface ViewState {
-  /** Natural image size in pixels. */
-  natW: number;
-  natH: number;
-  /** Crop frame size in pixels, on screen. */
-  frameW: number;
-  frameH: number;
-  /** Absolute display scale applied to the natural image. */
-  scale: number;
-  /** Image top-left offset within the frame's coordinate space (<= 0). */
-  offsetX: number;
-  offsetY: number;
-}
-
-/** The smallest scale at which the image still covers the whole frame. */
-export function coverBaseScale(
+/**
+ * The smallest scale at which the rotated image still covers the whole frame.
+ *
+ * Rotating the frame by -angle into the image axes, its half-extents grow to
+ * Ux = (fw/2)|cos| + (fh/2)|sin| and Uy = (fw/2)|sin| + (fh/2)|cos|. The scaled
+ * image half-size must reach each, so scale >= 2*Ux/natW and >= 2*Uy/natH.
+ */
+export function coverScale(
   natW: number,
   natH: number,
   frameW: number,
-  frameH: number
+  frameH: number,
+  angleDeg: number
 ): number {
   if (natW <= 0 || natH <= 0) return 1;
-  return Math.max(frameW / natW, frameH / natH);
+  const r = (angleDeg * Math.PI) / 180;
+  const c = Math.abs(Math.cos(r));
+  const s = Math.abs(Math.sin(r));
+  const needX = (frameW * c + frameH * s) / natW;
+  const needY = (frameW * s + frameH * c) / natH;
+  return Math.max(needX, needY);
 }
 
-/** Clamp one offset axis so the scaled image never uncovers the frame. */
-export function clampOffset(
-  offset: number,
-  dispSize: number,
-  frameSize: number
-): number {
-  // The image left/top edge can sit at 0 (flush) down to frameSize - dispSize
-  // (its right/bottom edge flush). When the image is not larger than the frame
-  // both bounds collapse to a centered position.
-  const min = Math.min(0, frameSize - dispSize);
-  if (offset > 0) return 0;
-  if (offset < min) return min;
-  return offset;
-}
+/**
+ * Clamp the pan so the rotated, scaled image still covers the frame. Returns
+ * the corrected pan; an already-valid pan is returned unchanged.
+ */
+export function clampPan(view: CropView): { panX: number; panY: number } {
+  const { natW, natH, frameW, frameH, scale, angleDeg } = view;
+  const r = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const c = Math.abs(cos);
+  const s = Math.abs(sin);
 
-/** Convert the current view into a normalized crop rectangle. */
-export function rectFromView(v: ViewState): CropRect {
-  const dispW = v.natW * v.scale;
-  const dispH = v.natH * v.scale;
-  const ox = clampOffset(v.offsetX, dispW, v.frameW);
-  const oy = clampOffset(v.offsetY, dispH, v.frameH);
+  const ux = (frameW / 2) * c + (frameH / 2) * s;
+  const uy = (frameW / 2) * s + (frameH / 2) * c;
+  const maxDx = Math.max(0, (scale * natW) / 2 - ux);
+  const maxDy = Math.max(0, (scale * natH) / 2 - uy);
 
-  const w = clamp01(v.frameW / dispW);
-  const h = clamp01(v.frameH / dispH);
-  const x = clamp01(-ox / dispW, 1 - w);
-  const y = clamp01(-oy / dispH, 1 - h);
-  return { x, y, w, h };
-}
+  // Rotate the pan into image axes, clamp there, then rotate back.
+  const dx = cos * view.panX + sin * view.panY;
+  const dy = -sin * view.panX + cos * view.panY;
+  const cdx = Math.min(maxDx, Math.max(-maxDx, dx));
+  const cdy = Math.min(maxDy, Math.max(-maxDy, dy));
 
-function clamp01(n: number, max = 1): number {
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return n > max ? max : n;
+  return {
+    panX: cos * cdx - sin * cdy,
+    panY: sin * cdx + cos * cdy,
+  };
 }

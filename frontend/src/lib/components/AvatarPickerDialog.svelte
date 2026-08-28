@@ -7,7 +7,7 @@
   import { Drawer, DrawerContent } from "$lib/components/ui/drawer";
   import { saveAvatar, saveBanner, profileStore } from "$lib/profile.svelte";
   import ImageCropper from "$lib/components/ImageCropper.svelte";
-  import { cropImageToDataUrl, type CropRect, type CropTarget } from "$lib/crop";
+  import { cropImageToDataUrl, type CropView, type CropTarget } from "$lib/crop";
   import {
     searchGifs,
     getTrendingGifs,
@@ -43,12 +43,12 @@
   let cropping = $state(false);
   let cropBusy = $state(false);
 
-  async function applyCrop(rect: CropRect) {
+  async function applyCrop(view: CropView) {
     if (!preview || cropBusy) return;
     cropBusy = true;
     error = undefined;
     try {
-      preview = await cropImageToDataUrl(preview, rect, cropTarget);
+      preview = await cropImageToDataUrl(preview, view, cropTarget);
       cropping = false;
     } catch {
       error =
