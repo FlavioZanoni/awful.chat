@@ -11,7 +11,7 @@ of DataDog's dtln-rs-demo, which wraps the dtln-rs module. Both notices follow.
 Sources:
   https://github.com/DataDog/dtln-rs
   https://github.com/DataDog/dtln-rs-demo
-  https://github.com/FlavioZanoni/dtln-rs-demo   (the fork this build uses)
+  https://github.com/FlavioZanoni/dtln-rs-web    (the fork this build uses)
 
 The DTLN approach these implement was published as "Dual-Signal Transformation
 LSTM Network for Real-Time Noise Suppression":

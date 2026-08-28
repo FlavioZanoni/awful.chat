@@ -118,7 +118,7 @@ cd relay && go test ./...   # rendezvous registry + TURN credentials
 ```
 
 The DTLN noise-suppression worklet is built in a separate repo,
-[dtln-rs-demo](https://github.com/FlavioZanoni/dtln-rs-demo). Both
+[dtln-rs-web](https://github.com/FlavioZanoni/dtln-rs-web). Both
 `frontend/public/audio-worklet.js` and `frontend/src/lib/audio/worklet-url.ts`
 are generated from it - never edit either by hand:
 
