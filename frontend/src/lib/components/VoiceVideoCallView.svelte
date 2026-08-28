@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
   import { Tip } from "$lib/components/ui/tooltip";
   import { formatReactorNames } from "$lib/reaction-names";
   import GifImage from "./GifImage.svelte";
@@ -36,6 +35,10 @@
     toggleCamera,
     toggleMute,
   } from "$lib/transport/call.svelte";
+  import { speakers } from "$lib/speakers.svelte";
+  import { callFocus, autofocusEffect } from "$lib/call-focus.svelte";
+  import { callPipPanel } from "$lib/call-pip.svelte";
+  import { spotlightStore } from "$lib/call-spotlight.svelte";
 
   import {
     Eye,
@@ -57,6 +60,7 @@
     Workflow,
     Puzzle,
     X as XIcon,
+    Tv2,
   } from "@lucide/svelte";
   import { Check, Columns2, MessageSquare, MonitorIcon, Rows2, SlidersHorizontal, Users as UsersIcon, UserX } from "@lucide/svelte";
 import { profileStore, loadProfile } from "$lib/profile.svelte";
@@ -239,76 +243,6 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     if (peerId) await openDmPanel(peerId);
   }
 
-  let speakingPeers = $state(new Set<string>());
-  const analysers = new Map<
-    string,
-    {
-      analyser: AnalyserNode;
-      source: MediaStreamAudioSourceNode;
-      track: MediaStreamTrack;
-    }
-  >();
-
-  // One context for everyone. A context per peer meant every track event closed
-  // and reopened all of them, and browsers cap how many can exist at once - once
-  // that cap was hit the constructor threw and the ring never came back.
-  let sharedCtx: AudioContext | null = null;
-
-  function speakerCtx(): AudioContext {
-    if (!sharedCtx || sharedCtx.state === "closed") {
-      sharedCtx = new AudioContext();
-    }
-    // A context created without a user gesture, or suspended while the tab sat
-    // in the background, reports silence until it is resumed - which is the
-    // other way the ring used to stop for good.
-    if (sharedCtx.state === "suspended") sharedCtx.resume().catch(() => {});
-    return sharedCtx;
-  }
-
-  function startSpeakerDetection(peerId: string, track: MediaStreamTrack) {
-    const existing = analysers.get(peerId);
-    if (existing) {
-      // Same track and still live: nothing to do. A track that has ended (the
-      // mic was restarted underneath us) has to be rewired, not kept.
-      if (existing.track === track && track.readyState === "live") return;
-      stopSpeakerDetection(peerId);
-    }
-    if (track.readyState !== "live") return;
-    try {
-      const ctx = speakerCtx();
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
-      const source = ctx.createMediaStreamSource(new MediaStream([track]));
-      source.connect(analyser);
-      analysers.set(peerId, { analyser, source, track });
-    } catch {
-      // ignore
-    }
-  }
-
-  function stopSpeakerDetection(peerId: string) {
-    const entry = analysers.get(peerId);
-    if (!entry) return;
-    entry.source.disconnect();
-    analysers.delete(peerId);
-    lastLoudAt.delete(peerId);
-    speakingPeers = new Set([...speakingPeers].filter((p) => p !== peerId));
-  }
-
-  let rafId: number | null = null;
-
-  // Speech has gaps between syllables, so a bare per-frame threshold makes the
-  // ring strobe. Hold it on briefly after the last loud frame, and use a lower
-  // threshold to stay on than to switch on.
-  const SPEAKING_HOLD_MS = 500;
-  // Average byte-frequency amplitude (0-255). Tuned DOWN by live testing:
-  // at 5/2 the ring still missed quiet talkers and soft consonants, reading
-  // as "not speaking" mid-sentence. Noise suppression upstream (DTLN) keeps
-  // the floor near zero, so a low trigger is safe.
-  const SPEAKING_ON = 3;
-  const SPEAKING_OFF = 1;
-  const lastLoudAt = new Map<string, number>();
-
   // Peers whose voice ICE actually completed - a roster tile without a track
   // AND without this is still connecting, and must not render as present.
   let iceConnectedPeers = $state(new Set<string>());
@@ -331,104 +265,13 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     return () => _transport?.off("status", onStatus);
   });
 
-  // Hoisted: allocating a fresh buffer per animation frame churned the GC.
-  const speakerBuf = new Uint8Array(512);
-  // Analysing at 60fps buys nothing over 10Hz for a 500ms-hold ring; the rAF
-  // loop stays (it pauses in hidden tabs) but the FFT reads are throttled.
-  const SPEAKER_POLL_MS = 100;
-  let nextSpeakerPollAt = 0;
-
-  function pollSpeakers() {
-    const pollNow = performance.now();
-    if (pollNow < nextSpeakerPollAt) {
-      rafId = requestAnimationFrame(pollSpeakers);
-      return;
-    }
-    nextSpeakerPollAt = pollNow + SPEAKER_POLL_MS;
-    if (sharedCtx?.state === "suspended") sharedCtx.resume().catch(() => {});
-    const buf = speakerBuf;
-    const now = performance.now();
-    const next = new Set<string>();
-
-    for (const [peerId, { analyser }] of analysers) {
-      analyser.getByteFrequencyData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) sum += buf[i];
-      const avg = sum / buf.length;
-      const threshold = speakingPeers.has(peerId) ? SPEAKING_OFF : SPEAKING_ON;
-      if (avg > threshold) lastLoudAt.set(peerId, now);
-      if (now - (lastLoudAt.get(peerId) ?? -Infinity) < SPEAKING_HOLD_MS) {
-        next.add(peerId);
-      }
-    }
-
-    // This runs every frame: only publish when the set actually changed, or
-    // every consumer re-renders 60 times a second for nothing.
-    const changed =
-      next.size !== speakingPeers.size ||
-      [...next].some((peerId) => !speakingPeers.has(peerId));
-    if (changed) speakingPeers = next;
-
-    rafId = requestAnimationFrame(pollSpeakers);
-  }
-
-  $effect(() => {
-    // Track which peers should have analysers
-    const desiredPeers = new Set<string>();
-
-    // Add remote peers with audio
-    for (const [peerId, p] of participants) {
-      if (p.audioTrack) {
-        desiredPeers.add(peerId);
-      }
-    }
-
-    // Add self if not muted
-    if (!muted && localMicStream) {
-      const track = localMicStream.getAudioTracks()[0];
-      if (track) {
-        desiredPeers.add(selfId());
-      }
-    }
-
-    // Create/update analysers for desired peers
-    for (const peerId of desiredPeers) {
-      const track = peerId === selfId()
-        ? localMicStream?.getAudioTracks()[0]
-        : participants.get(peerId)?.audioTrack;
-      if (track) {
-        startSpeakerDetection(peerId, track);
-      }
-    }
-
-    // Remove analysers for peers no longer desired
-    for (const peerId of [...analysers.keys()]) {
-      if (!desiredPeers.has(peerId)) {
-        stopSpeakerDetection(peerId);
-      }
-    }
-
-    // Start RAF loop if needed
-    if (!rafId && desiredPeers.size > 0) {
-      rafId = requestAnimationFrame(pollSpeakers);
-    }
-    if (rafId && desiredPeers.size === 0) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
-    }
-    // No teardown on re-run: this effect re-runs on every track event, and
-    // tearing every analyser down each time is what left peers without one.
-  });
-
-  onDestroy(() => {
-    if (rafId) cancelAnimationFrame(rafId);
-    rafId = null;
-    for (const peerId of [...analysers.keys()]) {
-      stopSpeakerDetection(peerId);
-    }
-    sharedCtx?.close().catch(() => {});
-    sharedCtx = null;
-  });
+  // Speaker detection is driven from AppView, NOT here. A $effect in this
+  // component dies with it, and this component unmounts the moment the user
+  // navigates away from the call room - which is exactly when the floating
+  // panel needs the speaker data. Driving it here also meant a call ended from
+  // the panel never tore the analysers down, leaking the AudioContext and the
+  // poll loop for the rest of the session. This component only READS
+  // speakers.speaking for its rings.
 
   // ── Video / Audio actions ─────────────────────────────────────────────────
 
@@ -829,10 +672,11 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
 
   // ── Focus ─────────────────────────────────────────────────────────────────
 
-  let focusedTileId = $state<string | null>(null);
+  // Pin state is in callFocus store so it survives navigation away from the
+  // call room. The stage reads callFocus.pinnedTileId to determine what to focus.
   const focusedTile = $derived(
-    focusedTileId
-      ? (visibleTiles.find((t) => t.id === focusedTileId) ?? null)
+    callFocus.pinnedTileId
+      ? (visibleTiles.find((t) => t.id === callFocus.pinnedTileId) ?? null)
       : null
   );
   // A focused screen/transmission/plugin tile is being WATCHED, not glanced
@@ -849,14 +693,15 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   );
   const thumbnailTiles = $derived(
     focusedTile && showThumbnails
-      ? visibleTiles.filter((t) => t.id !== focusedTileId)
+      ? visibleTiles.filter((t) => t.id !== callFocus.pinnedTileId)
       : []
   );
 
+  // Clear the pin if the pinned tile disappears (peer leaves, share ends).
+  // This effect survives navigation away from the call room because the pin
+  // is in the callFocus store, not this component.
   $effect(() => {
-    if (focusedTileId && !tiles.find((t) => t.id === focusedTileId)) {
-      focusedTileId = null;
-    }
+    autofocusEffect(tiles.map((t) => t.id));
   });
 
   // ── Controls auto-hide ────────────────────────────────────────────────────
@@ -1013,7 +858,40 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     if (!panelEl) return;
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else panelEl.requestFullscreen().catch(() => {});
-  } // ── Visibility conditions ─────────────────────────────────────────────────
+  }
+
+  async function toggleBrowserPiP(): Promise<void> {
+    // A TOGGLE, because the control labels itself "Exit picture-in-picture"
+    // once PiP is open. It previously called requestPictureInPicture on every
+    // press, so clicking it to close did nothing at all - the request throws
+    // when PiP is already open for that element and the catch swallowed it.
+    if (document.pictureInPictureElement) {
+      try {
+        await document.exitPictureInPicture();
+      } catch {
+        // Already closing, or the browser refused. Either way the state below
+        // is corrected by the panel's leavepictureinpicture handler.
+      }
+      callPipPanel.browserPip = false;
+      return;
+    }
+
+    // Taken from the shared store, not looked up in the DOM. The element lives
+    // at app level so it exists whether or not the floating panel is mounted -
+    // the stage and the panel are never mounted together, so an element owned
+    // by the panel could never be found from here anyway - and a querySelector
+    // is a second, silently drifting source of truth for the same reference.
+    const pipVideo = spotlightStore.pipVideoElement;
+    if (!pipVideo) return;
+    try {
+      await pipVideo.requestPictureInPicture?.();
+      callPipPanel.browserPip = true;
+    } catch {
+      // User cancelled, or the browser does not support it.
+    }
+  }
+
+  // ── Visibility conditions ─────────────────────────────────────────────────
 
   const nobodyInCall = $derived(callPeerIds.size === 0 && !inCall);
   const othersInCallNotUs = $derived(callPeerIds.size > 0 && !inCall);
@@ -1186,7 +1064,7 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
             src={tile.avatarUrl}
             alt={tile.label}
             class="size-full object-cover"
-            animate={speakingPeers.has(tile.peerId)}
+            animate={speakers.speaking.has(tile.peerId)}
           />
         {:else}
           {tile.label.charAt(0).toUpperCase()}
@@ -1305,7 +1183,7 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
                 src={avatar}
                 alt={label}
                 class="size-full rounded-full object-cover"
-                animate={speakingPeers.has(peerId)}
+                animate={speakers.speaking.has(peerId)}
               />
             {:else}
               {label.charAt(0).toUpperCase()}
@@ -1383,11 +1261,11 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
               focusedTile,
               true,
               focusedTile.kind === "camera" &&
-                speakingPeers.has(focusedTile.peerId),
+                speakers.speaking.has(focusedTile.peerId),
               false,
               false,
               () => {},
-              () => (focusedTileId = null)
+              () => (callFocus.pinnedTileId = null)
             )}
           </div>
           {#if thumbnailTiles.length > 0}
@@ -1398,11 +1276,11 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
                 {@render callTile(
                   tile,
                   false,
-                  tile.kind === "camera" && speakingPeers.has(tile.peerId),
+                  tile.kind === "camera" && speakers.speaking.has(tile.peerId),
                   false,
                   true,
-                  () => (focusedTileId = tile.id),
-                  () => (focusedTileId = null)
+                  () => (callFocus.pinnedTileId = tile.id),
+                  () => (callFocus.pinnedTileId = null)
                 )}
               {/each}
             </div>
@@ -1414,11 +1292,11 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
             {@render callTile(
               tile,
               false,
-              tile.kind === "camera" && speakingPeers.has(tile.peerId),
+              tile.kind === "camera" && speakers.speaking.has(tile.peerId),
               tiles.length === 1,
               false,
-              () => (focusedTileId = tile.id),
-              () => (focusedTileId = null)
+              () => (callFocus.pinnedTileId = tile.id),
+              () => (callFocus.pinnedTileId = null)
             )}
           {/each}
         </div>
@@ -1768,6 +1646,7 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
           "opacity-0 pointer-events-none"
       )}
     >
+    <!-- PiP and fullscreen buttons in the top corners -->
     <Tip text={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}>
       {#snippet children(props)}
     <!-- Worth showing only when it changes anything: some tile with
@@ -1800,6 +1679,23 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
         {/snippet}
       </Tip>
     {/if}
+
+    <!-- Browser PiP button. Clicking requests picture-in-picture on the panel's video element. -->
+    <Tip text={callPipPanel.browserPip ? "Exit picture-in-picture" : "Picture-in-picture"}>
+      {#snippet children(props)}
+        <button
+          {...props}
+          type="button"
+          onclick={toggleBrowserPiP}
+          aria-label={callPipPanel.browserPip ? "Exit picture-in-picture" : "Picture-in-picture"}
+          class="absolute top-3 right-12 sm:top-4 sm:right-12 flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-zinc-900 text-zinc-300 transition-all duration-200 hover:bg-zinc-900 hover:scale-105 z-20 {callPipPanel.browserPip
+            ? 'text-primary'
+            : ''}"
+        >
+          <Tv2 class="size-4" />
+        </button>
+      {/snippet}
+    </Tip>
 
     <button
       {...props}

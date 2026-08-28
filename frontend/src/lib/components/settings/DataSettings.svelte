@@ -27,6 +27,7 @@
     type BackupSummary,
   } from "$lib/transport/sync.svelte";
   import { roomsStore } from "$lib/rooms.svelte";
+  import { transportState } from "$lib/transport/transport.svelte";
   import { resolveDmRoomDisplayName } from "$lib/dm-display-name";
 
   interface Props {
@@ -51,15 +52,11 @@
         if (!room.name.startsWith("dm-")) {
           return room;
         }
-        // Look up the DMRoom record by room code to get participantDid.
-        const dmRoom = roomsStore.dmRooms.find(
-          (r) => r.roomCode === room.name
-        );
-        // Resolve the display name using the helper.
         const displayName = resolveDmRoomDisplayName(
           room.name,
-          dmRoom,
-          roomsStore.phonebook
+          roomsStore.dmRooms,
+          roomsStore.phonebook,
+          transportState.peerNames
         );
         return {
           ...room,

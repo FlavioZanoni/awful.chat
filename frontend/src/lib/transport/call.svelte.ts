@@ -205,6 +205,11 @@ export function leaveCall(): void {
   cancelErrorClear();
   transportState.error = null;
 
+  // Close any open browser PiP window when the call ends.
+  if (typeof document !== "undefined" && document.pictureInPictureElement) {
+    document.exitPictureInPicture().catch(() => {});
+  }
+
   releaseWakeLock();
   if (_presenceHeartbeat) {
     clearInterval(_presenceHeartbeat);

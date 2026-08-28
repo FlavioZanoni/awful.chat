@@ -63,6 +63,21 @@
     removeFromPhonebook,
   } from "$lib/transport/dm.svelte";
   import FloatingDmPanel from "$lib/components/FloatingDmPanel.svelte";
+  import CallPipPanel from "$lib/components/CallPipPanel.svelte";
+  import { updateSpeakerTracks, stopAllSpeakers, resumeAudioContextOnVisibilityChange } from "$lib/speakers.svelte";
+  import { callFocus } from "$lib/call-focus.svelte";
+  import { speakers } from "$lib/speakers.svelte";
+  import { spotlight } from "$lib/spotlight";
+  import { callPipPanel } from "$lib/call-pip.svelte";
+  import type { SpotlightTile } from "$lib/spotlight";
+  import {
+    spotlightStore,
+    buildTilesWithTracking,
+    trackStartTimes,
+    createCanvasPlaceholder,
+  } from "$lib/call-spotlight.svelte";
+  import type { CallState } from "$lib/call-tiles";
+  import { setOnPictureInPictureEnter } from "$lib/plugins/media-session";
 
   const queryClient = new QueryClient();
 
@@ -167,6 +182,44 @@
     if (!identityStore.isUnlocked) return;
     consumeSharedIfPresent().catch(() => {});
   });
+
+  // Speaker detection must run while in call, not just while the stage is mounted.
+  // The stage unmounts when the user navigates away from the call room, but speaker
+  // detection must continue for the floating panel to show who is speaking.
+  $effect(() => {
+    if (!transportState.inCall) {
+      stopAllSpeakers();
+      return;
+    }
+    // Update speaker tracks whenever call state changes.
+    // Convert null to undefined for type compatibility.
+    const participants = new Map(
+      Array.from(transportState.participants).map(([peerId, p]) => [
+        peerId,
+        {
+          audioTrack: p.audioTrack ?? undefined,
+          videoTrack: p.videoTrack ?? undefined,
+          screenTrack: p.screenTrack ?? undefined,
+          screenAudioTrack: p.screenAudioTrack ?? undefined,
+        },
+      ])
+    );
+    updateSpeakerTracks(
+      participants,
+      transportState.muted,
+      transportState.localMicStream,
+      selfId()
+    );
+  });
+
+  // Resume audio context when visibility changes (tab becomes active).
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && transportState.inCall) {
+        resumeAudioContextOnVisibilityChange();
+      }
+    });
+  }
 
   let activeRoomCode = $state<string | null>(null);
   let activeRoomName = $state<string>("");
@@ -540,6 +593,169 @@
     if (!uiState.paletteOpenRequested) return;
     uiState.paletteOpenRequested = false;
     if (identityStore.isUnlocked) paletteOpen = true;
+  });
+
+  // Manage the spotlight state: build tiles, calculate spotlight, and manage video.
+  // This is the single source of truth for both the in-app panel and browser PiP.
+
+  // Ticking clock: updates every 250ms while in call.
+  let tickingNow = $state(0);
+  let clockInterval: ReturnType<typeof setInterval> | null = null;
+
+  $effect(() => {
+    if (!transportState.inCall) {
+      if (clockInterval) {
+        clearInterval(clockInterval);
+        clockInterval = null;
+      }
+      return;
+    }
+    if (!clockInterval) {
+      tickingNow = performance.now();
+      clockInterval = setInterval(() => {
+        tickingNow = performance.now();
+      }, 250);
+    }
+    return () => {
+      if (clockInterval) {
+        clearInterval(clockInterval);
+        clockInterval = null;
+      }
+    };
+  });
+
+  // Previous spotlight ID, for fallback (rule 4).
+  let spotlightPrevious = $state<string | null>(null);
+
+  // Build tiles with the unified builder and track start times.
+  const tiles = $derived.by<SpotlightTile[]>(() => {
+    const id = selfId();
+    const callState: CallState = {
+      participants: transportState.participants,
+      localCameraStream: transportState.localCameraStream,
+      localScreenStream: transportState.localScreenStream,
+      cameraOff: transportState.cameraOff,
+      watchingTransmissionPeerId: transportState.watchingTransmissionPeerId,
+      watchingTransmissionProducerId: transportState.watchingTransmissionProducerId,
+      selfId: id,
+      trackStartTimes,
+    };
+    return buildTilesWithTracking(callState);
+  });
+
+  // Calculate spotlight.
+  const spotlightTileId = $derived(
+    spotlight(
+      tiles,
+      callFocus.pinnedTileId,
+      transportState.watchingTransmissionPeerId,
+      speakers,
+      spotlightPrevious,
+      tickingNow
+    )
+  );
+
+  const spotlightTile = $derived(tiles.find((t) => t.id === spotlightTileId));
+
+  // Update the previous spotlight when it changes.
+  $effect(() => {
+    spotlightPrevious = spotlightTileId;
+  });
+
+  // Update the public spotlight store for the panel and PiP to read.
+  $effect(() => {
+    spotlightStore.tiles = tiles;
+    spotlightStore.spotlightTileId = spotlightTileId;
+    spotlightStore.spotlightTile = spotlightTile ?? null;
+  });
+
+  // Bind the PiP video element to the spotlight track.
+  let pipVideoElement: HTMLVideoElement | null = $state(null);
+  $effect(() => {
+    spotlightStore.pipVideoElement = pipVideoElement;
+  });
+
+  // Update both the PiP video and the panel's video on spotlight change.
+  // The spec constraint is: "a spotlight change must swap srcObject on ONE
+  // element, never remount". We update both elements' srcObject but don't
+  // remount either. This keeps browser PiP following along and keeps the
+  // panel displaying the spotlight.
+  // Keyed on the TRACK and the tile id, not the tile object: tiles are
+  // rebuilt whenever participants change, and assigning a fresh MediaStream
+  // to a <video> restarts it (a black frame each time). The stream is kept
+  // and only replaced when what it carries actually changes.
+  const spotlightTrack = $derived(spotlightTile?.videoTrack ?? null);
+  const spotlightKey = $derived(
+    spotlightTile ? `${spotlightTile.id}:${spotlightTrack?.id ?? "avatar"}` : null
+  );
+  const spotlightFit = $derived(
+    spotlightTile?.kind === "camera" ? "cover" : "contain"
+  );
+  let spotlightStream: MediaStream | null = null;
+  let spotlightStreamKey: string | null = null;
+  $effect(() => {
+    if (!pipVideoElement) return;
+    const panelVideoElement = spotlightStore.panelVideoElement;
+    const tile = spotlightTile;
+    if (spotlightKey !== spotlightStreamKey) {
+      spotlightStreamKey = spotlightKey;
+      if (spotlightTrack) {
+        spotlightStream = new MediaStream([spotlightTrack]);
+      } else if (tile) {
+        // No video: a still of the avatar, drawn once per spotlight change.
+        const label =
+          transportState.peerNames.get(
+            peerIdToDid(tile.peerId) || tile.peerId
+          ) ?? tile.peerId.slice(0, 8);
+        spotlightStream = createCanvasPlaceholder(label, label.charAt(0));
+      } else {
+        spotlightStream = null;
+      }
+    }
+    for (const el of [pipVideoElement, panelVideoElement]) {
+      if (!el) continue;
+      if (el.srcObject !== spotlightStream) el.srcObject = spotlightStream;
+      el.style.objectFit = spotlightFit;
+    }
+  });
+
+  // Wire up browser PiP event handlers on the video element.
+  $effect(() => {
+    if (!pipVideoElement) return;
+    const onEnter = () => {
+      callPipPanel.browserPip = true;
+    };
+    const onLeave = () => {
+      callPipPanel.browserPip = false;
+    };
+    pipVideoElement.addEventListener("enterpictureinpicture", onEnter);
+    pipVideoElement.addEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      pipVideoElement?.removeEventListener("enterpictureinpicture", onEnter);
+      pipVideoElement?.removeEventListener("leavepictureinpicture", onLeave);
+    };
+  });
+
+  // Wire up Media Session auto-PiP handler (for Chromium tab switch).
+  // When the browser's Media Session initiates PiP, this handler is called.
+  $effect(() => {
+    if (!transportState.inCall || !pipVideoElement) {
+      setOnPictureInPictureEnter(null);
+      return;
+    }
+
+    const handler = async () => {
+      if (pipVideoElement && pipVideoElement.requestPictureInPicture) {
+        try {
+          await pipVideoElement.requestPictureInPicture();
+          callPipPanel.browserPip = true;
+        } catch (err) {
+          console.warn("Failed to enter PiP via Media Session:", err);
+        }
+      }
+    };
+
+    setOnPictureInPictureEnter(handler);
   });
 
   // The palette cannot navigate on its own: this component owns activeRoomCode,
@@ -1382,6 +1598,24 @@
     with the surface it was opened from is not floating.
   -->
   <FloatingDmPanel onExpand={expandDmPanel} />
+  <CallPipPanel />
+
+  <!--
+    Browser PiP video element: lives at app level so it is available for both
+    the in-app panel and the stage's PiP button (which queries it with the
+    data attribute). Only rendered when in a call. Bound to the spotlight track
+    regardless of whether the panel is showing.
+  -->
+  {#if transportState.inCall}
+    <video
+      bind:this={pipVideoElement}
+      data-call-pip-video
+      class="hidden"
+      autoplay
+      muted
+      playsinline
+    ></video>
+  {/if}
 
   <!-- Also outside the unlocked branch, for the same reason: mounting it once
        here means the palette survives lock/unlock and room switches, and it is

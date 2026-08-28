@@ -1,44 +1,43 @@
-import type { DMRoom, PhonebookEntry } from "./storage";
+import type { DMRoom, PhonebookEntry, Room } from "./storage";
 
 /**
- * Resolve a display name for a DM room.
+ * A display name for a DM room, for surfaces that only hold a room code.
  *
- * For DM rooms, looks up the counterparty's phonebook entry by their DID
- * and returns their nickname. Falls back to a truncated room code if no
- * phonebook entry is found. Non-DM rooms return unchanged.
+ * A DM room usually has no stored `name`, so anything listing rooms by name
+ * falls back to the code and shows "dm-" plus 40 hex characters, which tells
+ * the reader nothing about who it is.
  *
- * @param roomCode - The room's code (starts with "dm-" for direct messages)
- * @param dmRoom - Optional DMRoom object with participantDid
- * @param phonebookEntries - Array of phonebook entries to search
- * @returns The display name (nickname, truncated code, or original name)
+ * The sources are tried in the same order `resolveDmDisplayName` in
+ * dm.svelte.ts uses, because they fail in different situations and the union
+ * is what makes this reliable: the live name map is populated once a peer has
+ * been seen this session; the phonebook nickname survives a reload even when
+ * no profile was ever cached, which is exactly the case a DM from a stranger
+ * hits. Checking only one of them is why this returned a truncated code.
  */
 export function resolveDmRoomDisplayName(
   roomCode: string,
-  dmRoom: DMRoom | null | undefined,
-  phonebookEntries: PhonebookEntry[]
+  rooms: Array<Room | DMRoom>,
+  phonebook: PhonebookEntry[],
+  peerNames: Map<string, string>
 ): string {
-  // Non-DM rooms return the code unchanged - the caller should use room.name
-  // if available, or this function will preserve the original.
-  if (!roomCode.startsWith("dm-")) {
-    return roomCode;
+  if (!roomCode.startsWith("dm-")) return roomCode;
+
+  // The room may be filed under either list depending on how it was created,
+  // so search what the caller gave us rather than assuming dmRooms.
+  const room = rooms.find((r) => r.roomCode === roomCode) as
+    | DMRoom
+    | undefined;
+  const did = room?.participantDid;
+
+  if (did) {
+    const live = peerNames.get(did);
+    if (live) return live;
+
+    const entry = phonebook.find((e) => e.did === did || e.peerId === did);
+    if (entry?.nickname) return entry.nickname;
   }
 
-  // No DM room data means we can't look up participantDid.
-  // Fall back to a truncated code.
-  if (!dmRoom?.participantDid) {
-    return roomCode.slice(0, 12);
-  }
-
-  // Look up the phonebook entry by the participant's DID.
-  // Try DID first (most recent), then peerId for legacy entries.
-  const entry = phonebookEntries.find(
-    (e) => e.did === dmRoom.participantDid || e.peerId === dmRoom.participantDid
-  );
-
-  // Return nickname if found, otherwise truncate the code.
-  if (entry?.nickname) {
-    return entry.nickname;
-  }
-
+  // Nothing resolved. A truncated code is still better than 40 hex
+  // characters, and it stays stable so the row does not jump around.
   return roomCode.slice(0, 12);
 }
