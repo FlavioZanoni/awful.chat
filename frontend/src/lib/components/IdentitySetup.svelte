@@ -74,7 +74,12 @@
   // import lived only in Settings, and Settings needs an unlocked identity -
   // so the one situation a backup exists for (this device is empty, or the
   // phrase is gone) was the one situation it could not be used in.
-  let backupFile = $state<BackupFile | null>(null);
+  // $state.raw, NOT $state. Plain $state deep-proxies the object, and a Proxy
+  // is not structured-cloneable - passing it to applyBackup died inside
+  // IndexedDB with "could not be cloned", so restoring from a file failed at
+  // the last step. Nothing here ever mutates the parsed backup in place; it is
+  // assigned whole and read once, which is exactly what raw state is for.
+  let backupFile = $state.raw<BackupFile | null>(null);
   let backupSummary = $state<BackupSummary | null>(null);
   let backupError = $state<string | null>(null);
   let backupBusy = $state(false);
