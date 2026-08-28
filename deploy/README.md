@@ -22,7 +22,7 @@ connection regardless of whether relaying is eventually used. They also see the
 endpoint addresses for any traffic they relay.
 
 Their server is also an **open relay**, and that is your doing rather than
-theirs: the instance's own `/turn-credentials` endpoint hands 12 hour reusable
+theirs: the instance's own `/turn-credentials` endpoint hands 2 hour reusable
 credentials to anyone who asks (a request with no Origin header at all is
 deliberately allowed, so a plain `curl` gets one), and those credentials work
 on every TURN server in `TURN_URLS`. Anyone who wants one can relay traffic to
@@ -76,7 +76,7 @@ container and a secret, with no checkout of this repository.
    ```
 
    All three are required and compose refuses to start without them. The two
-   machines also need clocks agreeing to within the credential's 12 hour
+   machines also need clocks agreeing to within the credential's 2 hour
    lifetime, since the username IS an expiry timestamp.
 
 2. Open `3478/udp`, `3478/tcp` and the relay range (`49152-50151/udp` by

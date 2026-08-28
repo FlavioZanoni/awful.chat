@@ -201,7 +201,7 @@ docker run --rm -v <project>_relay_data:/data alpine chown -R 1000:1000 /data
 
 `TURN_SECRET` is shared between the relay and coturn. The relay's
 `/turn-credentials` endpoint mints a short-lived HMAC credential per client
-(coturn's REST convention, 12 hour expiry) and coturn verifies it with
+(coturn's REST convention, 2 hour expiry) and coturn verifies it with
 `--use-auth-secret`, so no TURN password ships in the JavaScript bundle.
 
 This is not optional hardening. The bundle used to carry a permanent

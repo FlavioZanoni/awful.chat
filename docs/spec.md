@@ -77,7 +77,10 @@ Key:    HKDF from the identity's ed25519 private key with a purpose label.
 Layout: per row, keyPath + indexed/query fields stay in clear ("clear
         fields"); everything else is one AES-GCM blob (_enc, fresh IV per
         write); ArrayBuffer fields (file bytes, avatars) sealed as raw
-        buffers beside it (_encBytes).
+        buffers beside it (_encBytes). Each blob is bound to its row with
+        AAD ("<store> <primaryKey> [field]", blob marked v: 2), so a blob
+        moved to another row or store fails to open. Blobs written before
+        the marker still open without AAD until their next write.
 Clear fields: messages(id, roomCode, lamport, senderId, type, status),
         attachments add messageId/infoHash, profiles/rooms keep byte
         fields sealed (pfpData/bannerData).
@@ -867,6 +870,15 @@ Two buttons added:
   sync server (the code's own expires field is untrusted input)
 - 128-bit token in the QR (truncated to 8 chars in the manual short code);
   the source verifies it on every ExportRequest before exporting anything
+- The QR carries the source's libp2p peerId (the short code carries chars
+  8-16 of it, after the constant `12D3KooW` prefix: `room8-token8-peer8`).
+  The target only talks to a peer whose Noise-authenticated peerId matches,
+  so a stranger who registers into the ephemeral room first - the relay
+  operator can - is never handed the token and never trusted as the source.
+  Codes from older builds (two parts, or no peerId) are rejected.
+- Imported records are shape-checked (types, sizes, known message types)
+  before they touch IndexedDB; malformed ones are dropped and counted.
+  Signatures are NOT re-verified on import: pre-v3 history could not pass
 - P2P connection via ephemeral rooms
 - Password required for identity sync
 - Data transferred over encrypted WebRTC
