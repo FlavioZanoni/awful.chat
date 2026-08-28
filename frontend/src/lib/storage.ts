@@ -1923,11 +1923,30 @@ export function setAtRestOwner(did: string | null): void {
  *  the next unlock's sweep re-scans and seals it. */
 export function markAtRestSweepNeeded(): void {
   try {
-    localStorage.removeItem(atRestFlagKey());
-    // The unscoped key is what older builds wrote; clear it too so an
-    // upgrade does not inherit a "done" that was never true for this
-    // identity.
-    localStorage.removeItem(ATREST_FLAG_PREFIX);
+    // EVERY identity's flag, not just the current one. The caller that needs
+    // this most is a backup restore from the signup screen, where no identity
+    // is active yet - so _atRestOwner is null and the scoped key we would
+    // clear is not the key the sweep checks after unlock. On a device that had
+    // already migrated this identity, that left "done" standing over freshly
+    // imported plaintext rows: migrateAtRest early-returned, the rows kept
+    // their plaintext roomCode, and isMigrationComplete() suppressed the dual
+    // read that would have found them. Rooms still listed (a plain getAll),
+    // but every message was invisible.
+    // Enumerated with length/key(i), the spec'd API, rather than
+    // Object.keys(localStorage), which relies on the exotic own-property
+    // behaviour real Storage objects happen to have. Keys are collected first
+    // because removing during the walk shifts the indices under it.
+    const stale: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (
+        key &&
+        (key === ATREST_FLAG_PREFIX || key.startsWith(`${ATREST_FLAG_PREFIX}:`))
+      ) {
+        stale.push(key);
+      }
+    }
+    for (const key of stale) localStorage.removeItem(key);
   } catch {
     // Without localStorage the sweep always runs anyway.
   }

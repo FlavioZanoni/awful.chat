@@ -8,6 +8,7 @@ import {
   getMnemonicRecord,
   getWatermark,
   migrateAtRest,
+  setAtRestOwner,
   wipeLocalDatabase,
 } from "../storage";
 import {
@@ -159,5 +160,50 @@ describe("a restore must not undo at-rest protection", () => {
 
     // ...and the restored counter still has to work.
     expect(await getWatermark("beefcafe12345678", "did:key:zAlice")).toBe(4);
+  });
+});
+
+// The sweep flag is identity-scoped. A restore from the signup screen runs
+// before any identity is active, so the scoped key it would clear is not the
+// key the sweep checks after unlock. On a device that had already migrated
+// that identity, "done" stayed set over freshly imported plaintext rows: the
+// sweep early-returned, and because isMigrationComplete() then suppressed the
+// dual read, every imported message was invisible. Rooms still listed, which
+// made it look like a partial import rather than a read failure.
+describe("a restore must re-arm the sweep for the identity that unlocks", () => {
+  it("clears the flag for every identity, not just the active one", async () => {
+    // This environment has no localStorage, and storage.ts wraps every access
+    // in try/catch, so without a stub the flag path is never exercised at all.
+    const store = new Map<string, string>();
+    (globalThis as Record<string, unknown>).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: (i: number) => Array.from(store.keys())[i] ?? null,
+      get length() {
+        return store.size;
+      },
+    };
+
+    const backup = await backupFromAnIdentity();
+    const did = backup.identity!.keypair.did;
+
+    // This device already finished a sweep for that identity.
+    localStorage.setItem(`awful:atrest:v2:${did}`, String(Date.now()));
+    localStorage.setItem("awful:atrest:v2", String(Date.now()));
+
+    // Restoring happens with NO identity active, exactly as on the signup
+    // screen. Without this the module still holds the owner set by
+    // createIdentity above, the scoped key and the unscoped key collapse to
+    // the same string, and the bug cannot reproduce.
+    setAtRestOwner(null);
+    await applyBackup(backup, "replace");
+
+    const stale = Array.from(store.keys()).filter((k) =>
+      k.startsWith("awful:atrest")
+    );
+    expect(stale).toEqual([]);
+    delete (globalThis as Record<string, unknown>).localStorage;
   });
 });
