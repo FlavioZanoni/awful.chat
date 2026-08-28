@@ -190,7 +190,25 @@ func isTrustedProxy(ip net.IP) bool {
 	return false
 }
 
+// rateKeyIP is the address a rate limit is keyed on. An IPv6 client is
+// keyed on its /64: a single host routinely holds a whole /64 (and often a
+// /56), so per-address buckets would let it rotate through 2^64 fresh
+// identities and every per-client limit in this file would gate nothing.
+func rateKeyIP(s string) string {
+	ip := net.ParseIP(s)
+	if ip == nil || ip.To4() != nil {
+		return s
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 func clientIP(r *http.Request) string {
+	return rateKeyIP(clientAddr(r))
+}
+
+// clientAddr is the client's own address, trusting X-Forwarded-For only
+// from a proxy we deployed.
+func clientAddr(r *http.Request) string {
 	remote := r.RemoteAddr
 	if host, _, err := net.SplitHostPort(remote); err == nil {
 		remote = host

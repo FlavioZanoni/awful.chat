@@ -145,6 +145,46 @@ func TestInviteRateLimitCountsHitsAndMisses(t *testing.T) {
 	}
 }
 
+func TestInviteGlobalMissBudget(t *testing.T) {
+	resetInvites(t)
+	orig := inviteMissLimit
+	inviteMissLimit = 5
+	defer func() { inviteMissLimit = orig }()
+	rateMu.Lock()
+	delete(rateBy, "invite-miss")
+	rateMu.Unlock()
+	code, _ := createInvite("room", time.Now())
+	// Five misses from five different addresses use the relay-wide budget up.
+	for i := 0; i < 5; i++ {
+		ip := "10.7.0." + string(rune('1'+i))
+		if rec := getInvite(t, ip, "ZZZZZZ"); rec.Code != http.StatusNotFound {
+			t.Fatalf("miss %d: want 404, got %d", i, rec.Code)
+		}
+	}
+	if rec := getInvite(t, "10.7.0.9", "ZZZZZZ"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("6th miss: want 429, got %d", rec.Code)
+	}
+	// Hits never draw on it.
+	if rec := getInvite(t, "10.7.0.10", code); rec.Code != http.StatusOK {
+		t.Fatalf("hit after budget spent: want 200, got %d", rec.Code)
+	}
+}
+
+func TestRateKeyIPCollapsesIPv6To64(t *testing.T) {
+	a := rateKeyIP("2001:db8:1:2:aaaa:bbbb:cccc:dddd")
+	b := rateKeyIP("2001:db8:1:2:1111:2222:3333:4444")
+	c := rateKeyIP("2001:db8:1:3::1")
+	if a != b {
+		t.Fatalf("same /64 keyed differently: %s vs %s", a, b)
+	}
+	if a == c {
+		t.Fatalf("different /64 keyed the same: %s", a)
+	}
+	if rateKeyIP("203.0.113.9") != "203.0.113.9" {
+		t.Fatal("IPv4 must pass through unchanged")
+	}
+}
+
 func TestInviteMethodGating(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/invite", nil)
 	rec := httptest.NewRecorder()

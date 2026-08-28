@@ -23,6 +23,16 @@ import (
 // lifetime is nothing, and a hit only hands over what the inviter was about
 // to say out loud anyway.
 //
+// Per-IP alone is not enough against many addresses, so misses also draw on
+// one relay-wide budget. That makes the total guess rate against the whole
+// store a constant, and the store is small (inviteMaxLive), so the chance a
+// guess lands on ANY live code stays negligible: 1024/2^30 per try at 300
+// tries a minute is one hit in about 60 hours of saturating the endpoint,
+// and a hit is one room the inviter was about to say out loud. The cost of
+// the global budget is that a flood can make short codes unresolvable for
+// everyone until the window turns; the long link keeps working, so that is a
+// convenience degraded, not the app.
+//
 // A hit does not consume the alias: one code read to a group is resolved by
 // everyone in it.
 
@@ -32,8 +42,9 @@ const inviteCodeLen = 6
 // Package vars, not consts, so tests can shrink them.
 var (
 	inviteTTL        = 5 * time.Minute
-	inviteMaxLive    = 4096
-	inviteRateLimit  = 10 // per client IP per minute, create and lookup alike
+	inviteMaxLive    = 1024
+	inviteRateLimit  = 10  // per client IP per minute, create and lookup alike
+	inviteMissLimit  = 300 // relay-wide misses per minute
 	inviteMaxBodyLen = int64(4096)
 )
 
@@ -192,6 +203,13 @@ func handleInviteResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	roomCode, ok := resolveInvite(code, time.Now())
 	if !ok {
+		// Counted after the miss so a hit never draws on it; a 429 here is
+		// indistinguishable from a miss to a guesser and costs a real user
+		// nothing but a retry.
+		if !rateAllow("invite-miss", inviteMissLimit) {
+			apiError(w, r, "rate limited", http.StatusTooManyRequests)
+			return
+		}
 		inviteJSON(w, r, http.StatusNotFound, map[string]any{})
 		return
 	}
