@@ -17,6 +17,7 @@ const SIDEBAR_COLLAPSED_KEY = "awful:sidebar-collapsed:v1";
 const CALL_CHAT_BESIDE_KEY = "awful:call-chat-beside:v1";
 const CONNECTION_INFO_KEY = "awful:debug-connection-info:v1";
 const CALL_PIP_KEY = "awful:call-pip:v1";
+const AVATAR_TINT_KEY = "awful:avatar-tint:v1";
 const CHAT_FONT_SIZE_KEY = "awful:chat-font-size:v1";
 const CHAT_FONT_FAMILY_KEY = "awful:chat-font-family:v1";
 
@@ -64,6 +65,13 @@ export const displayPrefs = $state({
    * tab switch (Chromium). Off means the call is only the stage.
    */
   callPip: readStored(CALL_PIP_KEY, true),
+  /**
+   * Fill a camera-off call tile with the average colour of that person's
+   * avatar, grain over it, and a rim on the circle. On by default - it is
+   * the look the call was designed around, and it costs one canvas read per
+   * distinct picture.
+   */
+  avatarTint: readStored(AVATAR_TINT_KEY, true),
   /** Chat message text size, in pixels. */
   chatFontSize: readChatFontSize(),
   /** Chat message font: a FontStackId, or a sanitized custom family name. */
@@ -78,6 +86,15 @@ export function setCallPip(on: boolean): void {
   displayPrefs.callPip = on;
   try {
     localStorage.setItem(CALL_PIP_KEY, on ? "1" : "0");
+  } catch {
+    // Storage blocked: the choice just does not survive a reload.
+  }
+}
+
+export function setAvatarTint(on: boolean): void {
+  displayPrefs.avatarTint = on;
+  try {
+    localStorage.setItem(AVATAR_TINT_KEY, on ? "1" : "0");
   } catch {
     // Storage blocked: the choice just does not survive a reload.
   }
@@ -159,6 +176,11 @@ if (typeof window !== "undefined") {
       displayPrefs.callChatBeside = e.newValue === "1";
     if (e.key === CONNECTION_INFO_KEY)
       displayPrefs.showConnectionInfo = e.newValue === "1";
+    // CALL_PIP_KEY was missing from this list, so flipping picture-in-picture
+    // in one tab left every other tab on the stale value until a reload.
+    if (e.key === CALL_PIP_KEY) displayPrefs.callPip = e.newValue === "1";
+    if (e.key === AVATAR_TINT_KEY)
+      displayPrefs.avatarTint = e.newValue === "1";
     if (e.key === CHAT_FONT_SIZE_KEY)
       displayPrefs.chatFontSize =
         e.newValue === null

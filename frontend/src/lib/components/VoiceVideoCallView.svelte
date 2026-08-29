@@ -72,6 +72,12 @@ import { getManifest } from "$lib/plugins/registry";
 import { onCardStateChange } from "$lib/plugins/state.svelte";
 import PluginCallTileView from "./PluginCallTileView.svelte";
 import PluginIcon from "$lib/plugins/PluginIcon.svelte";
+import {
+  ambientStyle,
+  glowFor,
+  primeGlow,
+  rimStyle,
+} from "$lib/avatar-glow.svelte";
   import { Slider } from "./ui/slider";
 
   interface Props {
@@ -889,6 +895,20 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
 
   // ── Visibility conditions ─────────────────────────────────────────────────
 
+  // Every avatar currently on screen gets its average colour resolved once.
+  // Priming from an effect rather than from the template on demand: the
+  // template runs during render, and seeding a cache there is a state write
+  // mid-render.
+  $effect(() => {
+    // Off means no decode at all, not a decode whose result is thrown away.
+    if (!displayPrefs.avatarTint) return;
+    for (const t of tiles) if (t.avatarUrl) primeGlow(t.avatarUrl);
+    for (const peerId of callPeerIds) {
+      const avatar = getPeerAvatar(peerId);
+      if (avatar) primeGlow(avatar);
+    }
+  });
+
   const nobodyInCall = $derived(callPeerIds.size === 0 && !inCall);
   const othersInCallNotUs = $derived(callPeerIds.size > 0 && !inCall);
 </script>
@@ -1090,12 +1110,28 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
         use:videoAction={tile.videoTrack!}
       ></video>
     {:else if !isPendingTx}
+      {@const glow = displayPrefs.avatarTint ? glowFor(tile.avatarUrl) : null}
+      {#if glow}
+        <!-- The tile lit by the person in it. Both layers sit before the
+             avatar in the DOM so the avatar paints over them. -->
+        <div
+          class="pointer-events-none absolute inset-0 transition-opacity duration-500"
+          style={ambientStyle(glow)}
+        ></div>
+        <!-- Grain, and not only for the look: a wide radial gradient over a
+             near-black tile bands into visible rings on an 8-bit display, and
+             noise is what dithers it away. -->
+        <div class="tile-grain pointer-events-none absolute inset-0"></div>
+      {/if}
       <div
         class="relative flex items-center justify-center rounded-full {tile.isLocal
           ? 'bg-primary/20 text-primary'
-          : 'bg-secondary text-secondary-foreground'} font-semibold overflow-hidden font-mono transition-shadow duration-200
-        {compact ? 'size-8 text-sm' : 'size-16 text-2xl'}"
-        style={tileColor ? `color: ${tileColor}` : ""}
+          : 'bg-secondary text-secondary-foreground'} font-semibold overflow-hidden font-mono transition-[filter] duration-300
+        {compact ? 'size-[2.66rem] text-sm' : 'size-[5.32rem] text-2xl'}"
+        style="{tileColor ? `color: ${tileColor};` : ''}{rimStyle(
+          glow,
+          compact ? 0.5 : 1
+        )}"
       >
         {#if tile.avatarUrl}
           <GifImage
@@ -1224,7 +1260,8 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
             {#snippet children(props)}
           <div
             {...props}
-            class="relative flex size-16 sm:size-20 items-center justify-center rounded-full bg-secondary text-2xl font-semibold text-secondary-foreground ring-2 ring-background font-mono"
+            class="relative flex size-16 sm:size-20 items-center justify-center rounded-full bg-secondary text-2xl font-semibold text-secondary-foreground ring-2 ring-background font-mono transition-[filter] duration-300"
+            style={rimStyle(displayPrefs.avatarTint ? glowFor(avatar) : null)}
           >
             {#if avatar}
               <!-- The image clips to the circle, not the container: with
@@ -1944,6 +1981,15 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
 />
 
 <style>
+  /* Static film grain: one tiled SVG turbulence, desaturated so it is grain
+     and not confetti, overlaid so it darkens and lightens rather than washing
+     the tile grey. No animation - a call already has enough moving. */
+  .tile-grain {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.16;
+    mix-blend-mode: overlay;
+  }
+
   /* Connecting tiles: a pronounced opacity wave - Tailwind's pulse was too
      subtle to read as "not here yet". */
   .connecting-wave {

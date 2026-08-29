@@ -12,6 +12,7 @@ import {
 import {
   displayPrefs,
   setCallChatBeside,
+  setAvatarTint,
   setCallPip,
   setItalicOwnName,
   setShowPeerNicknameColors,
@@ -136,6 +137,19 @@ export const settingsCommands: CmdSource = () => {
       kind: "act",
       keepOpen: true,
       perform: () => setCallPip(!displayPrefs.callPip),
+    },
+  });
+
+  cmds.push({
+    id: "settings.toggle:avatarTint",
+    title: "Tint call tiles from avatars",
+    keywords: ["toggle", "enable", "disable", "color", "colour", "grain", "call"],
+    group: "Settings",
+    badge: displayPrefs.avatarTint ? "On" : "Off",
+    action: {
+      kind: "act",
+      keepOpen: true,
+      perform: () => setAvatarTint(!displayPrefs.avatarTint),
     },
   });
 

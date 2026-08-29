@@ -14,6 +14,7 @@ import {
   setChatFontSize,
   setItalicOwnName,
   setShowConnectionInfo,
+  setAvatarTint,
   setCallPip,
   setShowPeerNicknameColors,
   setSidebarCollapsed,
@@ -387,6 +388,19 @@ async function loadLocalFonts(): Promise<void> {
     <Switch
       checked={displayPrefs.callPip}
       onCheckedChange={(checked) => setCallPip(checked)}
+    />
+  </div>
+  <div class="flex items-center justify-between gap-3">
+    <div class="flex flex-col gap-1 min-w-0">
+      <span class="text-xs font-mono">Tint tiles from avatars</span>
+      <span class="text-xs font-mono text-muted-foreground leading-relaxed">
+        Fills a camera-off tile with the average color of that person's
+        picture, with a little grain over it. Off leaves the tile plain.
+      </span>
+    </div>
+    <Switch
+      checked={displayPrefs.avatarTint}
+      onCheckedChange={(checked) => setAvatarTint(checked)}
     />
   </div>
 </div>
