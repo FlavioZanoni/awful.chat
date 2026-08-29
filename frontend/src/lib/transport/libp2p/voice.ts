@@ -44,6 +44,15 @@ const VOICE_ASK_TRUMPS_HANDSHAKE_MS = 10_000;
 const MAX_PENDING_CANDIDATES = 256;
 /** Rate limit on asking the other side to dial us. */
 const VOICE_REDIAL_ASK_MS = 5_000;
+/**
+ * How long a blip on an ESTABLISHED link may still recover by itself before
+ * the repair machinery treats the link as dead. An ICE restart that is going
+ * anywhere shows progress ("checking" refreshes okAt) well inside this; the
+ * full VOICE_LINK_GRACE_MS was gating repair decisions on it too, which
+ * added up to twenty silent seconds on each side of a rebuild - the
+ * "disconnects take forever to come back" experience.
+ */
+const VOICE_BLIP_GRACE_MS = 5_000;
 
 // The DTLN set: browser noise suppression OFF (the model replaces it), but
 // echo cancellation ON. DTLN is noise suppression, not echo cancellation - a
@@ -351,7 +360,21 @@ export class LibP2PVoice implements VoiceTransport {
         // tick. That wait is the "I cannot hear them until I leave and rejoin"
         // window. The request rides the app transport, which already confirms
         // its streams, so it does not depend on the very link that is broken.
-        if (!this.remotePeers.has(peerId)) this.askForRedial(peerId, now);
+        const remote = this.remotePeers.get(peerId);
+        if (!remote) {
+          this.askForRedial(peerId, now);
+        } else if (
+          // An established link sitting blipped with no sign of recovery is
+          // dead in all but name. Waiting for linkIsHealthy to tear it down
+          // (the full wedge grace) before asking added most of the "takes
+          // forever to come back" - ask now; the dialer applies the same
+          // blip grace to its own end before honoring it.
+          remote.everConnected &&
+          remote.pc.connectionState !== "connected" &&
+          now - remote.okAt >= VOICE_BLIP_GRACE_MS
+        ) {
+          this.askForRedial(peerId, now);
+        }
         continue;
       }
       if (this.dialing.has(peerId) || this.remotePeers.has(peerId)) continue;
@@ -403,13 +426,17 @@ export class LibP2PVoice implements VoiceTransport {
     ) {
       return;
     }
-    // An ESTABLISHED link that has merely blipped keeps the old rule: their
-    // ask must beat our stale "connected", not a live link mid-recovery.
+    // An ESTABLISHED link that has merely blipped: their ask must beat our
+    // stale "connected", not a link actually mid-recovery. Recovery in
+    // progress shows itself - "checking" refreshes okAt - so only a blip
+    // still inside the short grace earns the refusal. Waiting out the full
+    // linkIsHealthy grace here meant refusing asks for twenty seconds while
+    // both ends already knew the link was dead.
     if (
       remote &&
       remote.everConnected &&
       remote.pc.connectionState !== "connected" &&
-      this.linkIsHealthy(remote, now)
+      now - remote.okAt < VOICE_BLIP_GRACE_MS
     ) {
       return;
     }
@@ -422,9 +449,12 @@ export class LibP2PVoice implements VoiceTransport {
       this.teardownRemotePeer(peerId);
       this.emit("peerLeft", peerId);
     }
-    // Deliberately NOT clearing the backoff: the ask repeats every few
-    // seconds, so it lands as soon as the gate opens, and a peer cannot make
-    // us dial in a loop.
+    // Clearing the backoff is safe here: the serve itself is rate-limited to
+    // one per VOICE_REDIAL_ASK_MS above, so a peer still cannot make us dial
+    // in a loop - and leaving it meant a rebuild both sides had already
+    // agreed on sat out up to VOICE_DIAL_MAX_MS for nothing.
+    this.nextDialAt.delete(peerId);
+    this.dialBackoff.delete(peerId);
     this.dialAndOffer(peerId).catch(() => {});
   }
 
@@ -1066,7 +1096,18 @@ export class LibP2PVoice implements VoiceTransport {
         await this.drainCandidates(remote); // drain buffered ICE
         const answer = await remote.pc.createAnswer();
         await remote.pc.setLocalDescription(answer);
-        this.sendSignal(peerId, { type: "answer", sdp: answer.sdp! });
+        const sent = await this.sendSignal(peerId, {
+          type: "answer",
+          sdp: answer.sdp!,
+        });
+        if (!sent) {
+          // The dialer is left holding an unanswered offer and would only
+          // notice at its setup deadline. Tear our half down and ask for a
+          // fresh dial (rate-limited) instead of letting both ends wait.
+          this.teardownRemotePeer(peerId);
+          this.emit("peerLeft", peerId);
+          this.askForRedial(peerId, Date.now());
+        }
         break;
       }
 
