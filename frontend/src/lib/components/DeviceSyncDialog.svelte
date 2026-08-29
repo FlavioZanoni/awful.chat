@@ -108,11 +108,24 @@ import {
     await generateSyncCode();
   }
 
-  function handleCopyToken() {
-    if (syncState.plaintextToken) {
-      navigator.clipboard.writeText(syncState.plaintextToken);
+  let tokenCopied = $state(false);
+
+  async function handleCopyToken() {
+    if (!syncState.plaintextToken) return;
+    try {
+      await navigator.clipboard.writeText(syncState.plaintextToken);
+      tokenCopied = true;
+      setTimeout(() => (tokenCopied = false), 1500);
+    } catch {
+      // Clipboard blocked - an insecure origin, or permission refused,
+      // which is common on a phone. Say so rather than looking like the
+      // button did nothing: the code is on screen and can be typed.
+      copyFailed = true;
+      setTimeout(() => (copyFailed = false), 3000);
     }
   }
+
+  let copyFailed = $state(false);
 
 async function handleStartScanning() {
   view = "scan";
@@ -336,10 +349,20 @@ async function handleStartScanning() {
                 variant="outline"
                 size="icon"
                 class="shrink-0"
+                aria-label={tokenCopied ? "Copied" : "Copy sync code"}
               >
-                <Copy class="w-4 h-4" />
+                {#if tokenCopied}
+                  <Check class="w-4 h-4 text-primary" />
+                {:else}
+                  <Copy class="w-4 h-4" />
+                {/if}
               </Button>
             </div>
+            {#if copyFailed}
+              <p class="text-xs text-muted-foreground">
+                Could not reach the clipboard. Type the code instead.
+              </p>
+            {/if}
           </div>
 
           {#if syncState.isConnecting}

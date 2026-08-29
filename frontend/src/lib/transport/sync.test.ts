@@ -13,6 +13,7 @@ import {
   parsePlaintextToken,
   parseShortCode,
   peerIdShortPrefix,
+  utf8Length,
 } from "./sync.svelte";
 
 // A realistic-shaped Ed25519 libp2p peerId: the constant "12D3KooW" multihash
@@ -115,5 +116,46 @@ describe("matchesSourcePeer", () => {
 
   it("refuses to match anything when the payload has neither", () => {
     expect(matchesSourcePeer({} as never, PEER_ID)).toBe(false);
+  });
+});
+
+describe("utf8Length", () => {
+  // Batches are sized against the transport's 4MB frame cap, and an
+  // oversized frame is not a polite failure: the receiver aborts the whole
+  // inbound stream and the rest of the transfer goes with it.
+  const encoded = (v: string) => new TextEncoder().encode(v).length;
+
+  it("matches TextEncoder for ASCII", () => {
+    expect(utf8Length("hello")).toBe(encoded("hello"));
+  });
+
+  it("matches TextEncoder for accented text", () => {
+    const v = "ação, café, jalapeño";
+    expect(utf8Length(v)).toBe(encoded(v));
+  });
+
+  it("matches TextEncoder for CJK, where .length undercounts by three", () => {
+    const v = "今日はいい天気ですね";
+    expect(utf8Length(v)).toBe(encoded(v));
+    expect(v.length).toBeLessThan(utf8Length(v));
+  });
+
+  it("counts an emoji surrogate pair as one four-byte character", () => {
+    const v = "👋🏽 hi 🎉";
+    expect(utf8Length(v)).toBe(encoded(v));
+  });
+
+  it("matches TextEncoder on a lone surrogate rather than swallowing what follows", () => {
+    // Not valid UTF-16, but JSON.stringify of a corrupt record can produce
+    // one. The character AFTER it must still be counted: a version that
+    // assumed every high surrogate had a partner passed the ASCII case here
+    // by coincidence and undercounted this one.
+    for (const v of ["a\ud800b", "\ud800今", "\ud800", "\udc00x"]) {
+      expect(utf8Length(v)).toBe(encoded(v));
+    }
+  });
+
+  it("is zero for empty input", () => {
+    expect(utf8Length("")).toBe(0);
   });
 });

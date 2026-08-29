@@ -187,6 +187,48 @@ const SYNC_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 const BATCH_SIZE = 50;
 /** Encoded-bytes budget per frame; the transport aborts frames over 4MB. */
 const MAX_BATCH_BYTES = 2_500_000;
+
+/**
+ * The UTF-8 byte length of a string, without allocating a copy of it.
+ *
+ * String.length counts UTF-16 code units, which is the same number for
+ * ASCII and up to three times too small for anything else. Sizing batches
+ * with it meant a room of CJK or emoji history could measure comfortably
+ * under the budget and serialize past the transport's 4MB frame cap - and
+ * an oversized frame does not fail politely: the receiver aborts the whole
+ * inbound stream, taking the rest of the transfer with it.
+ *
+ * Counted rather than encoded because this runs per item across an entire
+ * database, and TextEncoder would allocate a second copy of every
+ * attachment on the way past.
+ */
+export function utf8Length(s: string): number {
+  let bytes = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      // Only a high surrogate FOLLOWED BY a low one is a pair. A lone high
+      // surrogate is not, and swallowing the next character on the
+      // assumption that it is miscounts whatever came after it - which
+      // JSON.stringify of a corrupt record can produce.
+      i + 1 < s.length &&
+      s.charCodeAt(i + 1) >= 0xdc00 &&
+      s.charCodeAt(i + 1) <= 0xdfff
+    ) {
+      bytes += 4;
+      i++;
+    } else {
+      // Unpaired surrogates included: an encoder replaces them with U+FFFD,
+      // which is three bytes, the same as this branch already counts.
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
 /** How long the source waits for the target's import ack before erroring. */
 const ACK_TIMEOUT_MS = 120_000;
 let _ackTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -198,6 +240,39 @@ let _peerWaitTimer: ReturnType<typeof setTimeout> | null = null;
 // upgrade all happen inside this window. Generous, because the alternative
 // (what shipped) was an spinner that never resolved.
 const PEER_WAIT_TIMEOUT = 45_000;
+/**
+ * Target-side: the transfer itself has to keep moving.
+ *
+ * The peer-wait timer covers getting connected and then stands down - it
+ * returns early once isSyncing is set. So nothing at all watched the
+ * transfer, and a source that connected and then sent nothing left the
+ * target on "0%" forever, with no error and nothing to act on. Reset by
+ * every frame that arrives, so it only fires on real silence.
+ *
+ * Generous because the first frame waits on exportDatabase reading the
+ * whole database on the other device, which on a phone with a long history
+ * is not quick. Sixty seconds of nothing is broken, not slow.
+ */
+const SYNC_STALL_TIMEOUT = 60_000;
+let _stallTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearStallTimer(): void {
+  if (_stallTimer) clearTimeout(_stallTimer);
+  _stallTimer = null;
+}
+
+/** Restart the watchdog. Called on every frame the target receives. */
+function armStallTimer(): void {
+  clearStallTimer();
+  _stallTimer = setTimeout(() => {
+    _stallTimer = null;
+    if (!syncState.isSyncing || syncState.isComplete) return;
+    syncState.isSyncing = false;
+    syncState.syncError =
+      "The other device stopped sending. Keep both sync screens open and try a new code.";
+    cleanup().catch(() => {});
+  }, SYNC_STALL_TIMEOUT);
+}
 
 function encode(data: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(data));
@@ -508,14 +583,19 @@ async function sendExportData(
     // reject data from a peer that never proved it holds the shared secret.
     const token = _syncToken ?? undefined;
 
-    // Send identity first
-    _transport.send(
+    // Send identity first. Checked like every other send: this is the one
+    // frame whose loss leaves the target sitting at exactly 0%, and it was
+    // also the only one whose result was thrown away.
+    const identityOk = await _transport.send(
       peerId,
       encode({
         type: SyncMessageType.ExportData,
         payload: { section: "identity", data: exportData.identity, token },
       })
     );
+    if (!identityOk) {
+      throw new Error("Connection lost before sending identity - try again");
+    }
 
     syncState.syncProgress = 10;
 
@@ -544,14 +624,14 @@ async function sendExportData(
       let curBytes = 0;
       for (const item of section.data as unknown[]) {
         let entry = item;
-        let sz = JSON.stringify(entry)?.length ?? 0;
+        let sz = utf8Length(JSON.stringify(entry) ?? "");
         if (sz > MAX_BATCH_BYTES) {
           const { data: _dropped, ...rest } = entry as { data?: unknown };
           console.warn(
             `[Sync][Source] ${section.name} item exceeds the frame budget - sent without bytes`
           );
           entry = rest;
-          sz = JSON.stringify(entry)?.length ?? 0;
+          sz = utf8Length(JSON.stringify(entry) ?? "");
         }
         if (cur.length && (cur.length >= BATCH_SIZE || curBytes + sz > MAX_BATCH_BYTES)) {
           batches.push(cur);
@@ -620,17 +700,34 @@ async function sendExportData(
       syncState.syncError =
         "The other device never confirmed the import - try again";
       syncState.isSyncing = false;
+      // Without this the transport, the sync-room membership and the
+      // separate code-expiry timer all stay alive, and that expiry later
+      // overwrites this message with "Sync code expired" - a second, wrong
+      // explanation for the same event.
+      cleanup().catch(() => {});
     }, ACK_TIMEOUT_MS);
     console.log("[Sync][Source] Waiting for target to finish importing...");
   } catch (err) {
     console.error("[Sync] Error sending export data:", err);
-    _transport.send(
-      peerId,
-      encode({
-        type: SyncMessageType.SyncError,
-        payload: { error: String(err) },
-      })
-    );
+    // Into syncState, not only the console. Every throw in this function
+    // landed here and stopped: no error was set, isSyncing stayed true, and
+    // the dialog only leaves the progress view when syncError is truthy. So
+    // the source froze at whatever percentage it had reached, with no timer
+    // covering it - the ack timeout is armed only after a fully successful
+    // send loop, and the stall watchdog is the target's. Every send check in
+    // this function was reporting into a black hole.
+    syncState.syncError = err instanceof Error ? err.message : String(err);
+    syncState.isSyncing = false;
+    void _transport
+      ?.send(
+        peerId,
+        encode({
+          type: SyncMessageType.SyncError,
+          payload: { error: String(err) },
+        })
+      )
+      .catch(() => false);
+    await cleanup();
   }
 }
 
@@ -666,6 +763,18 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
 
     let receivedIdentity: DatabaseExport["identity"] | null = null;
     const receivedData: Partial<DatabaseExport> = {};
+    /**
+     * Which batches of each section actually arrived.
+     *
+     * batchIndex and totalBatches were only ever feeding the progress bar,
+     * so a batch that went missing - the sender's stream reset mid-transfer
+     * is the realistic way - left the target concatenating whatever it had
+     * and importing it as a success. Silently losing part of somebody's
+     * history is worse than failing, so the counts are checked before the
+     * import rather than trusted.
+     */
+    const seenBatches = new Map<string, Set<number>>();
+    const expectedBatches = new Map<string, number>();
 
     // Target sends ExportRequest after connecting
     _transport.on("connect", (peerId: string) => {
@@ -706,6 +815,7 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
       }
       syncState.isConnecting = false;
       syncState.isSyncing = true;
+      armStallTimer();
 
       // Request data from source with mode + proof-of-scan token
       _transport?.send(
@@ -750,6 +860,7 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
         console.log("[Sync][Target] Message type:", msg.type);
 
         if (msg.type === SyncMessageType.ExportData) {
+          armStallTimer();
           const {
             section,
             data: sectionData,
@@ -783,6 +894,15 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
             if (Array.isArray(sectionData)) {
               arr.push(...sectionData);
             }
+            if (batchIndex !== undefined && totalBatches !== undefined) {
+              expectedBatches.set(section, totalBatches);
+              let seen = seenBatches.get(section);
+              if (!seen) {
+                seen = new Set();
+                seenBatches.set(section, seen);
+              }
+              seen.add(batchIndex);
+            }
 
             // Update progress
             const sections = [
@@ -813,6 +933,25 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
           // Send acknowledgment
           _transport?.send(peerId, encode({ type: SyncMessageType.ExportAck }));
         } else if (msg.type === SyncMessageType.ExportComplete) {
+          // Everything has arrived; the import that follows reads and writes
+          // the whole database and sends no frames, so a watchdog left armed
+          // through it would abort a sync that is actually finishing.
+          clearStallTimer();
+          // Refuse a partial import. A section that announced N batches and
+          // delivered fewer means history is missing, and the user cannot
+          // see that from a progress bar that reached 100%.
+          const missing: string[] = [];
+          for (const [section, total] of expectedBatches) {
+            const seen = seenBatches.get(section)?.size ?? 0;
+            if (seen < total) missing.push(`${section} (${seen}/${total})`);
+          }
+          if (missing.length > 0) {
+            console.error("[Sync][Target] Incomplete transfer:", missing);
+            syncState.isSyncing = false;
+            syncState.syncError = `The transfer arrived incomplete (${missing.join(", ")}). Nothing was changed - generate a new code and try again.`;
+            await cleanup();
+            return;
+          }
           console.log(
             "[Sync][Target] Received ExportComplete, importing data..."
           );
@@ -865,6 +1004,7 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
               syncState.isSyncing = false;
               syncState.isComplete = true;
               syncState.syncProgress = 100;
+              clearStallTimer();
               await cleanup();
             } catch (err) {
               console.error("[Sync][Target] Import failed:", err);
@@ -1147,6 +1287,7 @@ async function cleanup(): Promise<void> {
   _ackTimeoutTimer = null;
   if (_peerWaitTimer) clearTimeout(_peerWaitTimer);
   _peerWaitTimer = null;
+  clearStallTimer();
   if (_transport) {
     // AWAIT it. disconnect() stops the libp2p node asynchronously, and
     // dropping the promise let the next attempt start a second node while
