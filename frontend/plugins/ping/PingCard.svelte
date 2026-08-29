@@ -8,6 +8,7 @@
    * messages per peer, so the run is local and one update carries the
    * summary at the end.
    */
+  import { onDestroy, onMount } from "svelte";
   import type { HostApi } from "$lib/plugins/api";
   import {
     BASE_INTERVAL_MS,
@@ -52,6 +53,8 @@
    * this card the moment anyone ran /ping.
    */
   let started = false;
+  /** Set only when the component goes away, never by a re-render. */
+  let stopped = false;
 
   const ceiling = $derived(chartCeiling(Object.values(samples).flat()));
   const liveStats = $derived.by(() => {
@@ -62,13 +65,19 @@
   /** Live while measuring, then whatever was published. */
   const shown = $derived(running || !done ? liveStats : cardState.results);
 
-  $effect(() => {
+  // onMount, NOT $effect. An effect re-runs whenever anything it read
+  // changes, and this one reads cardState through isOwner and done - which
+  // the host recomputes as a fresh object every time any card state folds.
+  // The re-run tore the probes down through the effect's cleanup while the
+  // "already started" guard blocked them from restarting, so the card sat
+  // on "starting..." forever, having measured nothing. A run belongs to the
+  // component's lifetime, not to a dependency set.
+  onMount(() => {
     // The owner measures once. Everyone else, and every later render of a
     // finished card, just reads.
     if (!isOwner || done || started) return;
     started = true;
     running = true;
-    let stopped = false;
     const startedAt = performance.now();
     const relayed = new Set<string>();
 
@@ -86,9 +95,13 @@
 
     // All targets on their own clocks: a slow peer must not hold up the
     // cadence of a fast one, which is what a shared loop would do.
+    console.log(
+      `[ping] probing ${cardState.targets.length} peer(s) for ${WINDOW_MS / 1000}s`
+    );
     void Promise.all(cardState.targets.map((t) => probe(t.did))).then(() => {
       if (stopped) return;
       running = false;
+      console.log("[ping] window closed, publishing summary");
       const results: Record<string, Stats> = {};
       for (const t of cardState.targets) {
         results[t.did] = summarize(samples[t.did] ?? []);
@@ -100,12 +113,12 @@
       });
     });
 
-    return () => {
-      // Leaving the room mid-run stops the probes rather than letting them
-      // keep measuring a card nobody is looking at.
-      stopped = true;
-      running = false;
-    };
+  });
+
+  onDestroy(() => {
+    // Leaving the room mid-run stops the probes rather than letting them
+    // keep measuring a card nobody is looking at.
+    stopped = true;
   });
 
   /** Samples to an SVG polyline, dropping the gaps that loss leaves. */
