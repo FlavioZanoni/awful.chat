@@ -776,6 +776,34 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
     const seenBatches = new Map<string, Set<number>>();
     const expectedBatches = new Map<string, number>();
 
+    /**
+     * Send the ExportRequest until the transport confirms a write.
+     *
+     * send() resolves false when the outbound stream never confirms - a
+     * fresh dial that lands on a dead relay circuit is the realistic way,
+     * and the target has heard nothing from the source yet, so it always
+     * dials fresh. Firing the request once and dropping the result left
+     * this device at 0% until the stall watchdog blamed the other side for
+     * a request that never left this one.
+     */
+    const requestExport = async (peerId: string): Promise<void> => {
+      const frame = encode({
+        type: SyncMessageType.ExportRequest,
+        payload: { mode, token: payload.token },
+      });
+      // ponytail: 3 tries, 2s apart; each send already spends the
+      // transport's ~5.6s confirm budget before resolving false.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!_transport || !syncState.isSyncing || syncState.isComplete) return;
+        if (await _transport.send(peerId, frame)) return;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      syncState.isSyncing = false;
+      syncState.syncError =
+        "Could not send the sync request to the other device - generate a new code and try again.";
+      cleanup().catch(() => {});
+    };
+
     // Target sends ExportRequest after connecting
     _transport.on("connect", (peerId: string) => {
       // Pin ONLY to the peer whose peerId matches the QR/short code - the
@@ -818,13 +846,7 @@ export async function connectAsTarget(payload: SyncPayload): Promise<void> {
       armStallTimer();
 
       // Request data from source with mode + proof-of-scan token
-      _transport?.send(
-        peerId,
-        encode({
-          type: SyncMessageType.ExportRequest,
-          payload: { mode, token: payload.token },
-        })
-      );
+      void requestExport(peerId);
     });
 
     _transport.on("disconnect", () => {

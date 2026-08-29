@@ -1,18 +1,51 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // sync.svelte.ts pulls in LibP2PTransport, whose WebRTC dependency chain
 // needs a native binding (node-datachannel) this test environment doesn't
-// build. Nothing under test here touches the transport - it's pure
-// string/JSON logic for the QR/short-code payload - so stub the import
-// rather than pulling that whole stack in.
-vi.mock("./libp2p/transport", () => ({ LibP2PTransport: class {} }));
+// build. The fake below records handlers and sent frames, and lets a test
+// script send() results (a queued `false` models a stream that never
+// confirmed), which is enough to drive the target-side handshake.
+const { FakeTransport, instances } = vi.hoisted(() => {
+  const instances: any[] = [];
+  class FakeTransport {
+    handlers = new Map<string, ((...args: any[]) => void)[]>();
+    sent: { type: string; payload?: any }[] = [];
+    sendResults: boolean[] = [];
+    constructor() {
+      instances.push(this);
+    }
+    on(event: string, fn: (...args: any[]) => void) {
+      const arr = this.handlers.get(event) ?? [];
+      arr.push(fn);
+      this.handlers.set(event, arr);
+    }
+    emit(event: string, ...args: any[]) {
+      for (const fn of this.handlers.get(event) ?? []) fn(...args);
+    }
+    async connect() {}
+    joinRoom() {}
+    async disconnect() {}
+    selfId() {
+      return "";
+    }
+    async send(_peerId: string, data: Uint8Array) {
+      this.sent.push(JSON.parse(new TextDecoder().decode(data)));
+      return this.sendResults.length ? this.sendResults.shift()! : true;
+    }
+  }
+  return { FakeTransport, instances };
+});
+vi.mock("./libp2p/transport", () => ({ LibP2PTransport: FakeTransport }));
 
 import {
+  cancelSync,
+  connectAsTarget,
   generateShortCode,
   matchesSourcePeer,
   parsePlaintextToken,
   parseShortCode,
   peerIdShortPrefix,
+  syncState,
   utf8Length,
 } from "./sync.svelte";
 
@@ -157,5 +190,54 @@ describe("utf8Length", () => {
 
   it("is zero for empty input", () => {
     expect(utf8Length("")).toBe(0);
+  });
+});
+
+describe("target ExportRequest delivery", () => {
+  afterEach(async () => {
+    vi.useRealTimers();
+    await cancelSync();
+  });
+
+  const payload = () => ({
+    roomCode: ROOM_CODE,
+    token: TOKEN,
+    expires: Date.now() + 60_000,
+    peerId: PEER_ID,
+  });
+
+  const requests = (t: any) =>
+    t.sent.filter((m: any) => m.type === "sync_export_request");
+
+  it("retries the ExportRequest when the first send never confirms", async () => {
+    vi.useFakeTimers();
+    await connectAsTarget(payload());
+    const t = instances.at(-1);
+    t.sendResults = [false, true];
+    t.emit("connect", PEER_ID);
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(requests(t)).toHaveLength(2);
+    expect(syncState.syncError).toBeNull();
+  });
+
+  it("errors out instead of stalling at 0% when every send fails", async () => {
+    vi.useFakeTimers();
+    await connectAsTarget(payload());
+    const t = instances.at(-1);
+    t.sendResults = [false, false, false];
+    t.emit("connect", PEER_ID);
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(requests(t)).toHaveLength(3);
+    expect(syncState.syncError).toMatch(/Could not send the sync request/);
+    expect(syncState.isSyncing).toBe(false);
+  });
+
+  it("does not re-request on a reconnect while the first request stands", async () => {
+    await connectAsTarget(payload());
+    const t = instances.at(-1);
+    t.emit("connect", PEER_ID);
+    t.emit("connect", PEER_ID);
+    await Promise.resolve();
+    expect(requests(t)).toHaveLength(1);
   });
 });
