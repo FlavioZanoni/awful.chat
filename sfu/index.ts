@@ -210,12 +210,16 @@ const MAX_CONSUMERS_PER_PEER = 256;
 // A WebRtcTransport binds a UDP+TCP port pair out of the 500-port RTC range
 // at creation, before either side has proven it can complete a handshake -
 // join + ms:create-transport on a raw websocket that only answers pings is
-// enough to hold one open. Left unbounded that walks the range empty for
-// every room on the instance, since the port pair is otherwise only freed
-// when the peer leaves. 20s is generous for a real ICE/DTLS handshake and
-// short enough that the flood can't outrun the reap.
+// enough to hold one open, and the pair is otherwise only freed when the
+// peer leaves. A reap timer for transports that never connect closes that,
+// BUT it is off by default (0): the client creates both transports at join
+// and mediasoup-client only runs the connect handshake on the first
+// produce/consume, while voice is peer-to-peer - so in a call with no camera
+// or share the transports legitimately sit unconnected for the whole call,
+// and a 20s reap threw every such call out of the video server. Enable it
+// only once the client creates transports lazily.
 const TRANSPORT_CONNECT_TIMEOUT_MS = parseInt(
-  process.env.SFU_TRANSPORT_CONNECT_TIMEOUT_MS ?? "20000",
+  process.env.SFU_TRANSPORT_CONNECT_TIMEOUT_MS ?? "0",
   10,
 );
 // roomCode and peerId become Map keys and are echoed into the logs. Real ones
@@ -451,6 +455,7 @@ function armTransportReapTimer(
   direction: "send" | "recv",
   transport: mediasoup.types.WebRtcTransport,
 ): void {
+  if (!(TRANSPORT_CONNECT_TIMEOUT_MS > 0)) return;
   const timer = setTimeout(() => {
     peer.transportReapTimers.delete(direction);
     reapTransport(peer, direction, transport, "transport-timeout");
