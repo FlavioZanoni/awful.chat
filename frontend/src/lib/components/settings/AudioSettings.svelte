@@ -34,8 +34,10 @@
     sliderToGain,
   } from "$lib/audio/volume-curve";
 
+  // Mirrors the call path in libp2p/voice.ts (the mic test must preview what
+  // peers actually get): AEC on even with DTLN - DTLN does noise, not echo.
   const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
-    echoCancellation: false,
+    echoCancellation: true,
     noiseSuppression: false,
     autoGainControl: false,
   };
