@@ -22,6 +22,15 @@ frontend/plugins/
     README.md     usage, install, and instance requirements
 ```
 
+A plugin that ships WITH this repo also needs a line in
+`frontend/tsconfig.app.json`, which names the built-ins one by one. That
+folder holds fetched `PLUGIN_SOURCES` plugins too, and this repo's `pnpm
+check` must not turn red for somebody else's code - so `plugins/**` is
+deliberately not used. Skip the line and your plugin compiles but is never
+typechecked, which is how `poll` and `wheel` used `HostApi` without
+importing it for months, and how a card can be written against a prop the
+host does not pass.
+
 Every plugin ships a README.md covering: what it does, its commands, how to
 install it (built-in vs a PLUGIN_SOURCES entry), and any instance
 requirements - proxy hosts, secrets, external accounts. "None" is a valid
@@ -146,6 +155,31 @@ the host's room (cheap - it reads only card rows), and
 `host.sendUpdateImmediately(cardId, data)` is the page-teardown variant of
 sendUpdate for `host.onBeforeDisconnect` departure beacons - no async work,
 same room binding as sendUpdate.
+
+**Measuring a link**: `host.ping(did, { timeoutMs })` sends one round-trip
+probe to a peer and resolves to milliseconds, or `null` when it did not
+answer in time - null is loss, never "very slow", and folding a timeout in
+as a number is how an average stops meaning anything. It exists because a
+plugin has no peer-addressed channel of its own: `sendCard` and `sendUpdate`
+are room broadcasts through the signed pipeline, so timing one of those
+measures signing and fan-out rather than the link. The peer answers the
+probe before any app work, so it reports the connection, not the
+application.
+
+It is one probe, not a schedule. The cadence, the window and the statistics
+are yours. Two things worth knowing before you pick an interval: probing
+faster than the round trip puts several probes in flight, which adds
+traffic to the link you are measuring and smears one queueing event across
+several samples; and network conditions change on the scale of a few
+hundred milliseconds, so sampling much slower than that gives you unrelated
+snapshots rather than a picture. The built-in `ping` plugin starts at 500ms
+and backs off to twice the measured round trip.
+
+`host.isRelayed(did)` says whether a peer is reached through a relay rather
+than directly. A relayed hop is peer to relay to peer and structurally
+slower, so anything reporting latency should label it - unlabelled, it reads
+as somebody's connection being bad when the finding is that the two of you
+never got a direct one.
 
 **Identity**: `ctx.senderDid` and `ctx.senderName` are verified by the host.
 Anything inside `update.data` is peer-supplied and untrusted; validate shapes

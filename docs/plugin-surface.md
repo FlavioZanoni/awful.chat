@@ -75,8 +75,11 @@ interface PluginManifest {
 
 interface PluginDefinition {
   manifest: PluginManifest;
-  // Svelte component rendering a card. Props: { card, state, host }.
-  card?: Component;
+  // Svelte component rendering a card. Props: { card, cardState, host }.
+  // cardState, never state: a prop called `state` shadows the $state rune
+  // in any card that uses runes. This doc said `state` for a while and the
+  // ping plugin followed it, so its state prop was never populated.
+  card?: PluginComponent;
   // Pure reducer. Host feeds persisted updates in lamport order (history
   // replay first, then live), ephemeral updates live only.
   reduce?: (state: unknown, update: PluginUpdate, ctx: UpdateCtx) => unknown;
@@ -190,7 +193,7 @@ New: `src/lib/plugins/state.svelte.ts`.
 
 `MsgRender.svelte` gets a `PluginCard` branch: look up pluginId in the
 registry, lazy-load the plugin chunk (skeleton while loading), mount the
-card component with `{ card, state, host }`. Fallback card for unknown or
+card component with `{ card, cardState, host }`. Fallback card for unknown or
 disabled plugins shows icon-less neutral chip with the plugin id. Card width
 constraints match existing file cards. PluginUpdate messages render nothing
 (they are data, not chat lines), but they must not break pagination or unread

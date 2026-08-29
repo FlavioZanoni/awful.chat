@@ -37,8 +37,21 @@
   const done = $derived(Object.keys(cardState.results).length > 0);
 
   let samples = $state<Record<string, Sample[]>>({});
+  /**
+   * Display only. The effect below WRITES this and must never read it: an
+   * effect that reads a piece of state and then assigns to it schedules
+   * itself again forever, which is what effect_update_depth_exceeded is.
+   */
   let running = $state(false);
   let elapsed = $state(0);
+  /**
+   * The "already started" guard, deliberately NOT reactive.
+   *
+   * A plain let is what keeps it out of the effect's dependencies. Asking
+   * `running` to be both the guard and the display flag is what crashed
+   * this card the moment anyone ran /ping.
+   */
+  let started = false;
 
   const ceiling = $derived(chartCeiling(Object.values(samples).flat()));
   const liveStats = $derived.by(() => {
@@ -52,7 +65,8 @@
   $effect(() => {
     // The owner measures once. Everyone else, and every later render of a
     // finished card, just reads.
-    if (!isOwner || done || running) return;
+    if (!isOwner || done || started) return;
+    started = true;
     running = true;
     let stopped = false;
     const startedAt = performance.now();
