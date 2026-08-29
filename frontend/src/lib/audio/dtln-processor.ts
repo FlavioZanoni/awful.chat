@@ -59,8 +59,19 @@ export class DtlnProcessor {
     this.initializing = true;
 
     try {
-      // Create context (it will start 'suspended' if no user gesture)
-      this.audioCtx ??= new AudioContext({ sampleRate: 16000 });
+      // Create context (it will start 'suspended' if no user gesture).
+      //
+      // At the HARDWARE rate, never { sampleRate: 16000 }. The worklet
+      // carries its own resampler - it reads the context rate, anti-alias
+      // filters, feeds the model at 16k and upsamples the result back - so a
+      // 16k context turned that into dead code (ratio 1) and pushed the
+      // resampling to the browser's MediaStreamAudioSourceNode boundary
+      // instead, whose behaviour in a context that doesn't match the mic's
+      // native rate is glitchy on some platforms (Linux/PipeWire worst).
+      // That was the "my voice is robotic for everyone else when I enable
+      // DTLN" that only some machines produced. Native rate also means the
+      // track handed to Opus is wideband instead of a 16k narrowband one.
+      this.audioCtx ??= new AudioContext();
 
       await this.audioCtx.audioWorklet.addModule(WORKLET_URL);
 

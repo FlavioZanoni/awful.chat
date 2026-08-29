@@ -45,7 +45,8 @@
   const AUDIO_CONSTRAINTS_NO_DTLN: MediaTrackConstraints = {
     echoCancellation: true,
     noiseSuppression: true,
-    autoGainControl: false,
+    // Mirrors the call path: AGC levels the mic there, so the test must too.
+    autoGainControl: true,
   };
 
   let inputDevices = $state<MediaDeviceInfo[]>([]);

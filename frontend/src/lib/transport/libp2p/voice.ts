@@ -61,7 +61,11 @@ const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 const AUDIO_CONSTRAINTS_NO_DTLN: MediaTrackConstraints = {
   echoCancellation: true,
   noiseSuppression: true,
-  autoGainControl: false,
+  // ON, as it was before the DTLN commit flipped it off with no comment.
+  // This is what pulls a quiet mic toward a target level before encoding -
+  // without it, everyone's loudness is whatever their hardware happens to
+  // produce, and every listener compensates per friend by hand.
+  autoGainControl: true,
 };
 
 type VoiceSignal =
@@ -116,6 +120,16 @@ interface RemotePeer {
 export class LibP2PVoice implements VoiceTransport {
   private node: Libp2p<AppServices> | null = null;
   private audioCtx: AudioContext | null = null;
+  /**
+   * Shared playback bus: every per-peer gain feeds this compressor, which
+   * feeds the speakers. This is the leveling stage the chain never had -
+   * nothing on the way in guarantees loudness (the DTLN path runs without
+   * AGC on purpose), so listeners were riding per-friend sliders by hand.
+   * The Web Audio compressor applies makeup gain from its own curve, so
+   * quiet voices come up and peaks stop clipping - the receive half of what
+   * Discord does. Per-peer sliders still work: they sit before the bus.
+   */
+  private outputBus: DynamicsCompressorNode | null = null;
   private micStream: MediaStream | null = null;
   private processedStream: MediaStream | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
@@ -200,6 +214,10 @@ export class LibP2PVoice implements VoiceTransport {
     if (this.audioCtx.state === "suspended") {
       await this.audioCtx.resume().catch(() => {});
     }
+    // ponytail: default compressor curve (threshold -24dB, ratio 12, with
+    // implicit makeup gain per the Web Audio spec); tune only if voices pump.
+    this.outputBus = this.audioCtx.createDynamicsCompressor();
+    this.outputBus.connect(this.audioCtx.destination);
 
     try {
       await this.startMic(this.activeInputDevice ?? undefined);
@@ -461,6 +479,7 @@ export class LibP2PVoice implements VoiceTransport {
     this.audioCtx?.close();
 
     this.audioCtx = null;
+    this.outputBus = null;
     this.micStream = null;
     this.processedStream = null;
     this.inputSource = null;
@@ -981,7 +1000,7 @@ export class LibP2PVoice implements VoiceTransport {
     gainNode.gain.value = this.currentOutputVolume * this.getPeerVolume(peerId);
 
     sourceNode.connect(gainNode);
-    gainNode.connect(this.audioCtx.destination);
+    gainNode.connect(this.outputBus ?? this.audioCtx.destination);
 
     remote.audio.srcObject = stream;
     remote.audio.volume = 0;
