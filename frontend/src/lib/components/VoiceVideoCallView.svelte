@@ -1338,8 +1338,7 @@ import {
     role="group"
     aria-label="Call"
     oncontextmenu={openViewMenu}
-    class="flex flex-col relative bg-background {panelSizeClass}
-      {dockedControls ? 'pb-14' : ''}"
+    class="flex flex-col relative bg-background {panelSizeClass}"
   >
     <!-- Always-mounted remote audio elements -->
     {#each remoteAudio as a (a.id)}
@@ -1421,16 +1420,32 @@ import {
       </div>
     {/each}
 
-    <!-- Call controls -->
+    <!-- Call controls. Docked = a REAL flex row below the tiles, not an
+         absolute bar floating over a padding band sized by guesswork: the
+         band (pb-14) was shorter than the bar, so the controls always bled
+         over the bottom tile row, and once the watching cluster (stop
+         button + volume) widened the bar it sat squarely on top of the
+         tiles - "undocked" in all but state. In flow, the tile area shrinks
+         around whatever height the bar actually has. The immersive modes
+         keep the floating overlay. -->
     <div
       role="group"
       aria-label="Call controls"
       class={cn(
-        "transition-all duration-300 absolute left-1/2 -translate-x-1/2 z-20",
-        isSmallScreen ? "bottom-2 w-[calc(100%-1rem)] max-w-120" : "bottom-4",
-        !dockedControls &&
-          !controlsVisible &&
-          "opacity-0 pointer-events-none translate-y-4"
+        "transition-all duration-300 z-20",
+        dockedControls
+          ? cn(
+              "relative shrink-0 py-2",
+              // Small screens' inner layout is a full-width 3-column grid;
+              // desktop is a shrink-to-fit cluster row that wants centering.
+              isSmallScreen ? "w-full px-2" : "flex justify-center"
+            )
+          : cn(
+              "absolute left-1/2 -translate-x-1/2",
+              isSmallScreen ? "bottom-2 w-[calc(100%-1rem)] max-w-120" : "bottom-4",
+              !controlsVisible &&
+                "opacity-0 pointer-events-none translate-y-4"
+            )
       )}
       onmouseenter={() => {
         if (isSmallScreen) return;
