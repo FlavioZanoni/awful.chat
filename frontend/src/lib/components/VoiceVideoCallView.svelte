@@ -565,6 +565,27 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     };
   });
 
+  /**
+   * Is the cursor over this plugin tile?
+   *
+   * Geometry, not :hover, for the same reason pluginBadgeHidden is: the
+   * plugin's content lives in a floating layer above the placeholder, and the
+   * controls inside it re-enable pointer events. The moment the cursor
+   * crosses one of those, the placeholder stops being hovered and any
+   * group-hover chrome blinks out - right when the user is reaching for it.
+   */
+  function pluginTileHovered(id: string): boolean {
+    const rect = pluginRects[id];
+    const m = panelMouse;
+    if (!rect || !m) return false;
+    return (
+      m.x >= rect.x &&
+      m.x <= rect.x + rect.w &&
+      m.y >= rect.y &&
+      m.y <= rect.y + rect.h
+    );
+  }
+
   function pluginBadgeHidden(id: string): boolean {
     const rect = pluginRects[id];
     const m = panelMouse;
@@ -923,7 +944,14 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     >
       <!-- Content lives in the persistent layer; this is only the anchor
            the layer follows, plus the chrome painted above it. -->
-      <Tip text="Stop watching plugin">
+      <!-- "Leave", not "Stop watching": the same word for every plugin, and
+           the mirror of the "Join {tile.label}" affordance this tile replaced.
+           A plugin is not always something you watch - a party is something
+           you are in. Hidden until the cursor is on the tile so it does not
+           sit over the plugin's own content the whole call - except on a
+           touch screen, where there is no cursor to reveal it with and a
+           hidden control is simply an unreachable one. -->
+      <Tip text="Leave {tile.label}">
         {#snippet children(props)}
           <button
             {...props}
@@ -934,8 +962,11 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
                 [...joinedPluginTiles].filter((id) => id !== tile.id)
               );
             }}
-            aria-label="Stop watching plugin"
-            class="absolute left-1.5 top-1.5 z-30 flex size-8 items-center justify-center rounded-lg bg-red-500/30 text-red-300 ring-1 ring-red-500/60 hover:bg-red-500/45"
+            aria-label="Leave {tile.label}"
+            class="absolute left-1.5 top-1.5 z-30 flex size-8 items-center justify-center rounded-lg bg-red-500/30 text-red-300 ring-1 ring-red-500/60 transition-opacity hover:bg-red-500/45 focus-visible:pointer-events-auto focus-visible:opacity-100 {isSmallScreen ||
+            pluginTileHovered(tile.id)
+              ? ''
+              : 'pointer-events-none opacity-0'}"
           >
             <Radio class="size-4" />
           </button>
@@ -968,6 +999,45 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
         </Tip>
       {/if}
     </div>
+  {:else if tile.kind === "plugin"}
+    <!-- Not joined yet. The tile itself is inert - only the join button takes
+         a click. As one big button, any stray click anywhere in the tile
+         opted you into loading a plugin's content, which is the one thing
+         opt-in exists to prevent. -->
+    <div
+      class="relative flex items-center justify-center overflow-hidden rounded-lg bg-muted/30 {isFocused
+        ? 'w-full h-full'
+        : ''} {compact ? 'aspect-video' : ''}"
+    >
+      {#if tile.pluginViewers?.length}
+        <Tip text={(tile.pluginViewers ?? []).join(", ")}>
+          {#snippet children(props)}
+            <div
+              {...props}
+              class="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-mono text-white"
+            >
+              <Eye class="size-3" />
+              {(tile.pluginViewers ?? []).length}
+            </div>
+          {/snippet}
+        </Tip>
+      {/if}
+      <div class="flex flex-col items-center gap-2">
+        <PluginIcon
+          icon={getManifest(tile.pluginId ?? "")?.icon ?? "🔌"}
+          class="size-8 text-primary"
+        />
+        <button
+          type="button"
+          onclick={() => {
+            joinedPluginTiles = new Set([...joinedPluginTiles, tile.id]);
+          }}
+          class="cursor-pointer rounded-full border border-border bg-background/95 px-3 py-1.5 text-xs font-mono text-foreground shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
+        >
+          Join {tile.label}
+        </button>
+      </div>
+    </div>
   {:else}
   <!-- A wrapper so the "stop watching" control can sit BESIDE the tile rather
        than inside it. A button nested in a button is invalid HTML, which is
@@ -991,11 +1061,6 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
       : ''}
       {isPendingTx ? 'ring-1 ring-primary/40 hover:ring-primary/80' : ''}"
     onclick={() => {
-      if (tile.kind === "plugin") {
-        // Opt-in, like screen shares: nothing plays until you join.
-        joinedPluginTiles = new Set([...joinedPluginTiles, tile.id]);
-        return;
-      }
       if (isPendingTx) {
         // Join this transmission (opt-in)
         if (tile.producerId) {
@@ -1007,13 +1072,11 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
       if (isFocused) onUnfocus();
       else onFocus();
     }}
-    aria-label={tile.kind === "plugin"
-      ? `Join ${tile.label}`
-      : isPendingTx
-        ? `Watch ${tile.label}'s screen`
-        : isFocused
-          ? "Minimize tile"
-          : `Focus ${tile.label}`}
+    aria-label={isPendingTx
+      ? `Watch ${tile.label}'s screen`
+      : isFocused
+        ? "Minimize tile"
+        : `Focus ${tile.label}`}
   >
     {#if hasVideo}
       <video
@@ -1026,36 +1089,6 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
           : ''}"
         use:videoAction={tile.videoTrack!}
       ></video>
-    {:else if tile.kind === "plugin"}
-      <!-- Unjoined plugin tile: icon plus an explicit join affordance. -->
-      {#if tile.pluginViewers?.length}
-        <Tip text={(tile.pluginViewers ?? []).join(", ")}>
-          {#snippet children(props)}
-            <div
-              {...props}
-              class="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-mono text-white"
-            >
-              <Eye class="size-3" />
-              {(tile.pluginViewers ?? []).length}
-            </div>
-          {/snippet}
-        </Tip>
-      {/if}
-      <div
-        class="pointer-events-none absolute inset-0 grid place-items-center bg-muted/30"
-      >
-        <div class="flex flex-col items-center gap-2">
-          <PluginIcon
-            icon={getManifest(tile.pluginId ?? "")?.icon ?? "🔌"}
-            class="size-8 text-primary"
-          />
-          <div
-            class="rounded-full border border-border bg-background/95 px-3 py-1.5 text-xs font-mono text-foreground shadow-sm transition-all group-hover:border-primary/50 group-hover:shadow-md"
-          >
-            Join {tile.label}
-          </div>
-        </div>
-      </div>
     {:else if !isPendingTx}
       <div
         class="relative flex items-center justify-center rounded-full {tile.isLocal
@@ -1110,7 +1143,7 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     {/if}
 
     <!-- Name badge -->
-    {#if !isPendingTx && tile.kind !== "plugin"}
+    {#if !isPendingTx}
       <div
         class="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 pointer-events-none"
       >
