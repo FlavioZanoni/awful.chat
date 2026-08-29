@@ -211,15 +211,14 @@ const MAX_CONSUMERS_PER_PEER = 256;
 // at creation, before either side has proven it can complete a handshake -
 // join + ms:create-transport on a raw websocket that only answers pings is
 // enough to hold one open, and the pair is otherwise only freed when the
-// peer leaves. A reap timer for transports that never connect closes that,
-// BUT it is off by default (0): the client creates both transports at join
-// and mediasoup-client only runs the connect handshake on the first
-// produce/consume, while voice is peer-to-peer - so in a call with no camera
-// or share the transports legitimately sit unconnected for the whole call,
-// and a 20s reap threw every such call out of the video server. Enable it
-// only once the client creates transports lazily.
+// peer leaves. A transport that has not connected within this window is
+// reaped. Safe only because the client creates transports LAZILY - on its
+// first publish or consume, which is also when mediasoup-client runs the
+// connect handshake. An earlier client created both at join, and since voice
+// is peer-to-peer they sat unconnected for every voice-only call; this reap
+// threw those calls out of the video server 20s in. 0 disables it.
 const TRANSPORT_CONNECT_TIMEOUT_MS = parseInt(
-  process.env.SFU_TRANSPORT_CONNECT_TIMEOUT_MS ?? "0",
+  process.env.SFU_TRANSPORT_CONNECT_TIMEOUT_MS ?? "20000",
   10,
 );
 // roomCode and peerId become Map keys and are echoed into the logs. Real ones

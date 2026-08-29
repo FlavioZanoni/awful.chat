@@ -215,8 +215,15 @@ export class MediasoupVideo implements VideoTransport {
       this.device = new Device();
       await this.device.load({ routerRtpCapabilities: capMsg.rtpCapabilities });
 
-      await this.createSendTransport();
-      await this.createRecvTransport();
+      // Transports are created on first use (publish / consume), not here.
+      // mediasoup-client only runs a transport's ICE/DTLS handshake on its
+      // first produce or consume, and voice is peer-to-peer, so eager
+      // transports sat unconnected for the whole of a voice-only call - a
+      // port pair held on the SFU for nothing, and exactly the shape a flood
+      // takes. With lazy creation the SFU can reap a transport that never
+      // connects (see SFU_TRANSPORT_CONNECT_TIMEOUT_MS) without touching a
+      // real client.
+      this.drainQueuedProducers();
       // A full handshake means any earlier "unreachable, retrying" banner
       // is now stale - without this signal it sat on screen forever even
       // after video quietly came back.
@@ -450,7 +457,7 @@ export class MediasoupVideo implements VideoTransport {
       };
 
       ws.onclose = () => {
-        const wasJoined = this.recvTransport !== null;
+        const wasJoined = this.device !== null;
 
         // Reject all pending requests when connection drops
         for (const [type, queue] of this.pending) {
@@ -507,11 +514,9 @@ export class MediasoupVideo implements VideoTransport {
    * is what stopped it ever healing.
    */
   private sessionIsLive(): boolean {
-    return (
-      this.sfuWs?.readyState === WebSocket.OPEN &&
-      this.sendTransport != null &&
-      this.recvTransport != null
-    );
+    // The device is what join() finishes with; transports are lazy now, so
+    // their absence says nothing about the session.
+    return this.sfuWs?.readyState === WebSocket.OPEN && this.device != null;
   }
 
   /** Whether the SFU session is actually up right now. */
@@ -593,6 +598,10 @@ export class MediasoupVideo implements VideoTransport {
   ): Promise<void> {
     // Reached whenever the SFU was unavailable at join time (the call itself
     // survives that now), so name the actual cause rather than "Not joined".
+    if (!this.device) {
+      throw new Error(SFU_PUBLISH_UNAVAILABLE);
+    }
+    await this.ensureSendTransport();
     if (!this.sendTransport) {
       throw new Error(SFU_PUBLISH_UNAVAILABLE);
     }
@@ -657,6 +666,27 @@ export class MediasoupVideo implements VideoTransport {
     this.paused.delete(source);
     // Emit locally so UI updates immediately for the sender
     this.emit("trackRemoved", "local", source);
+  }
+
+  private sendTransportP: Promise<void> | null = null;
+  private recvTransportP: Promise<void> | null = null;
+
+  /** Create the send transport once; concurrent callers share the request. */
+  private ensureSendTransport(): Promise<void> {
+    if (this.sendTransport) return Promise.resolve();
+    this.sendTransportP ??= this.createSendTransport().finally(() => {
+      this.sendTransportP = null;
+    });
+    return this.sendTransportP;
+  }
+
+  /** Same for the receive side. */
+  private ensureRecvTransport(): Promise<void> {
+    if (this.recvTransport) return Promise.resolve();
+    this.recvTransportP ??= this.createRecvTransport().finally(() => {
+      this.recvTransportP = null;
+    });
+    return this.recvTransportP;
   }
 
   private async createSendTransport(): Promise<void> {
@@ -733,8 +763,10 @@ export class MediasoupVideo implements VideoTransport {
         this.scheduleRejoin(this.joinGeneration);
       }
     });
+  }
 
-    // Drain any ms:new-producer messages that arrived before we were ready
+  /** ms:new-producer frames that arrived before join() finished. */
+  private drainQueuedProducers(): void {
     const queued = this.queuedProducers.splice(0);
     for (const producer of queued) {
       this.handleSignal(producer);
@@ -769,8 +801,8 @@ export class MediasoupVideo implements VideoTransport {
 
     switch (msg.type) {
       case "ms:new-producer":
-        // If recvTransport isn't ready yet, queue and process after join() completes.
-        if (!this.recvTransport) {
+        // Not joined yet (no device): queue and process after join() completes.
+        if (!this.device) {
           this.queuedProducers.push(msg);
           break;
         }
@@ -870,7 +902,9 @@ export class MediasoupVideo implements VideoTransport {
     producerId: string,
     source: VideoSource
   ): Promise<void> {
-    if (!this.device || !this.recvTransport) return;
+    if (!this.device) return;
+    await this.ensureRecvTransport();
+    if (!this.recvTransport) return;
 
     const response = await this.request<MSConsumerOptions>(
       {
