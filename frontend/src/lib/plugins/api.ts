@@ -75,6 +75,22 @@ export interface HostApi {
       onPrevious?: () => void;
     } | null
   ): void;
+  /**
+   * One round-trip probe to a peer, in milliseconds, or null if it did not
+   * answer in time.
+   *
+   * The host owns this because plugins have no peer-addressed channel at
+   * all - sendCard and sendUpdate are room broadcasts through the signed
+   * pipeline, and timing one of those would measure signing, fan-out and
+   * the reducer rather than the link. The probe is answered on the peer's
+   * receive path before any of that, so it measures the connection.
+   *
+   * One probe, not a schedule: the cadence, the window and what to do with
+   * the numbers belong to whoever is asking.
+   */
+  ping(did: string, opts?: { timeoutMs?: number }): Promise<number | null>;
+  /** Is this peer reached through a relay rather than directly? */
+  isRelayed(did: string): boolean;
   seededRandom(seed: string): () => number; // deterministic PRNG
   storage: {
     get(k: string): Promise<unknown>;

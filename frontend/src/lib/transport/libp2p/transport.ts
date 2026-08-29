@@ -175,6 +175,20 @@ export class LibP2PTransport implements PeerTransport {
   private lastInbound = new Map<string, number>();
   private pinging = new Set<string>();
   private pingMisses = new Map<string, number>();
+  /**
+   * When each outstanding RTT probe was sent, by nonce.
+   *
+   * Separate from the liveness pings, which only ever asked "did anything
+   * come back", never "how long did it take". A probe answers on the peer's
+   * receive path BEFORE any app work - signing, the reducer, rendering - so
+   * what this measures is the connection rather than the application, which
+   * is the useful half: a fast ping with slow chat points at the relay or
+   * the message pipeline instead of at the link.
+   */
+  private rttProbes = new Map<
+    number,
+    { peerId: string; sentAt: number; settle: (rtt: number | null) => void }
+  >();
   private pingNonceCounter = 0;
   /** Nonces issued for the CURRENT unconfirmed stream, per peer. */
   private confirmNonces = new Map<string, Set<number>>();
@@ -845,8 +859,48 @@ export class LibP2PTransport implements PeerTransport {
     }
   }
 
+  /**
+   * Round-trip time to a peer, in milliseconds, or null if it did not answer
+   * in time.
+   *
+   * Null is loss, not slowness: a probe that never returns has no latency to
+   * report, and folding it in as a very large number would drag every
+   * average and wreck the scale of anything plotting the result.
+   */
+  async measureRtt(peerId: string, timeoutMs = 2000): Promise<number | null> {
+    if (!this.node || !this.connectedPeers.has(peerId)) return null;
+    const nonce = ++this.pingNonceCounter;
+    return new Promise<number | null>((resolve) => {
+      let done = false;
+      const settle = (rtt: number | null) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        this.rttProbes.delete(nonce);
+        resolve(rtt);
+      };
+      const timer = setTimeout(() => settle(null), timeoutMs);
+      // sentAt is recorded as late as possible - after the frame is built,
+      // just before it goes out - so the measurement is the wire, not our
+      // own serialisation.
+      this.rttProbes.set(nonce, {
+        peerId,
+        sentAt: performance.now(),
+        settle,
+      });
+      void this.send(peerId, pingFrame(nonce)).catch(() => settle(null));
+    });
+  }
+
   private dropPeer(peerId: string): void {
     this.debugStats.disconnects++;
+    // Probes to a peer that just left resolve as loss now rather than
+    // sitting out their full timeout.
+    for (const [nonce, probe] of [...this.rttProbes]) {
+      if (probe.peerId !== peerId) continue;
+      this.rttProbes.delete(nonce);
+      probe.settle(null);
+    }
     this.pingMisses.delete(peerId);
     this.nextUpgradeAt.delete(peerId);
     this.upgradeBackoff.delete(peerId);
@@ -1381,6 +1435,16 @@ export class LibP2PTransport implements PeerTransport {
           }
           if (live?.type === "__pong") {
             this.debugStats.pongsIn++;
+            if (typeof live.n === "number") {
+              const probe = this.rttProbes.get(live.n);
+              if (probe) {
+                this.rttProbes.delete(live.n);
+                // Timed on this side only. Subtracting timestamps taken on
+                // two machines would measure their clock disagreement, which
+                // is unbounded, not the round trip.
+                probe.settle(performance.now() - probe.sentAt);
+              }
+            }
             // Confirm only when the echoed nonce belongs to the current
             // stream's pings.
             if (

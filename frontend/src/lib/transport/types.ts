@@ -76,6 +76,11 @@ export interface PeerTransport {
   peers(): string[];
   selfId(): string;
   isRelayed(peerId: string): boolean;
+  /**
+   * Round-trip time to a peer in milliseconds, or null when it did not
+   * answer within the timeout. Null means loss, never "very slow".
+   */
+  measureRtt(peerId: string, timeoutMs?: number): Promise<number | null>;
 }
 
 export interface VoiceEvents {

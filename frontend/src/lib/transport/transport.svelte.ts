@@ -3805,6 +3805,20 @@ export function didToPeerId(did: string): string | null {
   return null;
 }
 
+/**
+ * Round-trip time to a peer by DID, in milliseconds, or null for no answer.
+ *
+ * Takes a DID because that is the identity every surface above the
+ * transport uses; the peerId is an implementation detail of this layer.
+ */
+export async function measureRtt(
+  did: string,
+  timeoutMs?: number
+): Promise<number | null> {
+  const peerId = didToPeerId(did) ?? did;
+  return _transport.measureRtt(peerId, timeoutMs);
+}
+
 export function isRelayed(peerId: string): boolean {
   return transportState.relayedPeers.has(peerId);
 }

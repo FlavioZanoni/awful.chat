@@ -9,6 +9,9 @@ import { seededRandom } from "$lib/utils";
 import { identityStore } from "$lib/identity/identity.svelte";
 import {
   onBeforeDisconnect,
+  didToPeerId,
+  isRelayed,
+  measureRtt,
   onPeerDisconnect,
   peerIdToDid,
   sendUpdateImmediately,
@@ -91,6 +94,10 @@ export function makeHostApi(pluginId: string, roomCode: string): HostApi {
         }))
       );
     },
+    ping: (did, opts) => measureRtt(did, opts?.timeoutMs),
+    // isRelayed works in peerIds; every plugin surface works in DIDs, so
+    // the translation belongs here rather than in each caller.
+    isRelayed: (did) => isRelayed(didToPeerId(did) ?? did),
     seededRandom,
     // ponytail: localStorage-backed plugin storage, namespaced per plugin.
     // Move to IndexedDB when a plugin actually outgrows string-sized values.
