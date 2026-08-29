@@ -107,14 +107,33 @@ if (typeof document !== "undefined") {
  * registered", failing the whole join.
  */
 let _joinPromise: Promise<void> | null = null;
+/**
+ * Set when the user leaves while a join is still in flight.
+ *
+ * leaveCall() only unwinds `if (transportState.inCall)`, which is false until
+ * the very end of _joinCall - so pressing join then leave landed the user in a
+ * call they had already backed out of, with the leave's own cleanup having run
+ * first. The join checks this after each await and unwinds itself instead.
+ */
+let _joinAbandoned = false;
 
 export function joinCall(): Promise<void> {
   if (_joinPromise) return _joinPromise;
   if (transportState.inCall) return Promise.resolve();
+  _joinAbandoned = false;
+  transportState.joiningCall = true;
   _joinPromise = _joinCall().finally(() => {
     _joinPromise = null;
+    transportState.joiningCall = false;
   });
   return _joinPromise;
+}
+
+/** Thrown to unwind a join the user has already left. Never surfaced. */
+const ABANDONED = Symbol("join abandoned");
+
+function throwIfAbandoned(): void {
+  if (_joinAbandoned) throw ABANDONED;
 }
 
 let _presenceHeartbeat: ReturnType<typeof setInterval> | null = null;
@@ -135,8 +154,10 @@ async function _joinCall(): Promise<void> {
     // to a minute, and no voice link can exist before the peer connection
     // does - which is how hopping into a call ended up connecting to one
     // person immediately and the rest a couple of minutes later.
+    throwIfAbandoned();
     _transport.reconcileNow();
     await _voice.join(transportState.roomCode ?? "");
+    throwIfAbandoned();
     // Close the default-deny window right away: _voice.join() registers the
     // inbound stream handler before we have handed it any roster, and that
     // handler rejects everyone until setCallPeers() is called at least once.
@@ -159,6 +180,7 @@ async function _joinCall(): Promise<void> {
       // all that is left is to keep trying in the background.
       _video.ensureLive();
     }
+    throwIfAbandoned();
     transportState.inCall = true;
     transportState.callRoomCode = transportState.roomCode; // Track which room the call is in
     // Peers already in this call are known from their presence heartbeats -
@@ -190,6 +212,9 @@ async function _joinCall(): Promise<void> {
     transportState.localMicStream = null;
     transportState.cameraOff = true;
     transportState.screenSharing = false;
+    // An abandoned join is not a failure - the user left on purpose, and the
+    // unwinding above is exactly the cleanup they asked for.
+    if (err === ABANDONED) return;
     // Set error with auto-clear: transient permission errors should not persist
     // indefinitely on screen. If the join fails for another reason, the error
     // still clears after 10 seconds or when the user attempts to join again.
@@ -199,6 +224,9 @@ async function _joinCall(): Promise<void> {
 }
 
 export function leaveCall(): void {
+  // Tell any in-flight join to unwind. Without this the join runs to
+  // completion after the user has left and puts them back in the call.
+  if (_joinPromise) _joinAbandoned = true;
   // Clear any pending error auto-clear timer and the error itself. Once the
   // user leaves the call, any call-related error (like a permission denial
   // during camera startup) becomes stale.
@@ -307,9 +335,49 @@ export function stopCamera(): void {
   _video.stopCamera();
 }
 
-export async function toggleCamera(): Promise<void> {
-  if (transportState.cameraOff) await startCamera();
-  else stopCamera();
+/**
+ * In-flight guards for the media toggles.
+ *
+ * startCamera/startScreenShare await getUserMedia/getDisplayMedia, which can
+ * sit for seconds behind a permission prompt. Nothing stopped a second press
+ * in that window, so a start and a stop could interleave and leave the flag
+ * and the actual track disagreeing.
+ */
+let _cameraPromise: Promise<void> | null = null;
+let _screenPromise: Promise<void> | null = null;
+
+export function toggleCamera(): Promise<void> {
+  if (_cameraPromise) return _cameraPromise;
+  transportState.cameraPending = true;
+  _cameraPromise = (async () => {
+    if (transportState.cameraOff) await startCamera();
+    else stopCamera();
+  })()
+    .catch(() => {
+      // startCamera already reported it through transportState.error.
+    })
+    .finally(() => {
+      _cameraPromise = null;
+      transportState.cameraPending = false;
+    });
+  return _cameraPromise;
+}
+
+export function toggleScreenShare(): Promise<void> {
+  if (_screenPromise) return _screenPromise;
+  transportState.screenSharePending = true;
+  _screenPromise = (async () => {
+    if (transportState.screenSharing) stopScreenShare();
+    else await startScreenShare();
+  })()
+    .catch(() => {
+      // startScreenShare already reported it through transportState.error.
+    })
+    .finally(() => {
+      _screenPromise = null;
+      transportState.screenSharePending = false;
+    });
+  return _screenPromise;
 }
 
 export async function startScreenShare(): Promise<void> {

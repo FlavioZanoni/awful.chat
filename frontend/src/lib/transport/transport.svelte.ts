@@ -293,6 +293,20 @@ interface TransportState {
   relayConnected: boolean;
   connected: boolean;
   connecting: boolean;
+  /**
+   * A call join is in flight. Distinct from `connecting`, which is the RELAY
+   * connection: the join buttons were disabled on that flag, which joinCall
+   * never sets, so they stayed live and unlabelled for the whole join.
+   */
+  joiningCall: boolean;
+  /**
+   * A camera or screen-share request is in flight. Both go through
+   * getUserMedia/getDisplayMedia, which can sit for seconds behind a
+   * permission prompt, and their buttons had no pending state at all - so a
+   * second press during that window interleaved a start and a stop.
+   */
+  cameraPending: boolean;
+  screenSharePending: boolean;
   roomCode: string | null;
   /**
    * The conversation the USER is looking at, set by the view layer. Not the
@@ -355,6 +369,9 @@ export const transportState = $state<TransportState>({
   relayConnected: false,
   connected: false,
   connecting: false,
+  joiningCall: false,
+  cameraPending: false,
+  screenSharePending: false,
   roomCode: null,
   uiRoomCode: null,
   roomName: "",

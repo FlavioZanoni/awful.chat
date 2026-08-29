@@ -30,7 +30,7 @@
   import {
     joinCall,
     leaveCall,
-    startScreenShare,
+    toggleScreenShare,
     stopScreenShare,
     toggleCamera,
     toggleMute,
@@ -1203,11 +1203,17 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
       <button
         type="button"
         onclick={joinCall}
-        disabled={transportState.connecting}
+        disabled={transportState.connecting || transportState.joiningCall}
+        aria-busy={transportState.joiningCall}
+        class:animate-pulse={transportState.joiningCall}
         class="group relative flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/30 transition-all duration-200 hover:bg-primary/90 hover:scale-105 hover:shadow-primary/50 disabled:opacity-60 disabled:hover:scale-100"
       >
         <Phone class="size-4" />
-        {transportState.connecting ? "Connecting..." : "Join call"}
+        {transportState.joiningCall
+          ? "Joining..."
+          : transportState.connecting
+            ? "Connecting..."
+            : "Join call"}
       </button>
     </div>
   </div>
@@ -1354,6 +1360,9 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
                 {...props}
                 type="button"
                 onclick={toggleCamera}
+                disabled={transportState.cameraPending}
+                aria-busy={transportState.cameraPending}
+                class:animate-pulse={transportState.cameraPending}
                 aria-label={cameraOff ? "Turn on camera" : "Turn off camera"}
                 class="group relative flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                   {!cameraOff
@@ -1373,7 +1382,10 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
               <button
                 {...props}
                 type="button"
-                onclick={screenSharing ? stopScreenShare : startScreenShare}
+                onclick={toggleScreenShare}
+                disabled={transportState.screenSharePending}
+                aria-busy={transportState.screenSharePending}
+                class:animate-pulse={transportState.screenSharePending}
                 aria-label={screenSharing
                   ? "Stop screen share"
                   : "Share screen"}
@@ -1500,6 +1512,9 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
               {...props}
               type="button"
               onclick={toggleCamera}
+              disabled={transportState.cameraPending}
+              aria-busy={transportState.cameraPending}
+              class:animate-pulse={transportState.cameraPending}
               aria-label={cameraOff ? "Turn on camera" : "Turn off camera"}
               class="group relative flex h-8 w-8 md:h-10 md:w-10 items-center justify-center rounded-lg transition-all duration-200 shrink-0
                 {!cameraOff
@@ -1520,7 +1535,10 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
             <button
               {...props}
               type="button"
-              onclick={screenSharing ? stopScreenShare : startScreenShare}
+              onclick={toggleScreenShare}
+              disabled={transportState.screenSharePending}
+              aria-busy={transportState.screenSharePending}
+              class:animate-pulse={transportState.screenSharePending}
               aria-label={screenSharing
                 ? "Stop screen share"
                 : "Share screen"}

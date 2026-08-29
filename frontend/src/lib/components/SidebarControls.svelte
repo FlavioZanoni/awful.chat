@@ -16,8 +16,7 @@
   import {
     toggleMute,
     toggleCamera,
-    startScreenShare,
-    stopScreenShare,
+    toggleScreenShare,
     leaveCall,
   } from "$lib/transport/call.svelte";
   import { profileStore, loadProfile } from "$lib/profile.svelte";
@@ -92,6 +91,9 @@
         {...props}
         type="button"
         onclick={toggleCamera}
+        disabled={transportState.cameraPending}
+        aria-busy={transportState.cameraPending}
+        class:animate-pulse={transportState.cameraPending}
         aria-label={transportState.cameraOff
           ? "Turn on camera"
           : "Turn off camera"}
@@ -118,9 +120,10 @@
       <button
         {...props}
         type="button"
-        onclick={transportState.screenSharing
-          ? stopScreenShare
-          : startScreenShare}
+        onclick={toggleScreenShare}
+        disabled={transportState.screenSharePending}
+        aria-busy={transportState.screenSharePending}
+        class:animate-pulse={transportState.screenSharePending}
         aria-label={transportState.screenSharing
           ? "Stop screen share"
           : "Share screen"}

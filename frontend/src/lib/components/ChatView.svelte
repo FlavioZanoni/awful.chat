@@ -1517,9 +1517,12 @@
                 variant="ghost"
                 size="icon"
                 onclick={joinCall}
-                disabled={transportState.connecting}
+                disabled={transportState.connecting || transportState.joiningCall}
+                aria-busy={transportState.joiningCall}
                 aria-label="Join call"
-                class="text-muted-foreground hover:text-foreground cursor-pointer"
+                class="text-muted-foreground hover:text-foreground cursor-pointer {transportState.joiningCall
+                  ? 'animate-pulse'
+                  : ''}"
               >
                 <Phone class="size-4" />
               </Button>
