@@ -348,6 +348,8 @@ interface TransportState {
       tagChipColor?: string;
       bio?: string;
       nameEffect?: string;
+      nameShimmer?: boolean;
+      nameGlow?: boolean;
       gradient2?: string;
       gradient3?: string;
     }
@@ -580,6 +582,8 @@ function _hydratePeerProfileMeta(): void {
         tagChipColor: p.tagChipColor,
         bio: p.bio,
         nameEffect: p.nameEffect,
+        nameShimmer: p.nameShimmer,
+        nameGlow: p.nameGlow,
         gradient2: p.gradient2,
         gradient3: p.gradient3,
       });
@@ -791,6 +795,8 @@ async function _sendProfile(peerId?: string, isReply = false): Promise<void> {
     tagChipColor: profile?.tagChipColor ?? undefined,
     bio: profile?.bio ?? undefined,
     nameEffect: profile?.nameEffect ?? undefined,
+    nameShimmer: profile?.nameShimmer ?? undefined,
+    nameGlow: profile?.nameGlow ?? undefined,
   });
 
   if (peerId) {
@@ -1727,6 +1733,8 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
     tagChipColor: msg.tagChipColor,
     bio: msg.bio,
     nameEffect: msg.nameEffect,
+    nameShimmer: msg.nameShimmer,
+    nameGlow: msg.nameGlow,
   });
 
   if (Object.keys(validated).length > 0) {
@@ -1767,6 +1775,8 @@ async function _handleProfile(peerId: string, msg: WireProfile): Promise<void> {
         tagChipColor: validated.tagChipColor,
         bio: validated.bio,
         nameEffect: validated.nameEffect,
+        nameShimmer: validated.nameShimmer,
+        nameGlow: validated.nameGlow,
         ...(existing?.pfpData ? { pfpData: existing.pfpData } : {}),
       }).catch(() => {})
     )

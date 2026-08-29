@@ -55,6 +55,8 @@
     avatarUrl: string | null;
     color: string | null;
     nameEffect: string | null;
+    nameShimmer: boolean | null;
+    nameGlow: boolean | null;
     gradient2: string | null;
     gradient3: string | null;
     tagText: string | null;
@@ -109,6 +111,8 @@
       let avatarUrl: string | null = null;
       let color: string | null = null;
       let nameEffect: string | null = null;
+      let nameShimmer: boolean | null = null;
+      let nameGlow: boolean | null = null;
       let gradient2: string | null = null;
       let gradient3: string | null = null;
       let tagText: string | null = null;
@@ -120,6 +124,8 @@
         avatarUrl = profileStore.avatarUrl || null;
         color = profileStore.color || null;
         nameEffect = profileStore.nameEffect || null;
+        nameShimmer = profileStore.nameShimmer ?? null;
+        nameGlow = profileStore.nameGlow ?? null;
         gradient2 = profileStore.gradient2 || null;
         gradient3 = profileStore.gradient3 || null;
         tagText = profileStore.tagText || null;
@@ -135,12 +141,14 @@
             ? peerColors.get(nameKey) || peerColors.get(did) || null
             : null;
         // Name effect: respect showPeerNicknameColors like color does
-        nameEffect = displayPrefs.showPeerNicknameColors
-          ? peerProfileMeta.get(nameKey)?.nameEffect || peerProfileMeta.get(did)?.nameEffect || null
-          : null;
+        const meta = peerProfileMeta.get(nameKey) ?? peerProfileMeta.get(did);
+        if (displayPrefs.showPeerNicknameColors) {
+          nameEffect = meta?.nameEffect || null;
+          nameShimmer = meta?.nameShimmer ?? null;
+          nameGlow = meta?.nameGlow ?? null;
+        }
         // The tag is content like the name, not decoration - it ignores the
         // colors pref.
-        const meta = peerProfileMeta.get(nameKey) ?? peerProfileMeta.get(did);
         gradient2 = meta?.gradient2 || null;
         gradient3 = meta?.gradient3 || null;
         tagText = meta?.tagText || null;
@@ -176,6 +184,8 @@
         avatarUrl,
         color,
         nameEffect,
+        nameShimmer,
+        nameGlow,
         isOnline,
         isSelf,
         isRelayed: userIsRelayed,
@@ -343,7 +353,7 @@
     </div>
     <div class="min-w-0 flex-1">
       {#if true}
-        {@const effectStyle = nameEffectStyle(user.nameEffect ?? undefined, user.color ?? undefined, user.gradient2 ?? undefined, user.gradient3 ?? undefined)}
+        {@const effectStyle = nameEffectStyle(user.nameEffect ?? undefined, user.color ?? undefined, user.gradient2 ?? undefined, user.gradient3 ?? undefined, user.nameShimmer ?? undefined, user.nameGlow ?? undefined)}
         <div
           class="text-sm font-medium truncate {user.isSelf
             ? 'text-primary'

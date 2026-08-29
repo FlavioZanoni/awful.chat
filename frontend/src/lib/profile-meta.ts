@@ -11,6 +11,8 @@ export interface ValidatedProfileMeta {
   gradient3?: string;
   bio?: string;
   nameEffect?: string;
+  nameShimmer?: boolean;
+  nameGlow?: boolean;
   bannerUrl?: string;
 }
 
@@ -75,6 +77,16 @@ export function validateProfileMeta(meta: Partial<ValidatedProfileMeta>): Valida
     validEffects.includes(meta.nameEffect)
   ) {
     result.nameEffect = meta.nameEffect;
+  }
+
+  // Name shimmer: must be boolean if present
+  if (typeof meta.nameShimmer === "boolean") {
+    result.nameShimmer = meta.nameShimmer;
+  }
+
+  // Name glow: must be boolean if present
+  if (typeof meta.nameGlow === "boolean") {
+    result.nameGlow = meta.nameGlow;
   }
 
   // Banner URL: base64 raster data: image only, max 1.5 MB string length.

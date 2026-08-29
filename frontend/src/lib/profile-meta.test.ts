@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { validateProfileMeta } from "./profile-meta";
+import { wireToModel, modelToWire } from "./name-effect";
 
 describe("validateProfileMeta", () => {
   describe("tagText", () => {
@@ -210,6 +211,212 @@ describe("validateProfileMeta", () => {
       });
 
       expect(Object.keys(result).length).toBe(0);
+    });
+  });
+
+  describe("nameShimmer and nameGlow boolean fields", () => {
+    it("accepts boolean nameShimmer", () => {
+      expect(validateProfileMeta({ nameShimmer: true }).nameShimmer).toBe(
+        true
+      );
+      expect(validateProfileMeta({ nameShimmer: false }).nameShimmer).toBe(
+        false
+      );
+    });
+
+    it("accepts boolean nameGlow", () => {
+      expect(validateProfileMeta({ nameGlow: true }).nameGlow).toBe(true);
+      expect(validateProfileMeta({ nameGlow: false }).nameGlow).toBe(false);
+    });
+
+    it("drops non-boolean nameShimmer", () => {
+      expect(validateProfileMeta({ nameShimmer: "true" as any }).nameShimmer).toBeUndefined();
+      expect(validateProfileMeta({ nameShimmer: 1 as any }).nameShimmer).toBeUndefined();
+      expect(validateProfileMeta({ nameShimmer: null as any }).nameShimmer).toBeUndefined();
+    });
+
+    it("drops non-boolean nameGlow", () => {
+      expect(validateProfileMeta({ nameGlow: "true" as any }).nameGlow).toBeUndefined();
+      expect(validateProfileMeta({ nameGlow: 1 as any }).nameGlow).toBeUndefined();
+      expect(validateProfileMeta({ nameGlow: null as any }).nameGlow).toBeUndefined();
+    });
+
+    it("accepts both new fields together", () => {
+      const result = validateProfileMeta({
+        nameShimmer: true,
+        nameGlow: false,
+        nameEffect: "gradient",
+      });
+      expect(result.nameShimmer).toBe(true);
+      expect(result.nameGlow).toBe(false);
+      expect(result.nameEffect).toBe("gradient");
+    });
+  });
+
+  describe("wire <-> model conversions", () => {
+    describe("legacy compatibility - only nameEffect", () => {
+      it("converts nameEffect: 'none' to model correctly", () => {
+        const model = wireToModel("none", undefined, undefined);
+        expect(model).toEqual({ fill: "none", shimmer: false, glow: false });
+      });
+
+      it("converts nameEffect: 'gradient' to model correctly", () => {
+        const model = wireToModel("gradient", undefined, undefined);
+        expect(model).toEqual({
+          fill: "gradient",
+          shimmer: false,
+          glow: false,
+        });
+      });
+
+      it("converts nameEffect: 'shimmer' to model correctly", () => {
+        const model = wireToModel("shimmer", undefined, undefined);
+        expect(model).toEqual({
+          fill: "gradient",
+          shimmer: true,
+          glow: false,
+        });
+      });
+
+      it("converts nameEffect: 'glow' to model correctly", () => {
+        const model = wireToModel("glow", undefined, undefined);
+        expect(model).toEqual({ fill: "none", shimmer: false, glow: true });
+      });
+
+      it("converts nameEffect: 'rainbow' to model correctly", () => {
+        const model = wireToModel("rainbow", undefined, undefined);
+        expect(model).toEqual({
+          fill: "rainbow",
+          shimmer: false,
+          glow: false,
+        });
+      });
+    });
+
+    describe("new fields override legacy", () => {
+      it("new nameShimmer overrides legacy shimmer detection", () => {
+        // nameEffect: "shimmer" would set shimmer: true, but explicit false overrides
+        const model = wireToModel("shimmer", false, undefined);
+        expect(model.shimmer).toBe(false);
+      });
+
+      it("new nameGlow overrides legacy glow detection", () => {
+        const model = wireToModel("glow", undefined, false);
+        expect(model.glow).toBe(false);
+      });
+
+      it("new fields compose together", () => {
+        // A gradient with both shimmer and glow
+        const model = wireToModel("gradient", true, true);
+        expect(model).toEqual({
+          fill: "gradient",
+          shimmer: true,
+          glow: true,
+        });
+      });
+    });
+
+    describe("model -> wire round trip", () => {
+      it("round-trips 'none' to 'none'", () => {
+        const model = { fill: "none" as const, shimmer: false, glow: false };
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("none");
+        expect(wire.nameShimmer).toBe(false);
+        expect(wire.nameGlow).toBe(false);
+      });
+
+      it("round-trips gradient alone to 'gradient'", () => {
+        const model = { fill: "gradient" as const, shimmer: false, glow: false };
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("gradient");
+        expect(wire.nameShimmer).toBe(false);
+        expect(wire.nameGlow).toBe(false);
+      });
+
+      it("round-trips gradient+shimmer to 'shimmer'", () => {
+        const model = { fill: "gradient" as const, shimmer: true, glow: false };
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("shimmer");
+        expect(wire.nameShimmer).toBe(true);
+        expect(wire.nameGlow).toBe(false);
+      });
+
+      it("round-trips glow alone to 'glow'", () => {
+        const model = { fill: "none" as const, shimmer: false, glow: true };
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("glow");
+        expect(wire.nameShimmer).toBe(false);
+        expect(wire.nameGlow).toBe(true);
+      });
+
+      it("round-trips rainbow to 'rainbow'", () => {
+        const model = { fill: "rainbow" as const, shimmer: false, glow: false };
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("rainbow");
+        expect(wire.nameShimmer).toBe(false);
+        expect(wire.nameGlow).toBe(false);
+      });
+
+      it("round-trips gradient+glow to 'gradient' (gradient fill takes precedence)", () => {
+        // When we have gradient + glow, we write "gradient" to the wire,
+        // because gradient fill is the primary visual. The new fields preserve full info.
+        const model = { fill: "gradient" as const, shimmer: false, glow: true };
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("gradient");
+        expect(wire.nameShimmer).toBe(false);
+        expect(wire.nameGlow).toBe(true);
+      });
+
+      it("round-trips gradient+shimmer+glow to 'shimmer'", () => {
+        const model = { fill: "gradient" as const, shimmer: true, glow: true };
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("shimmer");
+        expect(wire.nameShimmer).toBe(true);
+        expect(wire.nameGlow).toBe(true);
+      });
+
+      it("old client sees gradient+glow as 'gradient' (closest approximation)", () => {
+        // When an old client sees this, they get nameEffect: "gradient" (the fill)
+        // and ignore nameShimmer/nameGlow, rendering just the gradient without glow
+        const model = { fill: "gradient" as const, shimmer: false, glow: true };
+        const wire = modelToWire(model);
+        // Old client sees nameEffect = "gradient", which shows the right colors
+        expect(wire.nameEffect).toBe("gradient");
+      });
+
+      it("old client sees gradient+shimmer as 'shimmer'", () => {
+        const model = { fill: "gradient" as const, shimmer: true, glow: false };
+        const wire = modelToWire(model);
+        // Old client sees nameEffect = "shimmer", which is correct
+        expect(wire.nameEffect).toBe("shimmer");
+      });
+    });
+
+    describe("legacy profile persistence", () => {
+      it("legacy gradient profile stays gradient when round-tripped", () => {
+        // Wire format from old client: just nameEffect: "gradient"
+        const model = wireToModel("gradient", undefined, undefined);
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("gradient");
+      });
+
+      it("legacy shimmer profile stays shimmer when round-tripped", () => {
+        const model = wireToModel("shimmer", undefined, undefined);
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("shimmer");
+      });
+
+      it("legacy glow profile stays glow when round-tripped", () => {
+        const model = wireToModel("glow", undefined, undefined);
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("glow");
+      });
+
+      it("legacy rainbow profile stays rainbow when round-tripped", () => {
+        const model = wireToModel("rainbow", undefined, undefined);
+        const wire = modelToWire(model);
+        expect(wire.nameEffect).toBe("rainbow");
+      });
     });
   });
 });

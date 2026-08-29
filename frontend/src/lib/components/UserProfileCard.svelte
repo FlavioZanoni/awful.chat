@@ -3,9 +3,10 @@
   import { profileStore } from "$lib/profile.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { nameEffectStyle } from "$lib/name-effect";
-  import { Copy, Check, MessageSquare, Pencil, UserPlus, UserRoundMinus } from "@lucide/svelte";
+  import { Copy, Check, MessageSquare, Pencil, UserPlus, UserRoundMinus, X } from "@lucide/svelte";
   import {
     Dialog,
+    DialogClose,
     DialogContent,
     DialogHeader,
     DialogTitle,
@@ -51,6 +52,8 @@
           tagChipColor: profileStore.tagChipColor ?? undefined,
           bio: profileStore.bio ?? undefined,
           nameEffect: profileStore.nameEffect ?? undefined,
+          nameShimmer: profileStore.nameShimmer ?? undefined,
+          nameGlow: profileStore.nameGlow ?? undefined,
           gradient2: profileStore.gradient2 ?? undefined,
           gradient3: profileStore.gradient3 ?? undefined,
         }
@@ -62,7 +65,9 @@
       profileMeta?.nameEffect,
       color,
       profileMeta?.gradient2,
-      profileMeta?.gradient3
+      profileMeta?.gradient3,
+      profileMeta?.nameShimmer,
+      profileMeta?.nameGlow
     )
   );
 
@@ -85,28 +90,61 @@
 </script>
 
 <Dialog {open} onOpenChange={(newOpen) => onOpenChange(newOpen)}>
-  <DialogContent class="sm:max-w-md">
-    <DialogHeader>
-      <DialogTitle class="sr-only">Profile</DialogTitle>
+  <!-- p-0 so the banner can own the top of the card outright. Everything
+       below it puts the padding back. -->
+  <DialogContent
+    class="sm:max-w-md gap-0 overflow-hidden p-0"
+    showCloseButton={false}
+  >
+    <DialogHeader class="sr-only">
+      <DialogTitle>Profile</DialogTitle>
     </DialogHeader>
 
-    <div class="flex flex-col gap-3">
-      <!-- Banner always renders (gradient fallback), the avatar overlaps its
-           bottom-left - same composition as the settings editor card. -->
+    <!-- Banner always renders (gradient fallback). It runs out to the
+         dialog's own edges and up under the close button, and stops at the
+         bottom by dissolving into the card rather than ending on a line.
+         Inset in its own rounded box it read as a thumbnail OF a banner;
+         full bleed it reads as the top of someone's page. -->
+    <div class="relative h-40 w-full shrink-0 sm:h-48">
       <div
-        class="w-full h-24 rounded-lg overflow-hidden bg-linear-to-r from-primary/20 to-secondary/40"
-      >
-        {#if bannerUrl}
-          <img
-            src={bannerUrl}
-            alt="Profile banner"
-            class="w-full h-full object-cover"
-          />
-        {/if}
-      </div>
+        class="absolute inset-0 bg-linear-to-r from-primary/20 to-secondary/40"
+      ></div>
+      {#if bannerUrl}
+        <img
+          src={bannerUrl}
+          alt="Profile banner"
+          class="absolute inset-0 size-full object-cover"
+        />
+      {/if}
+      <!-- The dissolve. Tall enough that the avatar sits inside it, so the
+           circle looks lit by the banner instead of pasted onto it. -->
+      <!-- Two guards against the hairline of un-faded image that showed
+           along the bottom: the gradient reaches solid at 96% rather than
+           exactly at the edge, and the element overshoots the edge by a
+           pixel. Centring the dialog with a 50% translate can leave it on a
+           half device pixel, and then the overlay and the image it covers
+           round to different rows. -->
+      <div
+        class="pointer-events-none absolute inset-x-0 -bottom-px h-2/3 bg-linear-to-b from-transparent via-background/45 via-60% to-background to-96%"
+      ></div>
+    </div>
 
+    <!-- The stock close button is a bare icon in the foreground colour, which
+         is a coin flip against an arbitrary photo. This one brings its own
+         backdrop. -->
+    <DialogClose
+      class="absolute top-3 right-3 z-20 grid size-7 cursor-pointer place-items-center rounded-full bg-black/40 text-white/90 backdrop-blur-sm transition hover:bg-black/60 hover:text-white focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:outline-hidden"
+    >
+      <X class="size-4" />
+      <span class="sr-only">Close</span>
+    </DialogClose>
+
+    <!-- relative, not just padding: the banner above is positioned and this
+         was not, so it painted in the layer beneath it and the banner covered
+         the avatar that is meant to overlap it. -->
+    <div class="relative z-10 flex flex-col gap-3 px-6 pb-6">
       <div
-        class="-mt-13 ml-3 flex size-20 items-center justify-center rounded-full overflow-hidden bg-primary/20 ring-4 ring-background shrink-0"
+        class="-mt-10 ml-3 flex size-20 items-center justify-center rounded-full overflow-hidden bg-primary/20 ring-4 ring-background shrink-0"
       >
         {#if avatarUrl}
           <img

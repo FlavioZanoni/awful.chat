@@ -1181,6 +1181,20 @@
     return { g2: meta?.gradient2, g3: meta?.gradient3 };
   }
 
+  /** Shimmer state for the name effect, keyed like names. Respects showPeerNicknameColors. */
+  function senderShimmer(senderId: string): boolean | undefined {
+    if (!displayPrefs.showPeerNicknameColors) return undefined;
+    const did = senderDid(senderId);
+    return peerProfileMeta.get(did)?.nameShimmer ?? peerProfileMeta.get(senderId)?.nameShimmer;
+  }
+
+  /** Glow state for the name effect, keyed like names. Respects showPeerNicknameColors. */
+  function senderGlow(senderId: string): boolean | undefined {
+    if (!displayPrefs.showPeerNicknameColors) return undefined;
+    const did = senderDid(senderId);
+    return peerProfileMeta.get(did)?.nameGlow ?? peerProfileMeta.get(senderId)?.nameGlow;
+  }
+
   /** Tag chip, keyed like names. Deliberately NOT behind
    *  showPeerNicknameColors: the tag is content, like the name; the colors
    *  pref governs decoration of the name itself. */
@@ -1820,7 +1834,7 @@
                     </div>
                     <div class="flex items-baseline gap-2">
                       {#if isOwn}
-                        {@const effectStyle = nameEffectStyle(profileStore.nameEffect, profileStore.color, profileStore.gradient2 ?? undefined, profileStore.gradient3 ?? undefined)}
+                        {@const effectStyle = nameEffectStyle(profileStore.nameEffect, profileStore.color, profileStore.gradient2 ?? undefined, profileStore.gradient3 ?? undefined, profileStore.nameShimmer, profileStore.nameGlow)}
                         <span
                           role="button"
                           tabindex="0"
@@ -1846,7 +1860,9 @@
                         {@const color = senderColor(msg.senderId)}
                         {@const effect = senderEffect(msg.senderId)}
                         {@const grads = senderGradients(msg.senderId)}
-                        {@const effectStyle = nameEffectStyle(effect, color, grads.g2, grads.g3)}
+                        {@const shimmer = senderShimmer(msg.senderId)}
+                        {@const glow = senderGlow(msg.senderId)}
+                        {@const effectStyle = nameEffectStyle(effect, color, grads.g2, grads.g3, shimmer, glow)}
                         <span
                           role="button"
                           tabindex="0"

@@ -165,6 +165,14 @@ export interface WireProfile {
   tagChipColor?: string;
   bio?: string;
   nameEffect?: string;
+  /**
+   * The composable half of the name effect. nameEffect stays the closest
+   * single-effect approximation so a peer on an older build still renders
+   * something; these two carry what that approximation cannot express, and
+   * an older build simply ignores fields it does not know.
+   */
+  nameShimmer?: boolean;
+  nameGlow?: boolean;
   gradient2?: string | null;
   gradient3?: string | null;
 }

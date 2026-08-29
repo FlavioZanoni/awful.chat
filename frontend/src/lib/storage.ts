@@ -68,6 +68,10 @@ export interface OwnProfile {
   tagChipColor?: string; // hex like "#aabbcc"
   bio?: string; // max 200 chars
   nameEffect?: string; // none | gradient | shimmer | glow | rainbow
+  /** Animated sweep overlay on the fill gradient. */
+  nameShimmer?: boolean;
+  /** Independent text-shadow glow, composes with any fill. */
+  nameGlow?: boolean;
   /** Extra gradient stops for the "gradient" name effect. */
   gradient2?: string;
   gradient3?: string;
@@ -89,6 +93,10 @@ export interface PeerProfile {
   tagChipColor?: string; // hex like "#aabbcc"
   bio?: string; // max 200 chars
   nameEffect?: string; // none | gradient | shimmer | glow | rainbow
+  /** Animated sweep overlay on the fill gradient. */
+  nameShimmer?: boolean;
+  /** Independent text-shadow glow, composes with any fill. */
+  nameGlow?: boolean;
   /** Extra gradient stops for the "gradient" name effect. */
   gradient2?: string;
   gradient3?: string;
@@ -1583,7 +1591,7 @@ export async function rekeyOwnProfile(
  * pfpData and pfpURL are mutually exclusive - setting one clears the other.
  */
 export async function updateOwnProfile(
-  patch: Partial<Pick<OwnProfile, "nickname" | "pfpData" | "pfpURL" | "color" | "bannerData" | "bannerURL" | "tagText" | "tagTextColor" | "tagChipColor" | "bio" | "nameEffect" | "gradient2" | "gradient3">>
+  patch: Partial<Pick<OwnProfile, "nickname" | "pfpData" | "pfpURL" | "color" | "bannerData" | "bannerURL" | "tagText" | "tagTextColor" | "tagChipColor" | "bio" | "nameEffect" | "nameShimmer" | "nameGlow" | "gradient2" | "gradient3">>
 ): Promise<void> {
   const database = await getDB();
   const all = await database.getAll("profiles");
