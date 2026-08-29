@@ -23,5 +23,24 @@
       "$lib/*": ["./src/lib/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte"]
+  // The built-in plugins too. They are first-party code that ships in the
+  // bundle, and leaving them out meant their type errors were invisible -
+  // poll and wheel both used HostApi without importing it and nothing ever
+  // said so.
+  //
+  // Named one by one rather than plugins/**: fetched PLUGIN_SOURCES plugins
+  // live in that same folder, and this repo's gate must not turn red for
+  // somebody else's code. A new built-in adds a line here, next to adding
+  // its folder.
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.js",
+    "src/**/*.svelte",
+    "plugins/ping/**/*.ts",
+    "plugins/ping/**/*.svelte",
+    "plugins/poll/**/*.ts",
+    "plugins/poll/**/*.svelte",
+    "plugins/wheel/**/*.ts",
+    "plugins/wheel/**/*.svelte"
+  ]
 }

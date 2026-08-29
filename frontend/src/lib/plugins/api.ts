@@ -1,4 +1,17 @@
-import type { ComponentType } from "svelte";
+import type { Component } from "svelte";
+
+/**
+ * A component the host renders on a plugin's behalf.
+ *
+ * Props are permissive on purpose. The host's side of the contract is
+ * fixed - card, cardState, host - but cardState is a different shape for
+ * every plugin, and bare `Component` means `Component<{}>`, which a
+ * component that declares any props at all cannot satisfy. Naming the type
+ * once keeps that reasoning in one place instead of a cast at each surface
+ * that renders one.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type PluginComponent = Component<any>;
 
 export interface PluginManifest {
   id: string; // ^[a-z0-9-]{2,32}$, folder name must match
@@ -100,15 +113,17 @@ export interface HostApi {
 
 export interface PluginDefinition {
   manifest: PluginManifest;
-  // Svelte component rendering a card. Props: { card, state, host }.
-  card?: ComponentType;
+  // Svelte component rendering a card. Props: { card, cardState, host }.
+  // cardState, not state: a prop called `state` shadows the $state rune in
+  // any card that uses runes, and the host has always passed this name.
+  card?: PluginComponent;
   /**
    * Compact view for a pinned sidebar widget box. Same props as `card`
    * ({ card, cardState, host }); when absent, pinning falls back to the
    * card component, so every plugin is pinnable with zero changes. Keep it
    * glanceable - the box is small and capped in height.
    */
-  widget?: ComponentType;
+  widget?: PluginComponent;
   /**
    * A tile in the call grid - the plugin appears as a "streamer" (a YouTube
    * watch-together, a shared board) rather than a chat card. Same props as
@@ -116,7 +131,7 @@ export interface PluginDefinition {
    * loud until the user opted in. Content renders locally on every client;
    * only plugin state syncs, so this costs the SFU nothing.
    */
-  callTile?: ComponentType;
+  callTile?: PluginComponent;
   /**
    * Whether a card should currently occupy a call tile, derived from its
    * reduced state - PURE and deterministic, so every client shows and hides

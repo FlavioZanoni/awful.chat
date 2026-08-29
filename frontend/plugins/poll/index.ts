@@ -1,4 +1,4 @@
-import { definePlugin } from "$lib/plugins/api";
+import { definePlugin, type HostApi } from "$lib/plugins/api";
 import { manifest } from "./manifest";
 import PollCard from "./PollCard.svelte";
 import { initialState, parsePollArgs, reduce } from "./logic";

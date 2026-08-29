@@ -21,17 +21,20 @@
   } from "./logic";
   import type { PingState } from "./index";
 
+  // cardState, not state. That is the name the host passes - so a prop
+  // called `state` was simply never populated - and it would have shadowed
+  // the $state rune used all through this component.
   let {
     card,
-    state,
+    cardState,
     host,
-  }: { card: { id: string }; state: PingState; host: HostApi } = $props();
+  }: { card: { id: string }; cardState: PingState; host: HostApi } = $props();
 
   /** One line each, in the order they were named. */
   const COLORS = ["#22c55e", "#38bdf8", "#f472b6"];
 
-  const isOwner = $derived(state.ownerDid === host.selfDid());
-  const done = $derived(Object.keys(state.results).length > 0);
+  const isOwner = $derived(cardState.ownerDid === host.selfDid());
+  const done = $derived(Object.keys(cardState.results).length > 0);
 
   let samples = $state<Record<string, Sample[]>>({});
   let running = $state(false);
@@ -40,11 +43,11 @@
   const ceiling = $derived(chartCeiling(Object.values(samples).flat()));
   const liveStats = $derived.by(() => {
     const out: Record<string, Stats> = {};
-    for (const t of state.targets) out[t.did] = summarize(samples[t.did] ?? []);
+    for (const t of cardState.targets) out[t.did] = summarize(samples[t.did] ?? []);
     return out;
   });
   /** Live while measuring, then whatever was published. */
-  const shown = $derived(running || !done ? liveStats : state.results);
+  const shown = $derived(running || !done ? liveStats : cardState.results);
 
   $effect(() => {
     // The owner measures once. Everyone else, and every later render of a
@@ -69,11 +72,11 @@
 
     // All targets on their own clocks: a slow peer must not hold up the
     // cadence of a fast one, which is what a shared loop would do.
-    void Promise.all(state.targets.map((t) => probe(t.did))).then(() => {
+    void Promise.all(cardState.targets.map((t) => probe(t.did))).then(() => {
       if (stopped) return;
       running = false;
       const results: Record<string, Stats> = {};
-      for (const t of state.targets) {
+      for (const t of cardState.targets) {
         results[t.did] = summarize(samples[t.did] ?? []);
       }
       void host.sendUpdate(card.id, {
@@ -142,7 +145,7 @@
         stroke-opacity="0.12"
         stroke-width="0.4"
       />
-      {#each state.targets as t, i (t.did)}
+      {#each cardState.targets as t, i (t.did)}
         {@const pts = line(samples[t.did] ?? [])}
         {#if pts}
           <polyline
@@ -163,7 +166,7 @@
   </div>
 
   <div class="flex flex-col gap-1">
-    {#each state.targets as t, i (t.did)}
+    {#each cardState.targets as t, i (t.did)}
       {@const s = shown[t.did]}
       <div class="flex items-center gap-2 font-mono text-[11px]">
         <span
@@ -171,7 +174,7 @@
           style="background: {COLORS[i % COLORS.length]}"
         ></span>
         <span class="min-w-0 flex-1 truncate">{t.name}</span>
-        {#if state.relayed.includes(t.did)}
+        {#if cardState.relayed.includes(t.did)}
           <!-- A relayed hop is peer to relay to peer, so it is structurally
                slower. Without saying so the graph looks like their
                connection is bad when the real answer is that we never

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ComponentType } from "svelte";
+  import type { PluginComponent } from "$lib/plugins/api";
   import { getPlugin } from "$lib/plugins/registry";
   import { getCardState, onCardStateChange } from "$lib/plugins/state.svelte";
   import { makeHostApi } from "$lib/plugins/host";
@@ -21,7 +21,7 @@
   } = $props();
 
   let card = $state<Message | null>(null);
-  let tileComponent = $state<ComponentType | null>(null);
+  let tileComponent = $state<PluginComponent | null>(null);
   let tileState = $state<unknown>(undefined);
 
   // One host per (plugin, room): a fresh host per render meant a fresh
@@ -41,7 +41,7 @@
         card = card ?? (await getMessage(cardId)) ?? null;
         if (!card) return;
         tileState = await getCardState(cardId, roomCode, plugin);
-        tileComponent = plugin.callTile as ComponentType;
+        tileComponent = plugin.callTile;
       } catch (err) {
         console.warn("[plugins] call tile load failed:", err);
       }

@@ -55,7 +55,7 @@
   import { getPlugin, getManifest } from "$lib/plugins/registry";
   import { getCardState, onCardStateChange } from "$lib/plugins/state.svelte";
   import { isPluginEnabled, pluginPrefs } from "$lib/plugins/prefs.svelte";
-  import type { ComponentType } from "svelte";
+  import type { PluginComponent } from "$lib/plugins/api";
 
   interface Props {
     msg: Message;
@@ -375,7 +375,7 @@
   let videoEl = $state<HTMLVideoElement | null>(null);
   let videoNaturalWidth = $state(0);
   let videoNaturalHeight = $state(0);
-  let pluginCardComponent = $state<ComponentType | null>(null);
+  let pluginCardComponent = $state<PluginComponent | null>(null);
   let pluginCardState = $state<unknown>(undefined);
   let pluginCardError = $state<string | null>(null);
   let pluginCardDisabled = $state(false);

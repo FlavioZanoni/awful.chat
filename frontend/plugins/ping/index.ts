@@ -41,10 +41,13 @@ export function initialState(cardData: unknown): PingState {
 }
 
 export function reduce(
-  state: PingState,
+  prev: unknown,
   update: { data: unknown },
   ctx: { senderDid: string }
 ): PingState {
+  // The host hands state back as unknown - it does not know a plugin's
+  // shape - so the narrowing happens here rather than in the signature.
+  const state = prev as PingState;
   const data = update.data as Record<string, unknown>;
   // Strict, never `state.ownerDid && ...`: that guard reads as "check when
   // there is an owner" and behaves as "skip the check when there is not".
