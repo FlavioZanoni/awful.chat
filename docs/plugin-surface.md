@@ -197,6 +197,26 @@ constraints match existing file cards. PluginUpdate messages render nothing
 counts: they are excluded from the unread badge the same way reactions are
 (verify how Reaction is counted and mirror it).
 
+### Shared components
+
+Plugins may render a small set of host components, exported from
+`$lib/plugins/ui`:
+
+| Export | What it is |
+| --- | --- |
+| `Tip` | Tooltip for one control. Preferred over the native `title` attribute, which cannot be styled and has a browser-controlled delay. |
+
+That module is the contract. A plugin importing `$lib/components/...`
+directly would make every file under that folder public API by accident,
+unversioned, so tidying it up would silently break plugins the host never
+sees. Anything exported from `$lib/plugins/ui` is a compatibility promise
+covered by the manifest's `apiVersion`.
+
+Keep the list to components that are genuinely self-contained - no host
+state, no assumptions about where they are mounted - and prefer growing the
+`HostApi` over growing this list: data is a smaller promise to keep than
+layout.
+
 ## 5. Slash commands
 
 - `ChatView.svelte` composer: on send, if the text matches `^/([a-z0-9-]+)\s?(.*)$`

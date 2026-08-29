@@ -178,6 +178,40 @@ other users are unaffected.
 rendered on an instance lazy-loads a chunk containing the full icon set, paid
 once and only by instances whose plugins use lucide names.
 
+## Shared components
+
+`$lib/plugins/ui` is the one place to import a host component from. Today it
+exports `Tip`, a tooltip for a single control:
+
+```svelte
+import { Tip } from "$lib/plugins/ui";
+
+<Tip text="Next track">
+  {#snippet children(props)}
+    <button {...props} onclick={next} aria-label="Next track">
+      <SkipForward class="size-4" />
+    </button>
+  {/snippet}
+</Tip>
+```
+
+Prefer it over the native `title` attribute, which cannot be styled, has a
+delay the browser picks, and looks foreign next to the rest of the app.
+
+Two things about the shape. The trigger props go on YOUR element rather than
+Tip wrapping it in a button of its own - so the tooltip attaches to the real
+control, there are no nested interactive elements, and it opens on keyboard
+focus. And a tooltip is not an accessible name: an icon-only control still
+needs its own `aria-label`, because `Tip` renders a visual hint, not a label
+screen readers use.
+
+Import from `$lib/plugins/ui`, never from `$lib/components/...` directly.
+Everything under `components/` is the app's own and moves without warning;
+only what this module exports is a promise, tied to the `apiVersion` in your
+manifest. If you need something that is not there, ask - and expect the
+answer to be a `host` method rather than a component where that is possible,
+since data is a smaller promise for the host to keep than layout.
+
 ## Calling external APIs
 
 Browsers cannot reach most APIs directly (CORS), and API keys must never
