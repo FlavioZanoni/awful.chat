@@ -85,6 +85,93 @@ describe("admitsInboundStream (default-deny inbound guard)", () => {
   });
 });
 
+describe("handleWireSignal (signalling over the app transport)", () => {
+  it("ignores a signal from a peer outside the roster", () => {
+    const { voice, internals } = makeVoice();
+    voice.setCallPeers(["bbb"]);
+    let created = false;
+    internals.ensureRemotePeer = () => {
+      created = true;
+    };
+    voice.handleWireSignal("aaa", { type: "offer", sdp: "v=0..." });
+    expect(created).toBe(false);
+  });
+
+  it("counts and drops a malformed signal before any roster or pc work", () => {
+    const { voice, internals } = makeVoice();
+    voice.setCallPeers(["aaa"]);
+    voice.handleWireSignal("aaa", { type: "eval", sdp: "x" });
+    expect(
+      (internals.debugStats as Record<string, number>).signalsInvalid
+    ).toBe(1);
+    expect((internals.remotePeers as Map<string, unknown>).size).toBe(0);
+  });
+
+  it("creates the peer only for an admitted offer, and routes it on", () => {
+    const { voice, internals } = makeVoice();
+    voice.setCallPeers(["aaa"]);
+    const calls: string[] = [];
+    internals.ensureRemotePeer = (peerId: string) => {
+      calls.push(`ensure:${peerId}`);
+    };
+    internals.handleSignal = async (peerId: string, sig: { type: string }) => {
+      calls.push(`signal:${peerId}:${sig.type}`);
+    };
+    voice.handleWireSignal("aaa", { type: "offer", sdp: "v=0..." });
+    // An answer or candidate must not create state - stale ones arrive after
+    // a teardown, and a fresh pc built for them would sit forever.
+    voice.handleWireSignal("aaa", {
+      type: "ice",
+      candidate: { candidate: "candidate:1" },
+    });
+    expect(calls).toEqual([
+      "ensure:aaa",
+      "signal:aaa:offer",
+      "signal:aaa:ice",
+    ]);
+  });
+});
+
+describe("dialAndOfferInner offer delivery", () => {
+  it("tears the link down when the transport says the offer never went out", async () => {
+    const { voice, internals } = makeVoice();
+    internals.node = {};
+    // A pc stub that hands out an offer; the transport refuses to deliver it.
+    const remote = {
+      peerId: "aaa",
+      pc: {
+        remoteDescription: null,
+        signalingState: "stable",
+        localDescription: null,
+        createOffer: async () => ({ type: "offer", sdp: "v=0..." }),
+        setLocalDescription: async () => {},
+        close: () => {},
+      },
+      stream: null,
+      audio: { srcObject: null },
+      sourceNode: null,
+      gainNode: null,
+      pendingCandidates: [],
+      createdAt: Date.now(),
+      everConnected: false,
+      okAt: Date.now(),
+    };
+    internals.ensureRemotePeer = () => remote;
+    (internals.remotePeers as Map<string, unknown>).set("aaa", remote);
+    (voice as never as { transport: { send: () => Promise<boolean> } })[
+      "transport"
+    ].send = async () => false;
+
+    await (
+      internals.dialAndOfferInner as (peerId: string) => Promise<void>
+    ).call(internals, "aaa");
+
+    expect((internals.remotePeers as Map<string, unknown>).has("aaa")).toBe(
+      false
+    );
+  });
+});
+
 describe("pendingCandidates cap", () => {
   it("stops buffering at MAX_PENDING_CANDIDATES, dropping the newest", async () => {
     const { internals } = makeVoice();

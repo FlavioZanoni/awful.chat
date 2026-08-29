@@ -2757,6 +2757,9 @@ _transport.on("message", (peerId, data, room) => {
       case MessageType.VoiceRedial:
         _voice.handleRedialRequest(peerId);
         break;
+      case MessageType.VoiceSignal:
+        _voice.handleWireSignal(peerId, msg.signal);
+        break;
       case MessageType.WatchPresence:
         _handleWatchPresence(peerId, msg.watching);
         break;

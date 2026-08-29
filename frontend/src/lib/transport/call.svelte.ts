@@ -102,9 +102,8 @@ if (typeof document !== "undefined") {
 
 /**
  * In flight join. `transportState.inCall` only flips once the awaits below
- * finish, so a second tap on "Join call" used to re-enter and race the first:
- * both registered the /voice/1.0.0 handler and libp2p threw "Handler already
- * registered", failing the whole join.
+ * finish, so a second tap on "Join call" used to re-enter and race the first,
+ * building two audio pipelines against one microphone.
  */
 let _joinPromise: Promise<void> | null = null;
 /**
@@ -158,11 +157,10 @@ async function _joinCall(): Promise<void> {
     _transport.reconcileNow();
     await _voice.join(transportState.roomCode ?? "");
     throwIfAbandoned();
-    // Close the default-deny window right away: _voice.join() registers the
-    // inbound stream handler before we have handed it any roster, and that
-    // handler rejects everyone until setCallPeers() is called at least once.
+    // Close the default-deny window right away: incoming voice signals are
+    // rejected until setCallPeers() is called at least once.
     // _video.join() below is a network round trip, and without this call the
-    // handler would sit open to any peer that can dial /voice/1.0.0 for its
+    // voice layer would sit rosterless for its
     // whole duration. transportState.inCall/.callRoomCode are not set yet at
     // this point, so this first pass syncs an empty roster (default-deny with
     // nobody admitted) - the real roster lands with the call below, and the

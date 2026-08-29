@@ -1,6 +1,4 @@
 import type { Libp2p } from "libp2p";
-import type { Connection, Stream } from "@libp2p/interface";
-import type { StreamMessageEvent, StreamCloseEvent } from "@libp2p/interface";
 import type { VoiceTransport, VoiceEvents } from "../types";
 import type { AppServices, LibP2PTransport } from "./transport";
 import type { DtlnProcessor } from "$lib/audio/dtln-processor";
@@ -8,10 +6,8 @@ import { getIceServers } from "../ice-server-list";
 import { MessageType } from "$lib/types/message";
 import { encode } from "$lib/utils";
 
-const VOICE_PROTO = "/voice/1.0.0";
 /** Same ceiling as the output slider in audio settings. */
 export const MAX_PEER_VOLUME = 2.5;
-const MAX_FRAME_BYTES = 256 * 1024; // 256 KB max frame size; signaling payloads are tiny
 /** How often the roster and the actual voice links are compared. */
 const VOICE_RECONCILE_MS = 4_000;
 /**
@@ -40,19 +36,24 @@ const VOICE_LINK_GRACE_MS = 20_000;
 const VOICE_SETUP_DEADLINE_MS = 30_000;
 /** Age past which a never-connected link stops overriding the peer's redial ask. */
 const VOICE_ASK_TRUMPS_HANDSHAKE_MS = 10_000;
-/** Ceiling on signals buffered while a peer has no signalling stream. */
-const MAX_QUEUED_SIGNALS = 64;
 /**
  * Ceiling on ICE candidates buffered per peer while waiting on their remote
- * description. Same shape as MAX_QUEUED_SIGNALS: an admitted peer that never
- * completes offer/answer should not be able to grow this without bound.
+ * description: an admitted peer that never completes offer/answer should not
+ * be able to grow this without bound.
  */
 const MAX_PENDING_CANDIDATES = 256;
 /** Rate limit on asking the other side to dial us. */
 const VOICE_REDIAL_ASK_MS = 5_000;
 
+// The DTLN set: browser noise suppression OFF (the model replaces it), but
+// echo cancellation ON. DTLN is noise suppression, not echo cancellation - a
+// friend's voice out of the speakers is speech, not noise, so with AEC off
+// the model passed it from the mic straight back to them. Everyone heard an
+// echo whenever anyone talked, which read as "DTLN is processing inbound
+// audio too" (it never touches the inbound path). AEC runs at capture,
+// before the track reaches the worklet, so the two compose.
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
-  echoCancellation: false,
+  echoCancellation: true,
   noiseSuppression: false,
   autoGainControl: false,
 };
@@ -98,7 +99,6 @@ interface RemotePeer {
   sourceNode: MediaStreamAudioSourceNode | null;
   gainNode: GainNode | null;
   peerId: string;
-  sigStream: Stream | null;
   pendingCandidates: RTCIceCandidateInit[];
   /** When this RTCPeerConnection was built; never-connected links age out. */
   createdAt: number;
@@ -120,12 +120,6 @@ export class LibP2PVoice implements VoiceTransport {
   private processedStream: MediaStream | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
   private inputGain: GainNode | null = null;
-  /**
-   * The node the voice handler is currently registered on. Tracked per node,
-   * not as a boolean: a reconnect builds a fresh node, and a stale "already
-   * registered" flag would leave the new one with no handler at all.
-   */
-  private handlerNode: Libp2p<AppServices> | null = null;
 
   private activeInputDevice: string | null = null;
   private activeOutputDevice: string | null = null;
@@ -134,6 +128,8 @@ export class LibP2PVoice implements VoiceTransport {
   private muted = false;
 
   private remotePeers = new Map<string, RemotePeer>();
+  // ponytail: no per-peer signal queue anymore - the app transport's send()
+  // already queues frames until the stream is confirmed and reports failure.
   /**
    * Per-peer listening volume, multiplied with the master output volume.
    * Kept outside RemotePeer so the setting survives that peer dropping and
@@ -142,7 +138,6 @@ export class LibP2PVoice implements VoiceTransport {
    */
   private peerVolumes = new Map<string, number>();
   private active = new Set<string>();
-  private signalQueues = new Map<string, VoiceSignal[]>();
   /**
    * Who the app says shares our call. Voice links used to be created only on
    * a libp2p "connect" event or in the join sweep, so a peer who joined the
@@ -167,16 +162,11 @@ export class LibP2PVoice implements VoiceTransport {
   /** peerId -> when we last acted on their ask. */
   private lastRedialServed = new Map<string, number>();
   /**
-   * Dev counters. Voice failures are invisible without them: a signalling
-   * stream opened on a superseded connection reports itself open, so both
-   * sides look fine while no offer ever crosses.
+   * Dev counters. Voice failures are invisible without them: an ICE pair can
+   * die while both RTCPeerConnections still read "connected", so both sides
+   * look fine while no audio crosses.
    */
   readonly debugStats = {
-    dialsStarted: 0,
-    openedOnProven: 0,
-    openedByDialProtocol: 0,
-    dialsFailed: 0,
-    inboundStreams: 0,
     offersSent: 0,
     offersIn: 0,
     answersIn: 0,
@@ -209,52 +199,6 @@ export class LibP2PVoice implements VoiceTransport {
     this.audioCtx = new AudioContext();
     if (this.audioCtx.state === "suspended") {
       await this.audioCtx.resume().catch(() => {});
-    }
-
-    // The handler goes up BEFORE the microphone, not after.
-    //
-    // startMic awaits getUserMedia, which can sit for as long as it takes the
-    // user to answer a permission prompt. Registering the protocol after it
-    // left a window where we were already in the call roster - so peers dialled
-    // us - but /voice/1.0.0 was not yet handled, and libp2p failed the dial
-    // with "Protocol selection failed - could not negotiate /voice/1.0.0". It
-    // was intermittent, and worst for whoever had the slowest mic start.
-    //
-    // Safe in this order because the handler admits nobody until the roster
-    // has been set (admitsInboundStream is default-deny), and because a peer
-    // connection built before the mic exists still gets it: startMic walks
-    // remotePeers and addTrack/replaceTracks the new track, and
-    // onnegotiationneeded renegotiates it across.
-    if (this.handlerNode !== this.node) {
-      // force: registering the same protocol twice throws "Handler already
-      // registered", which used to abort the whole join. Replacing is always
-      // the right outcome here - the handler only closes over `this` - so a
-      // re-entrant join heals instead of failing.
-      await this.node.handle(
-        VOICE_PROTO,
-        (stream: Stream, connection: Connection) => {
-          const peerId = connection.remotePeer.toString();
-          // ensureRemotePeer attaches the live microphone track to the new
-          // RTCPeerConnection, so accepting a stream from anyone who can reach
-          // us over the relay handed our mic to a peer who is not in the call.
-          // The roster makes the check a one-liner; identity is the libp2p
-          // peerId the stream arrived on, never anything on the wire. Default
-          // deny until the roster has been fed at least once: the handler is
-          // live as soon as join() registers it, which is before _joinCall
-          // has handed us any roster at all, and treating "no roster yet" as
-          // "admit everyone" is exactly the open window this guard exists to
-          // close.
-          if (!this.admitsInboundStream(peerId)) {
-            stream.abort(new Error("not in this call"));
-            return;
-          }
-          this.debugStats.inboundStreams++;
-          const remote = this.ensureRemotePeer(peerId);
-          this.attachStream(peerId, remote, stream);
-        },
-        { force: true }
-      );
-      this.handlerNode = this.node;
     }
 
     try {
@@ -296,12 +240,42 @@ export class LibP2PVoice implements VoiceTransport {
   }
 
   /**
-   * Whether an inbound /voice/1.0.0 stream from this peer should be admitted.
+   * Whether an inbound voice signal from this peer should be admitted.
    * Default deny: before setCallPeers() has run at least once, nothing is
    * admitted, roster membership or not.
    */
   private admitsInboundStream(peerId: string): boolean {
     return this.rosterSeen && this.callPeers.has(peerId);
+  }
+
+  /**
+   * A VoiceSignal frame arrived on the app transport.
+   *
+   * Signalling rides the app's confirmed direct streams, not a dedicated
+   * /voice/ protocol stream. The dedicated stream had no delivery proof: one
+   * opened on a connection whose far side is gone - exactly what a reload
+   * leaves behind, since the relay keeps the dead connection object looking
+   * open - reported itself open while every offer vanished, and the repair
+   * loop re-picked the same dead connection each rebuild. That was the call
+   * that flapped "reconnecting" forever after a redeploy while chat and ping
+   * worked fine, until both sides hung up and re-called. The app transport
+   * pings a stream before trusting it and re-opens it elsewhere on failure,
+   * so a signal either arrives or send() resolves false.
+   */
+  handleWireSignal(peerId: string, signal: unknown): void {
+    if (!isVoiceSignal(signal)) {
+      this.debugStats.signalsInvalid++;
+      return;
+    }
+    // Same default-deny the /voice/1.0.0 inbound handler enforced: an offer
+    // creates the RTCPeerConnection and attaches the live mic track, so only
+    // roster members may have one. Identity is the peerId the frame's stream
+    // is Noise-authenticated to, never anything on the wire.
+    if (!this.admitsInboundStream(peerId)) return;
+    // Only an offer creates state; an answer or candidate for a peer we hold
+    // nothing for is stale and handleSignal drops it.
+    if (signal.type === "offer") this.ensureRemotePeer(peerId);
+    this.handleSignal(peerId, signal).catch(() => {});
   }
 
   /** Dev-only view of what the voice layer thinks it is holding. */
@@ -481,12 +455,6 @@ export class LibP2PVoice implements VoiceTransport {
       this.teardownRemotePeer(peerId);
       this.emit("peerLeft", peerId);
     }
-    if (this.handlerNode) {
-      // Unregister on the node it was registered on, which is not necessarily
-      // the current one after a reconnect.
-      this.handlerNode.unhandle(VOICE_PROTO).catch(() => {});
-      this.handlerNode = null;
-    }
 
     this.micStream?.getTracks().forEach((t) => t.stop());
     this.dtln?.releaseTransport();
@@ -498,7 +466,6 @@ export class LibP2PVoice implements VoiceTransport {
     this.inputSource = null;
     this.inputGain = null;
     this.active.clear();
-    this.signalQueues.clear();
     this.callPeers.clear();
     this.rosterSeen = false;
     this.lastRedialAsk.clear();
@@ -772,10 +739,8 @@ export class LibP2PVoice implements VoiceTransport {
   private async dialAndOffer(peerId: string): Promise<void> {
     if (!this.node || this.transport.isRelay(peerId)) return;
 
-    // if the other side already dialed us, we're done
-    if (this.remotePeers.get(peerId)?.sigStream) return;
-    // The reconcile tick can fire again mid-dial; a second dial would attach
-    // a second signaling stream to the same peer.
+    // The reconcile tick can fire again mid-dial; a second dial would race
+    // two colliding offers at the same peer.
     if (this.dialing.has(peerId)) return;
     // Every path that dials comes through here - the reconcile tick, the
     // signalling stream's close handler, and a peer asking us to redial - so
@@ -803,186 +768,47 @@ export class LibP2PVoice implements VoiceTransport {
     if (!this.node) return;
     const remote = this.ensureRemotePeer(peerId);
 
-    let stream: Stream | null = null;
-    this.debugStats.dialsStarted++;
-    for (let attempt = 0; attempt <= 5; attempt++) {
-      try {
-        // Prefer the connection the peer has actually reached us on. Measured:
-        // a dialer routinely holds three connections to one peer (two relay
-        // circuits plus a webrtc one) and dialProtocol picks arbitrarily, so
-        // the offer rode a superseded circuit, opened "successfully", and was
-        // never seen by the other side - a call where one person simply cannot
-        // hear the other, with nothing logged anywhere.
-        const proven = this.transport.provenConnection(peerId);
-        if (proven) {
-          stream = await proven.newStream(VOICE_PROTO, {
-            runOnLimitedConnection: true,
-          });
-          this.debugStats.openedOnProven++;
-          break;
-        }
-        const pid = this.node.getPeers().find((p) => p.toString() === peerId);
-        if (!pid) throw new Error("peer not in peerstore");
-        stream = await this.node.dialProtocol(pid, VOICE_PROTO);
-        this.debugStats.openedByDialProtocol++;
-        break;
-      } catch (err) {
-        if (attempt === 5) {
-          this.debugStats.dialsFailed++;
-          console.warn(`[LibP2PVoice] dial ${peerId} failed:`, err);
-          this.emit("status", {
-            type: "voice-dial-failed",
-            peerId: peerId.slice(-8),
-            message:
-              err instanceof Error
-                ? err.message
-                : "Failed to open voice stream",
-          });
-          return;
-        }
-        this.emit("status", {
-          type: "voice-dial-retrying",
-          peerId: peerId.slice(-8),
-          attempt: attempt + 1,
-          message: `Retrying voice connection (${attempt + 1}/5)...`,
-        });
-        // ~5s across all five waits, not 9s, and front-loaded: what this
-        // loop is usually waiting out is a connection that is not proven yet
-        // or a peer not in the peerstore yet, and both settle in well under a
-        // second. The whole time is spent holding `dialing`, which blocks the
-        // reconcile tick from tearing the link down or redialing it.
-        await new Promise((r) =>
-          setTimeout(r, Math.min(300 * 2 ** attempt, 1_500))
-        );
-      }
-    }
+    // Offer/answer already exchanged (they offered first) - nothing to start.
+    if (remote.pc.remoteDescription) return;
 
-    if (!stream) return;
-
-    this.attachStream(peerId, remote, stream);
-
-    if (remote.pc.remoteDescription) {
-      // Signaling channel re-established but offer/answer already exchanged; skip redundant steps
-      return;
-    }
-
+    let sdp: string | undefined;
     if (remote.pc.signalingState === "have-local-offer") {
-      // We already offered and the answer never came - almost certainly on the
-      // stream that just died. Returning here left the link to sit until the
-      // wedge timer rebuilt it from scratch; re-sending the offer we still
-      // hold costs one frame and usually settles it immediately.
-      const pending = remote.pc.localDescription;
-      if (pending?.sdp) {
-        this.debugStats.offersSent++;
-        this.sendSignal(peerId, { type: "offer", sdp: pending.sdp });
-      }
-      return;
+      // We already offered and the answer never came; re-sending the offer we
+      // still hold costs one frame and usually settles it immediately.
+      sdp = remote.pc.localDescription?.sdp;
+    } else {
+      const offer = await remote.pc.createOffer();
+      await remote.pc.setLocalDescription(offer);
+      sdp = offer.sdp;
     }
+    if (!sdp) return;
 
-    const offer = await remote.pc.createOffer();
-    await remote.pc.setLocalDescription(offer);
     this.debugStats.offersSent++;
-    this.sendSignal(peerId, { type: "offer", sdp: offer.sdp! });
+    const ok = await this.sendSignal(peerId, { type: "offer", sdp });
+    if (!ok) {
+      // send() resolving false means the app stream to this peer is provably
+      // down right now. Tear the link down so the reconcile tick rebuilds it
+      // (under the dial backoff) once the transport has healed, instead of
+      // letting a pc that offered into the void sit out the 30s deadline.
+      this.emit("status", {
+        type: "voice-dial-failed",
+        peerId: peerId.slice(-8),
+        message: `Could not reach ${peerId.slice(-8)} for voice - retrying`,
+      });
+      this.teardownRemotePeer(peerId);
+      this.emit("peerLeft", peerId);
+    }
   }
 
-  private attachStream(
-    peerId: string,
-    remote: RemotePeer,
-    stream: Stream
-  ): void {
-    remote.sigStream = stream;
-    remote.okAt = Date.now();
-
-    // One buffer per STREAM, not per peer: a peer can briefly have two (a
-    // redial racing the inbound dial), and sharing a buffer interleaves their
-    // frames into garbage lengths.
-    let readBuf = new Uint8Array(0);
-
-    stream.addEventListener("message", (evt: StreamMessageEvent) => {
-      const chunk: Uint8Array =
-        evt.data instanceof Uint8Array ? evt.data : evt.data.subarray();
-
-      const merged = new Uint8Array(readBuf.byteLength + chunk.byteLength);
-      merged.set(readBuf);
-      merged.set(chunk, readBuf.byteLength);
-      readBuf = merged;
-
-      while (readBuf.byteLength >= 4) {
-        const len = new DataView(
-          readBuf.buffer,
-          readBuf.byteOffset
-        ).getUint32(0, false);
-        // Guard against unbounded buffer growth from malicious peers
-        if (len > MAX_FRAME_BYTES) {
-          stream.abort(new Error("frame size exceeds maximum"));
-          return;
-        }
-        if (readBuf.byteLength < 4 + len) break;
-        const payload = readBuf.slice(4, 4 + len);
-        readBuf = readBuf.slice(4 + len);
-        try {
-          const parsed: unknown = JSON.parse(new TextDecoder().decode(payload));
-          if (isVoiceSignal(parsed)) {
-            this.handleSignal(peerId, parsed).catch(() => {});
-          } else {
-            this.debugStats.signalsInvalid++;
-          }
-        } catch {}
-      }
-    });
-
-    stream.addEventListener("close", (_evt: StreamCloseEvent) => {
-      if (remote.sigStream !== stream) return;
-      remote.sigStream = null;
-
-      const state = remote.pc.connectionState;
-      if (state === "closed" || state === "failed" || !this.node) return;
-      // Same one-dialer-per-pair rule the reconcile follows. Dialing from both
-      // sides here attaches two signalling streams to one peer, and only the
-      // last is ever aborted - the other leaks against the far side's inbound
-      // stream limit.
-      if (peerId > this.transport.selfId()) {
-        this.askForRedial(peerId, Date.now());
-        return;
-      }
-      this.dialAndOffer(peerId).catch(() => {});
-    });
-
-    const queued = this.signalQueues.get(peerId) ?? [];
-    this.signalQueues.delete(peerId);
-    for (const sig of queued) this.sendSignal(peerId, sig);
-  }
-
-  private sendSignal(peerId: string, signal: VoiceSignal): void {
-    const remote = this.remotePeers.get(peerId);
-    if (!remote?.sigStream) {
-      if (!this.signalQueues.has(peerId)) this.signalQueues.set(peerId, []);
-      const queue = this.signalQueues.get(peerId)!;
-      // Bounded: every ICE candidate generated while the stream is down queues
-      // here, and a link that never comes up would otherwise grow it for the
-      // whole call. The oldest candidates are also the least useful.
-      if (queue.length >= MAX_QUEUED_SIGNALS) queue.shift();
-      queue.push(signal);
-      return;
-    }
-
-    const payload = new TextEncoder().encode(JSON.stringify(signal));
-    const frame = new Uint8Array(4 + payload.byteLength);
-    new DataView(frame.buffer).setUint32(0, payload.byteLength, false);
-    frame.set(payload, 4);
-
-    try {
-      const ok = remote.sigStream.send(frame);
-      if (!ok) {
-        remote.sigStream.onDrain().catch(() => {
-          remote.sigStream?.abort(new Error("drain failed"));
-          remote.sigStream = null;
-        });
-      }
-    } catch (err) {
-      console.warn(`[LibP2PVoice] signal send failed for ${peerId}:`, err);
-      remote.sigStream = null;
-    }
+  /**
+   * Ship one signal over the app transport's confirmed streams. Resolves
+   * false only when the transport gave up on delivering it - see
+   * handleWireSignal for why this replaced the dedicated /voice/ stream.
+   */
+  private sendSignal(peerId: string, signal: VoiceSignal): Promise<boolean> {
+    return this.transport
+      .send(peerId, encode({ type: MessageType.VoiceSignal, signal }))
+      .catch(() => false);
   }
 
   private ensureRemotePeer(peerId: string): RemotePeer {
@@ -1004,7 +830,10 @@ export class LibP2PVoice implements VoiceTransport {
 
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) {
-        this.sendSignal(peerId, { type: "ice", candidate: candidate.toJSON() });
+        void this.sendSignal(peerId, {
+          type: "ice",
+          candidate: candidate.toJSON(),
+        });
       }
     };
 
@@ -1029,7 +858,7 @@ export class LibP2PVoice implements VoiceTransport {
           if (pc.signalingState !== "stable") return;
           await pc.setLocalDescription(offer);
           this.debugStats.offersSent++;
-          this.sendSignal(peerId, { type: "offer", sdp: offer.sdp! });
+          void this.sendSignal(peerId, { type: "offer", sdp: offer.sdp! });
         } catch (err) {
           console.warn(`[LibP2PVoice] renegotiation failed for ${peerId}:`, err);
         }
@@ -1088,14 +917,15 @@ export class LibP2PVoice implements VoiceTransport {
           peerId: peerId.slice(-8),
           message: `Voice signal lost from ${peerId.slice(-8)} - reconnecting...`,
         });
-        // attempt ICE restart if signaling stream is still alive
-        if (remote.sigStream && remote.pc.signalingState === "stable") {
+        // attempt ICE restart; signalling rides the app transport, which
+        // queues and confirms delivery itself
+        if (remote.pc.signalingState === "stable") {
           remote.pc.restartIce();
           remote.pc
             .createOffer({ iceRestart: true })
             .then((offer) => {
               return remote.pc.setLocalDescription(offer).then(() => {
-                this.sendSignal(peerId, { type: "offer", sdp: offer.sdp! });
+                void this.sendSignal(peerId, { type: "offer", sdp: offer.sdp! });
               });
             })
             .catch((err) => {
@@ -1126,7 +956,6 @@ export class LibP2PVoice implements VoiceTransport {
       audio,
       sourceNode: null,
       gainNode: null,
-      sigStream: null,
       pendingCandidates: [],
       createdAt: Date.now(),
       everConnected: false,
@@ -1175,20 +1004,10 @@ export class LibP2PVoice implements VoiceTransport {
     remote.gainNode?.disconnect();
     remote.audio.srcObject = null;
     remote.stream?.getTracks().forEach((t) => t.stop());
-    // Order matters. abort() dispatches a "close" event (StreamAbortEvent
-    // extends StreamCloseEvent) synchronously, and the listener re-dials any
-    // peer whose pc is not yet closed - so aborting first made every teardown
-    // immediately dial the peer it was tearing down, leaving an orphaned
-    // stream attached to a RemotePeer that had already been deleted. Detach
-    // and close first, so the listener's identity guard short-circuits.
-    const sig = remote.sigStream;
-    remote.sigStream = null;
     remote.pc.close();
-    sig?.abort(new Error("teardown"));
 
     this.remotePeers.delete(peerId);
     this.active.delete(peerId);
-    this.signalQueues.delete(peerId);
 
     this.emit("trackRemoved", peerId);
   }

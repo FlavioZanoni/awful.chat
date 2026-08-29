@@ -14,6 +14,7 @@ export enum MessageType {
   CallState = "call_state",
   WatchPresence = "watch_presence",
   VoiceRedial = "voice_redial",
+  VoiceSignal = "voice_signal",
   RoomName = "room_name",
   PluginEphemeral = "plugin_ephemeral",
   // room users - wire only, never persisted
@@ -217,6 +218,18 @@ export interface WireVoiceRedial {
   type: MessageType.VoiceRedial;
 }
 
+/**
+ * WebRTC voice signalling (offer/answer/ICE) over the app transport's
+ * confirmed direct streams. A dedicated /voice/ protocol stream had no
+ * delivery proof: opened on a connection whose far side was gone (what a
+ * reload leaves behind), it reported success while every offer vanished.
+ */
+export interface WireVoiceSignal {
+  type: MessageType.VoiceSignal;
+  /** Validated by isVoiceSignal() in voice.ts before it touches the pc. */
+  signal: unknown;
+}
+
 export interface WireWatchPresence {
   type: MessageType.WatchPresence;
   /** Sharer peerId being watched, or null when the viewer stopped. */
@@ -301,6 +314,7 @@ export type AnyWireMessage =
   | WireChatMessage
   | WireProfile
   | WireVoiceRedial
+  | WireVoiceSignal
   | WireCallPresence
   | WireWatchPresence
   | WireCallState
