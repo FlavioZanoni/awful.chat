@@ -1,4 +1,8 @@
 import { MediasoupVideo } from "./mediasoup";
+import {
+  cachePluginSenderName,
+  immediatePluginSenderName,
+} from "./plugin-sender-name";
 import { identityStore } from "../identity/identity.svelte";
 import { getQuotableText } from "../quote-helper";
 import { _noteRefused, _withRefused } from "./refused-lamports";
@@ -3409,6 +3413,8 @@ export async function sendCard(
   return cardId;
 }
 
+let cachedPluginSenderName = "";
+
 export async function sendUpdate(
   pluginId: string,
   cardId: string,
@@ -3436,6 +3442,10 @@ export async function sendUpdate(
 
   const profile = await getOwnProfile(undefined, { skipBytes: true });
   const senderName = profile?.nickname?.trim() || "Anonymous";
+  cachedPluginSenderName = cachePluginSenderName(
+    cachedPluginSenderName,
+    profile?.nickname
+  );
   const myId = identityStore.did ?? _transport.selfId();
 
   // Ephemeral messages: check flood cap, wire-only (lamport:0), PluginEphemeral type
@@ -3548,7 +3558,11 @@ export function sendUpdateImmediately(
     id: crypto.randomUUID(),
     roomCode,
     senderId: identityStore.did ?? _transport.selfId(),
-    senderName: "Anonymous",
+    senderName: immediatePluginSenderName(
+      cachedPluginSenderName,
+      identityStore.did,
+      _transport.selfId()
+    ),
     timestamp: Date.now(),
     lamport: lamportSend(roomCode),
     type: MessageType.PluginUpdate,

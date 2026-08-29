@@ -891,6 +891,8 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
 )}
   {@const hasVideo = tile.videoTrack !== null}
   {@const isPendingTx = tile.kind === "transmission" && tile.isPending}
+  {@const isWatchedTx =
+    tile.kind === "transmission" && watchingTransmissionPeerId === tile.peerId}
   {@const tileColor = getPeerColor(tile.peerId)}
   {#if tile.kind === "plugin" && joinedPluginTiles.has(tile.id)}
     <!-- A DIV, not the button every other tile is: the plugin renders its
@@ -921,6 +923,24 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
     >
       <!-- Content lives in the persistent layer; this is only the anchor
            the layer follows, plus the chrome painted above it. -->
+      <Tip text="Stop watching plugin">
+        {#snippet children(props)}
+          <button
+            {...props}
+            type="button"
+            onclick={(event) => {
+              event.stopPropagation();
+              joinedPluginTiles = new Set(
+                [...joinedPluginTiles].filter((id) => id !== tile.id)
+              );
+            }}
+            aria-label="Stop watching plugin"
+            class="absolute left-1.5 top-1.5 z-30 flex size-8 items-center justify-center rounded-lg bg-red-500/30 text-red-300 ring-1 ring-red-500/60 hover:bg-red-500/45"
+          >
+            <Radio class="size-4" />
+          </button>
+        {/snippet}
+      </Tip>
       <div
         class="absolute bottom-1.5 left-1.5 z-30 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 pointer-events-none transition-opacity {pluginBadgeHidden(
           tile.id
@@ -949,13 +969,23 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
       {/if}
     </div>
   {:else}
+  <!-- A wrapper so the "stop watching" control can sit BESIDE the tile rather
+       than inside it. A button nested in a button is invalid HTML, which is
+       what pushed this element to div role="button" - but that trades away
+       focus handling, keyboard activation and assistive-technology semantics
+       that a real button gives for free, on every tile in the call, to serve
+       one overlay. The layout classes live on the wrapper; the button fills
+       it. -->
+  <div
+    class="relative {isFocused ? 'w-full h-full' : ''} {compact
+      ? 'aspect-video'
+      : ''}"
+  >
   <button
     type="button"
     oncontextmenu={(e) => openPeerMenu(e, tile)}
-    class="group relative flex items-center justify-center overflow-hidden rounded-lg bg-muted/30 cursor-pointer transition-shadow duration-200
+    class="group relative flex h-full w-full items-center justify-center overflow-hidden rounded-lg bg-muted/30 cursor-pointer transition-shadow duration-200
       {tile.connecting ? 'connecting-wave' : ''}
-      {isFocused ? 'w-full h-full' : ''}
-      {compact ? 'aspect-video' : ''}
       {isSpeaking
       ? 'ring-2 ring-primary shadow-[0_0_8px_rgba(0,255,136,0.4)]'
       : ''}
@@ -1125,6 +1155,19 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
       </div>
     {/if}
   </button>
+    {#if isWatchedTx}
+      <!-- A SIBLING of the tile button, not a child: nesting it was what made
+           the tile stop being a button in the first place. -->
+      <button
+        type="button"
+        onclick={stopWatchingTransmission}
+        aria-label="Stop watching"
+        class="absolute top-1.5 left-1.5 z-20 flex size-8 items-center justify-center rounded-lg bg-red-500/30 text-red-300 ring-1 ring-red-500/60 hover:bg-red-500/45"
+      >
+        <Radio class="size-4" />
+      </button>
+    {/if}
+  </div>
   {/if}
 {/snippet}
 
