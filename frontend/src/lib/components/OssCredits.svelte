@@ -202,7 +202,7 @@
   {#each groups as group (group.label)}
     <div class="flex flex-col gap-2">
       <p
-        class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground"
+        class="select-none text-[10px] font-mono uppercase tracking-wider text-muted-foreground"
       >
         {group.label}
       </p>

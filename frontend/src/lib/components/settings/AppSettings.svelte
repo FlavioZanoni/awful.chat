@@ -99,7 +99,7 @@ async function loadLocalFonts(): Promise<void> {
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-violet-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Notifications</Label
     >
   </div>
@@ -148,7 +148,7 @@ async function loadLocalFonts(): Promise<void> {
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-amber-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Appearance</Label
     >
   </div>
@@ -227,7 +227,7 @@ async function loadLocalFonts(): Promise<void> {
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-teal-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Chat text</Label
     >
   </div>
@@ -372,7 +372,7 @@ async function loadLocalFonts(): Promise<void> {
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-emerald-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Calls</Label
     >
   </div>
@@ -412,7 +412,7 @@ async function loadLocalFonts(): Promise<void> {
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-sky-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Debug</Label
     >
   </div>

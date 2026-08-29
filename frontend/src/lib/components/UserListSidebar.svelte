@@ -408,7 +408,7 @@
 {#snippet SectionDivider(label: string, count: number, Icon?: typeof Users)}
   <!-- The icon slot is always reserved so every section's label and count
        start at the same x, icon or not - ragged headers read as misaligned. -->
-  <div class="flex items-center gap-2 px-3 py-1.5">
+  <div class="flex select-none items-center gap-2 px-3 py-1.5">
     {#if Icon}
       <Icon class="size-4 shrink-0 {label === 'In call'
           ? 'text-primary'
@@ -417,7 +417,7 @@
       <span class="size-4 shrink-0"></span>
     {/if}
     <span
-      class="text-xs font-semibold uppercase tracking-wider font-mono {label ===
+      class="select-none text-xs font-semibold uppercase tracking-wider font-mono {label ===
       'In call'
         ? 'text-primary'
         : 'text-muted-foreground'}">{label}</span
@@ -429,7 +429,7 @@
 {#snippet UserListContent()}
   <div class="p-2 space-y-1">
     {#if users.length === 0}
-      <div class="text-center py-8 text-sm text-muted-foreground">
+      <div class="select-none text-center py-8 text-sm text-muted-foreground">
         No users in this room
       </div>
     {:else}
@@ -481,10 +481,10 @@
     class="w-60 border-l border-border bg-background flex flex-col h-full shrink-0"
   >
     <div
-      class="flex h-13 shrink-0 items-center gap-2 border-b border-border px-3"
+      class="flex h-13 shrink-0 select-none items-center gap-2 border-b border-border px-3"
     >
       <Users class="size-4 text-muted-foreground" />
-      <span class="text-xs font-semibold uppercase tracking-wider font-mono"
+      <span class="select-none text-xs font-semibold uppercase tracking-wider font-mono"
         >Users</span
       >
       <Badge variant="secondary" class="text-muted-foreground"

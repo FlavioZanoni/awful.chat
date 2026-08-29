@@ -188,7 +188,7 @@
             <div class="size-2 animate-pulse rounded-full bg-muted-foreground"></div>
           </div>
         {:else if visible.length === 0}
-          <p class="px-1 py-4 text-center text-xs text-muted-foreground">
+          <p class="select-none px-1 py-4 text-center text-xs text-muted-foreground">
             No messages yet. Say something.
           </p>
         {:else}

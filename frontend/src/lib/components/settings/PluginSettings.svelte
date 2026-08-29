@@ -84,7 +84,7 @@
       <div class="px-4 py-2">
         {#if group.repo === null}
           <p
-            class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground"
+            class="select-none text-[10px] font-mono uppercase tracking-wider text-muted-foreground"
           >
             Built into this instance
           </p>
@@ -93,7 +93,7 @@
             href={group.repo}
             target="_blank"
             rel="noopener noreferrer"
-            class="inline-flex w-fit items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground hover:text-primary hover:underline"
+            class="select-none inline-flex w-fit items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground hover:text-primary hover:underline"
           >
             {repoLabel(group.repo)}<ExternalLink class="size-3" />
           </a>

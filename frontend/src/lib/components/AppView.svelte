@@ -1273,7 +1273,7 @@
 
             {#if starred.length > 0}
               <div
-                class="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono"
+                class="select-none px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono"
               >
                 Starred
               </div>
@@ -1345,7 +1345,7 @@
             {#if regular.length > 0}
               {#if starred.length > 0}
                 <div
-                  class="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono mt-4"
+                  class="select-none px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono mt-4"
                 >
                   Contacts
                 </div>
@@ -1445,7 +1445,7 @@
 
               {#if starred.length > 0}
                 <div
-                  class="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono"
+                  class="select-none px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono"
                 >
                   Starred
                 </div>
@@ -1522,7 +1522,7 @@
               {#if regular.length > 0}
                 {#if starred.length > 0}
                   <div
-                    class="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono mt-4"
+                    class="select-none px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono mt-4"
                   >
                     Contacts
                   </div>

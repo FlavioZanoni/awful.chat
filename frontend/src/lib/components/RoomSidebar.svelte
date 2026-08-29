@@ -258,7 +258,7 @@
         {/snippet}
       </Tip>
       <span
-        class="text-xs font-semibold text-muted-foreground mt-0.75 uppercase tracking-wider font-mono"
+        class="select-none text-xs font-semibold text-muted-foreground mt-0.75 uppercase tracking-wider font-mono"
       >
         {activeTab === "rooms" ? "Rooms" : "DMs"}
       </span>
@@ -498,7 +498,7 @@
     {:else}
     {#if activeTab === "rooms" && rooms.length === 0}
       <div
-        class="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground"
+        class="flex h-full select-none flex-col items-center justify-center gap-2 text-sm text-muted-foreground"
       >
         <div class="w-8 opacity-50">
           <Hash class="size-full" />
@@ -507,7 +507,7 @@
       </div>
     {:else if activeTab === "users" && phonebook.length === 0}
       <div
-        class="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground"
+        class="flex h-full select-none flex-col items-center justify-center gap-2 text-sm text-muted-foreground"
       >
         <div class="w-8 opacity-50">
           <User class="size-full" />
@@ -533,7 +533,7 @@
           >
             <Hash class="mt-0.5 size-3.5 shrink-0 opacity-50" />
             <div class="min-w-0 flex-1">
-              <div class="truncate text-sm font-medium font-mono">
+              <div class="select-text truncate text-sm font-medium font-mono">
                 {room.name || room.roomCode}
               </div>
               <div class="truncate text-xs opacity-60 font-mono">

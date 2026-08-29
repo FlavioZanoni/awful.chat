@@ -194,7 +194,7 @@
     <div class="flex items-center gap-2">
       <div class="w-1 h-4 bg-orange-500 rounded-full"></div>
       <Label
-        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+        class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
         >Storage</Label
       >
     </div>
@@ -405,7 +405,7 @@
     <div class="flex items-center gap-2">
       <div class="w-1 h-4 bg-cyan-500 rounded-full"></div>
       <Label
-        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+        class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
         >Backup</Label
       >
     </div>
@@ -505,7 +505,7 @@
   >
     <div class="flex items-center gap-2">
       <div class="w-1 h-4 bg-red-500 rounded-full"></div>
-      <Label class="text-xs font-mono text-destructive uppercase tracking-wider"
+      <Label class="select-none text-xs font-mono text-destructive uppercase tracking-wider"
         >Danger Zone</Label
       >
     </div>

@@ -206,7 +206,7 @@
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-purple-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Profile</Label
     >
   </div>

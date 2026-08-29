@@ -297,7 +297,7 @@
     <div class="flex items-center gap-2">
       <div class="w-1 h-4 bg-green-500 rounded-full"></div>
       <Label
-        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+        class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
         >Microphone</Label
       >
     </div>
@@ -362,7 +362,7 @@
       <div class="flex items-center gap-2">
         <div class="w-1 h-4 bg-blue-500 rounded-full"></div>
         <Label
-          class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+          class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
           >Noise Suppression</Label
         >
       </div>
@@ -445,7 +445,7 @@
     <div class="flex items-center gap-2">
       <div class="w-1 h-4 bg-orange-500 rounded-full"></div>
       <Label
-        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+        class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
         >Speakers</Label
       >
     </div>

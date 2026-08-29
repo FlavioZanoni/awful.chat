@@ -242,3 +242,44 @@ body {
     animation: none !important;
   }
 }
+
+/* Chrome is not content.
+ *
+ * Button text, labels and headings are things you press or read past, never
+ * things you copy, and selecting them is almost always the accident of
+ * dragging across the interface to select a message. Content is untouched:
+ * message text, nicknames, DIDs, room codes and everything inside an input
+ * stay selectable, because those are the things people actually do copy.
+ *
+ * Scoped to interactive chrome rather than applied globally and re-enabled
+ * per content area, which is the version that silently breaks copying
+ * somewhere nobody thought to check.
+ *
+ * [role="button"] is deliberately NOT in this list. In this app it is not a
+ * button at all - it is how a wrapper is made tappable around content it
+ * does not own: every chat message row carries it for mobile tap-to-act,
+ * and so does the avatar-and-name block. Including it made every message
+ * and every username unselectable, which is the precise opposite of the
+ * point. A real <button> is still covered.
+ */
+button,
+label,
+[role="tab"],
+[role="menuitem"],
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ...unless the thing inside the button IS the content. A room code or a
+ * DID on a click-to-copy chip should still be selectable by hand. */
+.select-text,
+.select-text * {
+  user-select: text;
+  -webkit-user-select: text;
+}

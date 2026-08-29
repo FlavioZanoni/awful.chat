@@ -136,7 +136,7 @@
         class="mx-2 mb-1 max-h-44 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-md"
       >
         <div
-          class="flex items-center justify-between px-2 pb-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+          class="select-none flex items-center justify-between px-2 pb-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
         >
           <span>Pin a plugin</span>
           <button

@@ -99,7 +99,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
     <div class="flex items-center gap-2">
       <div class="w-1 h-4 bg-yellow-500 rounded-full"></div>
       <Label
-        class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+        class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
         >Session</Label
       >
     </div>
@@ -150,7 +150,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
       <div class="flex items-center gap-2">
         <div class="w-1 h-4 bg-red-500 rounded-full"></div>
         <Label
-          class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+          class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
           >Security</Label
         >
       </div>
@@ -241,7 +241,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-violet-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Offline inbox</Label
     >
   </div>
@@ -267,7 +267,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-orange-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Duress password</Label
     >
   </div>
@@ -321,7 +321,7 @@ let { isMobile = false, onClose, onOpenSync }: Props = $props();
   <div class="flex items-center gap-2">
     <div class="w-1 h-4 bg-cyan-500 rounded-full"></div>
     <Label
-      class="text-xs font-mono text-muted-foreground uppercase tracking-wider"
+      class="select-none text-xs font-mono text-muted-foreground uppercase tracking-wider"
       >Sync</Label
     >
   </div>
