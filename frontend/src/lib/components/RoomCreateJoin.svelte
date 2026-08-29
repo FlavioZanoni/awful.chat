@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { newRoomCode } from "$lib/room-code";
+  import { formatRoomCode, newRoomCode, normalizeRoomCode } from "$lib/room-code";
   import {
     createInvite,
     formatShortCode,
@@ -87,7 +87,7 @@
     joinError = null;
     try {
       await saveName(profileStore.nickname);
-      let code = joinCode.trim();
+      let code = normalizeRoomCode(joinCode);
       // Six characters is a short invite - or a legacy hex room code, which
       // is why a miss falls through to joining the input as typed.
       if (looksLikeShortCode(code)) {
@@ -311,7 +311,7 @@
           <div
             class="text-center font-mono text-sm tracking-widest text-muted-foreground truncate overflow-hidden pr-8"
           >
-            {createdCode}
+            {formatRoomCode(createdCode!)}
           </div>
           <div class="absolute right-2 top-1/2 -translate-y-1/2" data-copy-menu>
             <button

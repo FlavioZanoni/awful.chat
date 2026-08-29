@@ -64,6 +64,7 @@
   } from "$lib/transport/dm.svelte";
   import FloatingDmPanel from "$lib/components/FloatingDmPanel.svelte";
   import CallPipPanel from "$lib/components/CallPipPanel.svelte";
+  import { normalizeRoomCode } from "$lib/room-code";
   import { updateSpeakerTracks, stopAllSpeakers, resumeAudioContextOnVisibilityChange } from "$lib/speakers.svelte";
   import { callFocus } from "$lib/call-focus.svelte";
   import { speakers } from "$lib/speakers.svelte";
@@ -86,7 +87,12 @@
 
   function parseRoomCode(pathname: string): string | null {
     const m = pathname.match(/^\/r\/([^/]+)/);
-    return m ? m[1] : null;
+    if (!m) return null;
+    try {
+      return normalizeRoomCode(decodeURIComponent(m[1]));
+    } catch {
+      return normalizeRoomCode(m[1]);
+    }
   }
 
   /**

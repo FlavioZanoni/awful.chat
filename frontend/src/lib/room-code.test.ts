@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { newRoomCode } from "./room-code";
+import { formatRoomCode, newRoomCode, normalizeRoomCode } from "./room-code";
 
-describe("newRoomCode", () => {
-  it("carries 64 bits, not the 24 it used to", () => {
-    // 8 bytes as hex. The old code was 6 characters / 16.7M possibilities,
-    // which is enumerable against a live instance in hours.
-    expect(newRoomCode()).toMatch(/^[0-9a-f]{16}$/);
+describe("room codes", () => {
+  it("is 13 Crockford base32 characters (65 bits)", () => {
+    for (let i = 0; i < 50; i++) {
+      expect(newRoomCode()).toMatch(/^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{13}$/);
+    }
   });
 
   it("does not repeat", () => {
@@ -13,14 +13,18 @@ describe("newRoomCode", () => {
     expect(seen.size).toBe(500);
   });
 
-  it("stays plain lowercase hex, which is what every layer assumes", () => {
-    // The relay (validRoom), the SFU (isValidId) and the gossipsub topic name
-    // all take the code as an opaque string; the SFU rejects bytes < 0x20
-    // (control characters) and 0x7f (DEL), but spaces (0x20) are accepted by
-    // the relay. Room codes are never generated with spaces, so this is moot
-    // in practice.
-    for (let i = 0; i < 50; i++) {
-      expect(newRoomCode()).toMatch(/^[0-9a-f]+$/);
-    }
+  it("formats for reading aloud and normalizes what was read", () => {
+    const code = "6BMB3GST2JRJZ";
+    expect(formatRoomCode(code)).toBe("6BMB-3GST-2JRJ-Z");
+    expect(normalizeRoomCode(" 6bmb-3gst-2jrj-z ")).toBe(code);
+    expect(normalizeRoomCode("6BMB 3GST 2JRJ Z")).toBe(code);
+    // O for 0, l/I for 1
+    expect(normalizeRoomCode("OBMB-3GST-2JRJ-l")).toBe("0BMB3GST2JRJ1");
+  });
+
+  it("leaves legacy hex codes and short invites untouched", () => {
+    expect(normalizeRoomCode("3f9a1c2b4d5e6f70")).toBe("3f9a1c2b4d5e6f70");
+    expect(normalizeRoomCode("a1b2c3")).toBe("a1b2c3");
+    expect(formatRoomCode("3f9a1c2b4d5e6f70")).toBe("3f9a1c2b4d5e6f70");
   });
 });

@@ -2,12 +2,18 @@
   import { identityStore, init } from "$lib/identity/identity.svelte";
   import AppView from "$lib/components/AppView.svelte";
   import Landing from "./Landing.svelte";
+  import { normalizeRoomCode } from "$lib/room-code";
 
   let currentRoute = $state<"landing" | "app">("landing");
 
   function parseRoomCode(pathname: string): string | null {
     const m = pathname.match(/^\/r\/([^/]+)/);
-    return m ? m[1] : null;
+    if (!m) return null;
+    try {
+      return normalizeRoomCode(decodeURIComponent(m[1]));
+    } catch {
+      return normalizeRoomCode(m[1]);
+    }
   }
 
   $effect(() => {

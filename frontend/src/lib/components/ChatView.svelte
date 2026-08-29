@@ -99,6 +99,7 @@
   import { seededRandom } from "$lib/utils";
   import { getQuotableText } from "$lib/quote-helper";
   import { createInvite, formatShortCode } from "$lib/invite";
+  import { formatRoomCode } from "$lib/room-code";
 
   $effect(() => {
     loadProfile();
@@ -1466,7 +1467,7 @@
               aria-expanded={copyMenuOpen}
               class="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono text-muted-foreground hover:text-foreground transition-colors"
             >
-              <code>{roomCode}</code>
+              <code>{formatRoomCode(roomCode)}</code>
               {#if copied}
                 <Check class="size-3 text-primary" />
               {:else}
