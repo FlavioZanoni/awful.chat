@@ -17,7 +17,12 @@
   import { displayPrefs } from "$lib/display-prefs.svelte";
   import { speakers } from "$lib/speakers.svelte";
   import { callFocus } from "$lib/call-focus.svelte";
-  import { spotlightStore, getSpeakingLabel } from "$lib/call-spotlight.svelte";
+  import {
+    spotlightStore,
+    getSpeakingLabel,
+    enterBrowserPip,
+    exitBrowserPip,
+  } from "$lib/call-spotlight.svelte";
   import type { SpotlightTile } from "$lib/spotlight";
 
   // Read the shared spotlight from AppView.
@@ -53,40 +58,11 @@
     }
   }
 
-  // Handle browser PiP entry/exit using the app-level video element from the store.
-  async function enterBrowserPiP(): Promise<void> {
-    const el = spotlightStore.pipVideoElement;
-    if (!el || document.pictureInPictureElement) return;
-    try {
-      if (el.requestPictureInPicture) {
-        await el.requestPictureInPicture();
-        callPipPanel.browserPip = true;
-      } else if ("webkitSetPresentationMode" in el) {
-        // Safari fallback for browsers without Element PiP.
-        (el as any).webkitSetPresentationMode("picture-in-picture");
-        callPipPanel.browserPip = true;
-      }
-    } catch (err) {
-      console.warn("Failed to enter PiP:", err);
-    }
+  async function enterPip(): Promise<void> {
+    await enterBrowserPip(() => void requestReturnToCall());
   }
-
-  async function exitBrowserPiP(): Promise<void> {
-    if (!callPipPanel.browserPip) return;
-    try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-      } else {
-        const el = spotlightStore.pipVideoElement;
-        if (el && "webkitSetPresentationMode" in el) {
-          // Safari fallback.
-          (el as any).webkitSetPresentationMode("inline");
-        }
-      }
-      callPipPanel.browserPip = false;
-    } catch (err) {
-      console.warn("Failed to exit PiP:", err);
-    }
+  async function exitPip(): Promise<void> {
+    await exitBrowserPip();
   }
 
   // Clamping on window resize
@@ -113,26 +89,10 @@
   );
   const width = $derived(panelWidth());
 
-  // Cleanup: exit PiP when panel is unmounted
-  $effect(() => {
-    return () => {
-      if (callPipPanel.browserPip) {
-        void exitBrowserPiP();
-      }
-    };
-  });
 </script>
 
 <svelte:window onresize={clampToViewport} />
 
-<!-- Visibility change: exit PiP when tab becomes visible -->
-<svelte:document
-  onvisibilitychange={() => {
-    if (!document.hidden && callPipPanel.browserPip) {
-      void exitBrowserPiP();
-    }
-  }}
-/>
 
 {#if displayPrefs.callPip && transportState.inCall && transportState.uiRoomCode !== transportState.callRoomCode}
   <!--
@@ -224,9 +184,9 @@
             type="button"
             onclick={() => {
               if (callPipPanel.browserPip) {
-                void exitBrowserPiP();
+                void exitPip();
               } else {
-                void enterBrowserPiP();
+                void enterPip();
               }
             }}
             aria-label={callPipPanel.browserPip ? "Exit PiP" : "Picture in Picture"}

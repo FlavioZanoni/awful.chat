@@ -75,6 +75,9 @@
     buildTilesWithTracking,
     trackStartTimes,
     createCanvasPlaceholder,
+    setPipSource,
+    enterBrowserPip,
+    exitBrowserPip,
   } from "$lib/call-spotlight.svelte";
   import type { CallState } from "$lib/call-tiles";
   import { setOnPictureInPictureEnter } from "$lib/plugins/media-session";
@@ -212,11 +215,13 @@
     );
   });
 
-  // Resume audio context when visibility changes (tab becomes active).
+  // Resume audio context when visibility changes (tab becomes active), and
+  // close the PiP window the tab switch opened: the call is on screen again.
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && transportState.inCall) {
         resumeAudioContextOnVisibilityChange();
+        if (callPipPanel.browserPip) void exitBrowserPip();
       }
     });
   }
@@ -717,6 +722,11 @@
       if (el.srcObject !== spotlightStream) el.srcObject = spotlightStream;
       el.style.objectFit = spotlightFit;
     }
+    const label = tile
+      ? (transportState.peerNames.get(peerIdToDid(tile.peerId) || tile.peerId) ??
+        tile.peerId.slice(0, 8))
+      : "";
+    setPipSource(spotlightStream, label, spotlightFit);
   });
 
   // Wire up browser PiP event handlers on the video element.
@@ -748,14 +758,7 @@
       // Nothing to see in a voice-only call: an avatar floating over another
       // tab is noise, not a call. The user can still open it by hand.
       if (!spotlightTrack) return;
-      if (pipVideoElement && pipVideoElement.requestPictureInPicture) {
-        try {
-          await pipVideoElement.requestPictureInPicture();
-          callPipPanel.browserPip = true;
-        } catch (err) {
-          console.warn("Failed to enter PiP via Media Session:", err);
-        }
-      }
+      await enterBrowserPip(() => void returnToCall());
     };
 
     setOnPictureInPictureEnter(handler);

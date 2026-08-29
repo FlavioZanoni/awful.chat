@@ -8,6 +8,7 @@
 import { buildCallTiles, type CallState } from "./call-tiles";
 import type { SpotlightTile } from "./spotlight";
 import type { SpeakerState } from "./spotlight";
+import { callPipPanel } from "./call-pip.svelte";
 
 export interface SpotlightState {
   /** Current spotlight tile ID */
@@ -150,3 +151,135 @@ export const spotlightStore = $state<SpotlightState>({
   pipVideoElement: null,
   panelVideoElement: null,
 });
+
+// ── Browser picture-in-picture ────────────────────────────────────────────
+//
+// Document PiP first (Chromium): it is what Meet uses, so a window manager
+// rule that already floats Meet floats this too - on a tiling WM the element
+// PiP window was getting tiled like any other window - and it renders our own
+// markup (video + name) rather than a bare <video>. Element PiP on the hidden
+// app-level <video> is the fallback for Firefox and Safari.
+
+interface DocPipWindow extends Window {}
+declare global {
+  interface Window {
+    documentPictureInPicture?: {
+      requestWindow(opts?: { width?: number; height?: number }): Promise<DocPipWindow>;
+      window: DocPipWindow | null;
+    };
+  }
+}
+
+let docPipWindow: DocPipWindow | null = null;
+let docPipVideo: HTMLVideoElement | null = null;
+let docPipLabel: HTMLElement | null = null;
+/** What the PiP surfaces are currently showing, set by AppView's effect. */
+let currentStream: MediaStream | null = null;
+let currentLabel = "";
+let currentFit: "cover" | "contain" = "cover";
+
+/** AppView calls this whenever the spotlight stream, label or fit changes. */
+export function setPipSource(
+  stream: MediaStream | null,
+  label: string,
+  fit: "cover" | "contain"
+): void {
+  currentStream = stream;
+  currentLabel = label;
+  currentFit = fit;
+  if (docPipVideo && docPipVideo.srcObject !== stream) docPipVideo.srcObject = stream;
+  if (docPipVideo) docPipVideo.style.objectFit = fit;
+  if (docPipLabel) docPipLabel.textContent = label;
+}
+
+export function browserPipSupported(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    !!window.documentPictureInPicture ||
+    !!spotlightStore.pipVideoElement?.requestPictureInPicture ||
+    (!!spotlightStore.pipVideoElement &&
+      "webkitSetPresentationMode" in spotlightStore.pipVideoElement)
+  );
+}
+
+async function openDocumentPip(onReturn: () => void): Promise<void> {
+  const api = window.documentPictureInPicture!;
+  if (api.window) return;
+  const w = await api.requestWindow({ width: 320, height: 180 });
+  docPipWindow = w;
+  const d = w.document;
+  d.body.style.cssText =
+    "margin:0;background:#000;overflow:hidden;font:12px system-ui,sans-serif;color:#fff";
+  const video = d.createElement("video");
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:" + currentFit;
+  video.srcObject = currentStream;
+  video.title = "Back to the call";
+  video.addEventListener("click", () => {
+    window.focus();
+    onReturn();
+  });
+  const label = d.createElement("div");
+  label.style.cssText =
+    "position:absolute;left:8px;bottom:6px;padding:2px 6px;border-radius:3px;background:rgba(0,0,0,.5)";
+  label.textContent = currentLabel;
+  d.body.append(video, label);
+  docPipVideo = video;
+  docPipLabel = label;
+  callPipPanel.browserPip = true;
+  w.addEventListener("pagehide", () => {
+    docPipWindow = null;
+    docPipVideo = null;
+    docPipLabel = null;
+    callPipPanel.browserPip = false;
+  });
+}
+
+/**
+ * Open the browser's PiP surface for the spotlight. `onReturn` runs when the
+ * person clicks the picture (Document PiP only; an element PiP window has no
+ * click we can see).
+ */
+export async function enterBrowserPip(onReturn: () => void): Promise<void> {
+  try {
+    if (window.documentPictureInPicture) {
+      await openDocumentPip(onReturn);
+      return;
+    }
+    const el = spotlightStore.pipVideoElement;
+    if (!el) return;
+    if (document.pictureInPictureElement === el) return;
+    if (el.requestPictureInPicture) {
+      await el.requestPictureInPicture();
+    } else if ("webkitSetPresentationMode" in el) {
+      (el as unknown as { webkitSetPresentationMode(m: string): void })
+        .webkitSetPresentationMode("picture-in-picture");
+    }
+    callPipPanel.browserPip = true;
+  } catch (err) {
+    console.warn("[pip] could not open:", err);
+  }
+}
+
+export async function exitBrowserPip(): Promise<void> {
+  try {
+    if (docPipWindow) {
+      docPipWindow.close();
+      docPipWindow = null;
+    }
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture();
+    } else {
+      const el = spotlightStore.pipVideoElement;
+      if (el && "webkitSetPresentationMode" in el) {
+        (el as unknown as { webkitSetPresentationMode(m: string): void })
+          .webkitSetPresentationMode("inline");
+      }
+    }
+  } catch {
+    // Already closed.
+  }
+  callPipPanel.browserPip = false;
+}

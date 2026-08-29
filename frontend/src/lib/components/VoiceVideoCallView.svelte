@@ -38,6 +38,7 @@
   import { speakers } from "$lib/speakers.svelte";
   import { callFocus, autofocusEffect } from "$lib/call-focus.svelte";
   import { callPipPanel } from "$lib/call-pip.svelte";
+  import { enterBrowserPip, exitBrowserPip } from "$lib/call-spotlight.svelte";
   import { spotlightStore } from "$lib/call-spotlight.svelte";
 
   import {
@@ -861,34 +862,8 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   }
 
   async function toggleBrowserPiP(): Promise<void> {
-    // A TOGGLE, because the control labels itself "Exit picture-in-picture"
-    // once PiP is open. It previously called requestPictureInPicture on every
-    // press, so clicking it to close did nothing at all - the request throws
-    // when PiP is already open for that element and the catch swallowed it.
-    if (document.pictureInPictureElement) {
-      try {
-        await document.exitPictureInPicture();
-      } catch {
-        // Already closing, or the browser refused. Either way the state below
-        // is corrected by the panel's leavepictureinpicture handler.
-      }
-      callPipPanel.browserPip = false;
-      return;
-    }
-
-    // Taken from the shared store, not looked up in the DOM. The element lives
-    // at app level so it exists whether or not the floating panel is mounted -
-    // the stage and the panel are never mounted together, so an element owned
-    // by the panel could never be found from here anyway - and a querySelector
-    // is a second, silently drifting source of truth for the same reference.
-    const pipVideo = spotlightStore.pipVideoElement;
-    if (!pipVideo) return;
-    try {
-      await pipVideo.requestPictureInPicture?.();
-      callPipPanel.browserPip = true;
-    } catch {
-      // User cancelled, or the browser does not support it.
-    }
+    if (callPipPanel.browserPip) await exitBrowserPip();
+    else await enterBrowserPip(() => {});
   }
 
   // ── Visibility conditions ─────────────────────────────────────────────────
