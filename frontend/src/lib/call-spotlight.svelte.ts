@@ -105,7 +105,15 @@ export function createCanvasPlaceholder(
     ctx.fillText(label, centerX, centerY + radius + 40);
   }
 
-  return canvas.captureStream(0);
+  // frameRate 0 means "only when asked": without requestFrame() the track
+  // never emits a frame, the <video> never reaches HAVE_METADATA, and both
+  // the panel body and requestPictureInPicture() stay blank.
+  const stream = canvas.captureStream(0);
+  const track = stream.getVideoTracks()[0] as
+    | (MediaStreamTrack & { requestFrame?: () => void })
+    | undefined;
+  track?.requestFrame?.();
+  return stream;
 }
 
 /**

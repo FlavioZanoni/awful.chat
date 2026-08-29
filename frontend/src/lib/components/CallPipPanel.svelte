@@ -105,7 +105,11 @@
     spotlightTile && speakers.speaking.has(spotlightTile.peerId)
   );
 
-  const height = $derived(callPipPanel.minimized ? BAR_HEIGHT : HEIGHT + BAR_HEIGHT);
+  // Voice-only call: nothing worth a video body, so the panel is its bar.
+  const hasVideo = $derived(!!spotlightTile?.videoTrack);
+  const height = $derived(
+    callPipPanel.minimized || !hasVideo ? BAR_HEIGHT : HEIGHT + BAR_HEIGHT
+  );
   const width = $derived(panelWidth());
 
   // Cleanup: exit PiP when panel is unmounted
@@ -153,7 +157,7 @@
       <!-- Room name with speaking ring if minimized -->
       <span class="min-w-0 flex-1 truncate text-xs font-medium">
         {panelRoomName}
-        {#if callPipPanel.minimized && isSpeaking}
+        {#if (callPipPanel.minimized || !hasVideo) && isSpeaking}
           <span class="ml-1 inline-block size-2 animate-pulse rounded-full bg-primary"></span>
         {/if}
       </span>
@@ -279,7 +283,7 @@
     </div>
 
     <!-- Panel body: shows the spotlight tile video -->
-    {#if !callPipPanel.minimized && spotlightTile}
+    {#if !callPipPanel.minimized && hasVideo && spotlightTile}
       <button
         type="button"
         class="relative flex-1 overflow-hidden bg-black cursor-pointer"

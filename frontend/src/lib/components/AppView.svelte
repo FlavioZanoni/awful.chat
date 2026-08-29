@@ -745,6 +745,9 @@
     }
 
     const handler = async () => {
+      // Nothing to see in a voice-only call: an avatar floating over another
+      // tab is noise, not a call. The user can still open it by hand.
+      if (!spotlightTrack) return;
       if (pipVideoElement && pipVideoElement.requestPictureInPicture) {
         try {
           await pipVideoElement.requestPictureInPicture();
@@ -1607,10 +1610,13 @@
     regardless of whether the panel is showing.
   -->
   {#if transportState.inCall}
+    <!-- Visually hidden, NOT display:none: requestPictureInPicture needs a
+         video that is actually playing frames, and a display:none element is
+         not rendered at all. -->
     <video
       bind:this={pipVideoElement}
       data-call-pip-video
-      class="hidden"
+      class="fixed bottom-0 left-0 w-px h-px opacity-0 pointer-events-none"
       autoplay
       muted
       playsinline
