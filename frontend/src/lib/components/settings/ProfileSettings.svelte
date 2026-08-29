@@ -10,7 +10,6 @@
     saveTag,
     saveTagColors,
     saveBio,
-    saveNameEffect,
     saveNameEffectFields,
     saveGradientColors,
   } from "$lib/profile.svelte";

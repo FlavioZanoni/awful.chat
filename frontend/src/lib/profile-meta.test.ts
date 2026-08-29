@@ -420,3 +420,33 @@ describe("validateProfileMeta", () => {
     });
   });
 });
+
+describe("a name effect survives the trip to another device", () => {
+  // The validator is the narrow point between two people. It drops anything
+  // it does not allowlist, and a dropped field is SILENT: the sender keeps
+  // rendering from their own profileStore and looks fine, so only the
+  // receiver sees the effect go missing. That is the failure this pins,
+  // because catching it by hand needs a second device.
+  const fills = ["none", "gradient", "rainbow"] as const;
+  for (const fill of fills) {
+    for (const shimmer of [false, true]) {
+      for (const glow of [false, true]) {
+        it(`carries fill=${fill} shimmer=${shimmer} glow=${glow}`, () => {
+          const wire = modelToWire({ fill, shimmer, glow });
+          const validated = validateProfileMeta({
+            nameEffect: wire.nameEffect,
+            nameShimmer: wire.nameShimmer,
+            nameGlow: wire.nameGlow,
+          });
+          expect(
+            wireToModel(
+              validated.nameEffect,
+              validated.nameShimmer,
+              validated.nameGlow
+            )
+          ).toEqual({ fill, shimmer, glow });
+        });
+      }
+    }
+  }
+});

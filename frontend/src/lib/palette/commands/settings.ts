@@ -35,7 +35,16 @@ import {
   setVoiceInputDevice,
   setVoiceOutputDevice,
 } from "$lib/transport/voice.svelte";
-import { profileStore, saveName, saveNameEffect } from "$lib/profile.svelte";
+import {
+  profileStore,
+  saveName,
+  saveNameEffectFields,
+} from "$lib/profile.svelte";
+import {
+  modelToWire,
+  wireToModel,
+  type NameEffectModel,
+} from "$lib/name-effect";
 import { openSettings } from "$lib/ui-state.svelte";
 import { getRegistry } from "$lib/plugins/registry";
 import { isPluginEnabled, togglePlugin } from "$lib/plugins/prefs.svelte";
@@ -55,11 +64,12 @@ const SETTINGS_TABS = [
   { id: "oss", label: "OSS", icon: Heart },
 ] as const;
 
-const NAME_EFFECTS = [
+// Fills are exclusive - they all claim background-clip: text - so only these
+// three belong in a pick-one list. Shimmer and glow are modifiers and get
+// their own toggle rows below, the same split the settings editor uses.
+const NAME_FILLS = [
   { value: "none", label: "None" },
   { value: "gradient", label: "Gradient" },
-  { value: "shimmer", label: "Shimmer" },
-  { value: "glow", label: "Glow" },
   { value: "rainbow", label: "Rainbow" },
 ] as const;
 
@@ -339,24 +349,61 @@ export const settingsCommands: CmdSource = () => {
         kind: "list",
         id: "settings.nameEffect",
         title: "Name effect",
-        items: () =>
-          NAME_EFFECTS.map((effect): Cmd => ({
-            id: `settings.nameEffect:${effect.value}`,
-            title: effect.label,
-            group: "Name effect",
-            badge:
-              (profileStore.nameEffect ?? "none") === effect.value
-                ? "Active"
-                : undefined,
-            action: {
-              kind: "act",
-              perform: () => {
-                saveNameEffect(effect.value).catch((err) =>
-                  console.warn("set name effect failed", err)
-                );
+        items: () => {
+          // Read the whole model, write the whole model. Writing just one of
+          // the three stored fields is what leaves the other two stale and
+          // lets this list disagree with the settings editor.
+          const model = wireToModel(
+            profileStore.nameEffect,
+            profileStore.nameShimmer,
+            profileStore.nameGlow
+          );
+          const save = (next: NameEffectModel) => {
+            const wire = modelToWire(next);
+            saveNameEffectFields(
+              wire.nameEffect,
+              wire.nameShimmer,
+              wire.nameGlow
+            ).catch((err) => console.warn("set name effect failed", err));
+          };
+          return [
+            ...NAME_FILLS.map(
+              (fill): Cmd => ({
+                id: `settings.nameEffect:${fill.value}`,
+                title: fill.label,
+                group: "Fill",
+                badge: model.fill === fill.value ? "Active" : undefined,
+                action: {
+                  kind: "act",
+                  keepOpen: true,
+                  perform: () => save({ ...model, fill: fill.value }),
+                },
+              })
+            ),
+            {
+              id: "settings.nameEffect:shimmer",
+              title: "Shimmer",
+              group: "Add",
+              badge: model.shimmer ? "On" : "Off",
+              action: {
+                kind: "act",
+                keepOpen: true,
+                perform: () => save({ ...model, shimmer: !model.shimmer }),
               },
             },
-          })),
+            {
+              id: "settings.nameEffect:glow",
+              title: "Glow",
+              group: "Add",
+              badge: model.glow ? "On" : "Off",
+              action: {
+                kind: "act",
+                keepOpen: true,
+                perform: () => save({ ...model, glow: !model.glow }),
+              },
+            },
+          ];
+        },
       }),
     },
   });

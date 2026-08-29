@@ -179,15 +179,6 @@ export async function saveBio(bio: string | undefined): Promise<void> {
   broadcastProfile();
 }
 
-export async function saveNameEffect(effect: string | undefined): Promise<void> {
-  profileStore.nameEffect = effect;
-  await chained(async () => {
-    await ensureProfile();
-    await updateOwnProfile({ nameEffect: effect ?? undefined });
-  });
-  broadcastProfile();
-}
-
 export async function saveNameEffectFields(
   nameEffect: string | undefined,
   nameShimmer: boolean | undefined,
