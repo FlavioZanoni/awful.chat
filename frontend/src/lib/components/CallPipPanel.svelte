@@ -14,6 +14,7 @@
   import { requestReturnToCall } from "$lib/ui-state.svelte";
   import { transportState, peerIdToDid } from "$lib/transport/transport.svelte";
   import { roomsStore } from "$lib/rooms.svelte";
+  import { displayPrefs } from "$lib/display-prefs.svelte";
   import { speakers } from "$lib/speakers.svelte";
   import { callFocus } from "$lib/call-focus.svelte";
   import { spotlightStore, getSpeakingLabel } from "$lib/call-spotlight.svelte";
@@ -133,7 +134,7 @@
   }}
 />
 
-{#if transportState.inCall && transportState.uiRoomCode !== transportState.callRoomCode}
+{#if displayPrefs.callPip && transportState.inCall && transportState.uiRoomCode !== transportState.callRoomCode}
   <!--
     z-50 is the app's chrome layer, shared with context menus and dialogs.
     The panel floats over the call without stealing focus the way a modal would.

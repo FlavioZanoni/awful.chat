@@ -739,7 +739,7 @@
   // Wire up Media Session auto-PiP handler (for Chromium tab switch).
   // When the browser's Media Session initiates PiP, this handler is called.
   $effect(() => {
-    if (!transportState.inCall || !pipVideoElement) {
+    if (!transportState.inCall || !pipVideoElement || !displayPrefs.callPip) {
       setOnPictureInPictureEnter(null);
       return;
     }

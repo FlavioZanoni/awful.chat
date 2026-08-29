@@ -64,7 +64,7 @@
   } from "@lucide/svelte";
   import { Check, Columns2, MessageSquare, MonitorIcon, Rows2, SlidersHorizontal, Users as UsersIcon, UserX } from "@lucide/svelte";
 import { profileStore, loadProfile } from "$lib/profile.svelte";
-import { displayPrefs, setCallChatBeside } from "$lib/display-prefs.svelte";
+import { displayPrefs, setCallChatBeside, setCallPip } from "$lib/display-prefs.svelte";
 import { cn } from "$lib/utils";
 import { callTilesState, refreshCallTiles } from "$lib/plugins/call-tiles.svelte";
 import { getManifest } from "$lib/plugins/registry";
@@ -1774,6 +1774,19 @@ import PluginIcon from "$lib/plugins/PluginIcon.svelte";
           <Puzzle class="size-4 shrink-0" />
           <span class="flex-1 truncate text-left">Apps</span>
           {#if gridView.apps}
+            <Check class="size-3.5 shrink-0 text-primary" />
+          {/if}
+        </button>
+        <button
+          type="button"
+          role="menuitemcheckbox"
+          aria-checked={displayPrefs.callPip}
+          class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
+          onclick={() => setCallPip(!displayPrefs.callPip)}
+        >
+          <Tv2 class="size-4 shrink-0" />
+          <span class="flex-1 truncate text-left">Picture-in-picture</span>
+          {#if displayPrefs.callPip}
             <Check class="size-3.5 shrink-0 text-primary" />
           {/if}
         </button>
