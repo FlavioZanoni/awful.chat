@@ -332,7 +332,16 @@ async function _openAll<T>(store: EncryptedStoreName, rows: T[]): Promise<T[]> {
  */
 export async function getMessages(
   roomCode: string,
-  beforeLamport?: number
+  beforeLamport?: number,
+  /**
+   * Set to whether this read hit the page cap.
+   *
+   * Callers cannot infer it from the length they get back: the cap is
+   * applied to the SEALED rows, and _openAll then drops any that fail to
+   * decrypt, so a full page can arrive as 49 and look like the end of the
+   * room when it is not.
+   */
+  out?: { capped: boolean }
 ): Promise<Message[]> {
   const database = await getDB();
 
@@ -397,6 +406,7 @@ export async function getMessages(
     cursors[pick] = await cursor.continue();
   }
 
+  if (out) out.capped = results.length >= PAGE_SIZE;
   // Decrypt AFTER filtering - the filter reads only clear fields.
   return _openAll("messages", results.reverse());
 }

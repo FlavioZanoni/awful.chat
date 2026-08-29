@@ -3,6 +3,7 @@ import {
   cachePluginSenderName,
   immediatePluginSenderName,
 } from "./plugin-sender-name";
+import { measureMedia } from "$lib/image-size";
 import { identityStore } from "../identity/identity.svelte";
 import { getQuotableText } from "../quote-helper";
 import { _noteRefused, _withRefused } from "./refused-lamports";
@@ -338,6 +339,23 @@ interface TransportState {
   peerAvatars: Map<string, string>;
   /** User-picked nickname colors, keyed like peerNames (by DID). */
   peerColors: Map<string, string>;
+  /**
+   * Did the room's first read fill a page?
+   *
+   * False means the whole room is already loaded and there is nothing to
+   * page back to. Counting the loaded messages cannot answer this: the cap
+   * is applied before decryption and undecryptable rows are then dropped,
+   * so a full page can arrive short.
+   */
+  historyCapped: boolean;
+  /**
+   * Peers currently reached through a relay circuit rather than directly.
+   *
+   * A reactive mirror of the transport's own set. The badge reads this, not
+   * the transport, because only a $state read re-renders when a connection
+   * upgrades.
+   */
+  relayedPeers: Set<string>;
   /** Profile metadata: banners, tags, bios, name effects; keyed by DID. */
   peerProfileMeta: Map<
     string,
@@ -397,6 +415,8 @@ export const transportState = $state<TransportState>({
   peerDidVersion: 0,
   peerAvatars: new Map(),
   peerColors: new Map(),
+  historyCapped: false,
+  relayedPeers: new Set(),
   peerProfileMeta: new Map(),
   error: null,
   callPeerIds: new Set(),
@@ -1050,12 +1070,16 @@ export async function _loadHistory(
   roomCode: string,
   stillCurrent: () => boolean = () => true
 ): Promise<void> {
+  const page = { capped: false };
   const [msgs, profiles] = await Promise.all([
-    getMessages(roomCode),
+    getMessages(roomCode, undefined, page),
     getAllPeerProfiles(),
   ]);
   if (!stillCurrent()) return;
   transportState.messages = msgs;
+  // Whether a first read filled a page is the only honest answer to "is
+  // there more?", and it is known here and nowhere else.
+  transportState.historyCapped = page.capped;
   // DM rooms use wall-clock ms as their lamport - absorbing those here would
   // catapult the shared room clock to ~1.7e12 and skew every room after.
   if (msgs.length > 0) {
@@ -2274,6 +2298,8 @@ async function _handleChatMessage(
               mimeType: file.mimeType,
               size: file.size,
               infoHash: file.infoHash,
+              width: file.width,
+              height: file.height,
               status: "pending",
               createdAt: now,
             })
@@ -2337,6 +2363,15 @@ _transport.on("roomPeers", (room, peerIds) => {
   }
 });
 
+_transport.on("relayChanged", (peerId, relayed) => {
+  // A new Set, not a mutation: $state does not deep-proxy a Set, so .add on
+  // the existing one updates the data and notifies nothing.
+  const next = new Set(transportState.relayedPeers);
+  if (relayed) next.add(peerId);
+  else next.delete(peerId);
+  transportState.relayedPeers = next;
+});
+
 _transport.on("connect", (peerId) => {
   transportState.peers = _transport.peers();
   // The DID cannot be derived from the peerId any more (devices carry their
@@ -2365,6 +2400,14 @@ _transport.on("connect", (peerId) => {
 });
 
 _transport.on("disconnect", (peerId) => {
+  // The transport drops its own entry on disconnect without announcing it,
+  // so prune the mirror here or a peer who left while relayed comes back
+  // wearing the badge before the first connection:open re-decides.
+  if (transportState.relayedPeers.has(peerId)) {
+    const next = new Set(transportState.relayedPeers);
+    next.delete(peerId);
+    transportState.relayedPeers = next;
+  }
   const did = peerIdToDid(peerId);
   _lastAppInbound.delete(peerId);
   _profileRepair.delete(peerId);
@@ -3276,11 +3319,17 @@ export async function sendFiles(
   const messageId = crypto.randomUUID();
   const attachmentIds: string[] = [];
   const createdAt = Date.now();
+  // Measured here and carried with the announce so a receiver can reserve
+  // the space before the bytes arrive. The sender is the only party who has
+  // the file early enough for this to be worth anything.
+  const dimsByHash = new Map<string, { width: number; height: number }>();
 
   for (let i = 0; i < seeded.length; i += 1) {
     const seededFile = seeded[i];
     const source = sourceByInfoHash.get(seededFile.infoHash);
     if (!source) continue;
+    const dims = await measureMedia(source);
+    if (dims) dimsByHash.set(seededFile.infoHash, dims);
     const canPersistData = source.size <= MAX_PERSISTED_ATTACHMENT_BYTES;
     if (source.size <= INLINE_FILE_MAX_BYTES) {
       _inlineByHash.set(
@@ -3298,6 +3347,8 @@ export async function sendFiles(
       infoHash: seededFile.infoHash,
       status: "seeding",
       createdAt,
+      width: dims?.width,
+      height: dims?.height,
       data: canPersistData ? await source.arrayBuffer() : undefined,
     };
     attachmentIds.push(attachment.id);
@@ -3333,7 +3384,9 @@ export async function sendFiles(
     lamport,
     type: MessageType.File,
     content: text.trim(),
-    meta: { files: seeded },
+    meta: {
+      files: seeded.map((f) => ({ ...f, ...dimsByHash.get(f.infoHash) })),
+    },
     attachments: attachmentIds,
     replyTo: options.replyTo,
   };
@@ -3753,5 +3806,5 @@ export function didToPeerId(did: string): string | null {
 }
 
 export function isRelayed(peerId: string): boolean {
-  return _transport.isRelayed(peerId);
+  return transportState.relayedPeers.has(peerId);
 }

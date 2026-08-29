@@ -213,6 +213,8 @@ async function _adoptInline(
       mimeType: file.mimeType,
       size: file.size,
       infoHash: file.infoHash,
+      width: file.width,
+      height: file.height,
       status: "seeding",
       createdAt: Date.now(),
       data: buf,

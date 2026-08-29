@@ -9,6 +9,15 @@ export interface TransportEvents {
    */
   roomPeers: (room: string, peerIds: string[]) => void;
   status: (status: TransportStatus) => void;
+  /**
+   * A peer's path changed between a relay circuit and a direct connection.
+   *
+   * The transport knows this the moment it happens, but the UI could not:
+   * isRelayed() looks inside a plain Set, so a template that calls it renders
+   * a snapshot and never hears about an upgrade. This event is what turns
+   * that into reactive state.
+   */
+  relayChanged: (peerId: string, relayed: boolean) => void;
 }
 
 export type TransportStatus =
@@ -211,6 +220,14 @@ export interface FileDescriptor {
   filename: string;
   mimeType: string;
   size: number;
+  /**
+   * Intrinsic pixel size, when the sender could measure it. Optional because
+   * an older sender does not send it and because not everything is an image;
+   * both cases render the way they always did. Untrusted on arrival - see
+   * isSaneDimension.
+   */
+  width?: number;
+  height?: number;
 }
 
 export interface FileTransferSnapshot extends FileDescriptor {

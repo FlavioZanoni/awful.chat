@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import type { Message } from "$lib/transport/transport.svelte";
   import type { ReplyTo } from "$lib/types/message";
@@ -210,11 +210,83 @@
   let gifPickerOpen = $state(false);
   let hasMoreHistory = $state(true);
   let loadingMore = $state(false);
+
+  /**
+   * Is there anything older to fetch?
+   *
+   * hasMoreHistory alone is an optimistic guess - it starts true and only
+   * learns otherwise from a page request that comes back short, so a brand
+   * new room offered "Load older messages" the moment it held one message,
+   * with nothing behind it.
+   *
+   * historyCapped is the honest answer, taken where the page is actually
+   * read: did that read hit the cap? Counting the messages in hand instead
+   * looked equivalent and was not - the cap applies to sealed rows and
+   * undecryptable ones are dropped afterwards, so one bad row returns 49 of
+   * 50 and would have hidden the rest of the room's history behind a button
+   * that never rendered.
+   */
+  const canLoadOlder = $derived(
+    hasMoreHistory && transportState.historyCapped
+  );
   let activeMessageId = $state<string | null>(null);
   let stagedFiles = $state<File[]>([]);
   // Names of files between "Enter pressed" and "message echoed" - hashing
   // for seeding happens in that window and it is silent otherwise.
-  let sendingFiles = $state<string[]>([]);
+  /**
+   * The message that is on its way but does not exist yet.
+   *
+   * A file only becomes a real message once it has been fingerprinted and
+   * hashed for seeding, which is seconds of nothing on a large one. This
+   * stands in for it, in the chat where the message will land, rather than
+   * as a line of text above the input describing what is happening
+   * elsewhere.
+   */
+  type SendingPreview = {
+    name: string;
+    size: number;
+    type: string;
+    /** Its own object URL - see beginSendingPreview. */
+    url: string | null;
+  };
+  let sendingPreviews = $state<SendingPreview[]>([]);
+  let sendingCaption = $state("");
+  /**
+   * Which send the preview on screen belongs to.
+   *
+   * Sends overlap. A slow one finishing used to clear the preview of a
+   * faster one started after it, revoking its object URLs on the way, and
+   * the second send was left with no indicator at all - which is the dead
+   * air this whole thing exists to remove.
+   */
+  let sendingToken = 0;
+
+  onDestroy(() => clearSendingPreview());
+
+  function beginSendingPreview(files: File[], caption: string): number {
+    clearSendingPreview();
+    sendingPreviews = files.map((file) => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      // A fresh URL, not the staged one: clearStagedFiles revokes those, and
+      // it runs the moment this send starts, well before it finishes.
+      url:
+        file.type.startsWith("image/") || file.type.startsWith("video/")
+          ? URL.createObjectURL(file)
+          : null,
+    }));
+    sendingCaption = caption;
+    return ++sendingToken;
+  }
+
+  /** Pass the token from beginSendingPreview to clear only your own send. */
+  function clearSendingPreview(token?: number) {
+    if (token !== undefined && token !== sendingToken) return;
+    for (const p of sendingPreviews) if (p.url) URL.revokeObjectURL(p.url);
+    sendingPreviews = [];
+    sendingCaption = "";
+  }
   let fileInputEl = $state<HTMLInputElement | null>(null);
   let dragOverlayActive = $state(false);
   let dragDepth = $state(0);
@@ -319,12 +391,7 @@
     // 50+ VISIBLE messages, and a page full of invisible rows (reactions,
     // plugin updates) kept the count below that forever: two weeks of
     // history with no way to scroll to it.
-    if (
-      scrollTop < 80 &&
-      initialScrollDone &&
-      hasMoreHistory &&
-      !loadingMore
-    ) {
+    if (scrollTop < 80 && initialScrollDone && canLoadOlder && !loadingMore) {
       void loadOlderPreservingScroll();
     }
   }
@@ -354,6 +421,9 @@
   // Scroll on new messages if autoScroll is enabled
   $effect(() => {
     visibleMessages.length;
+    // The in-flight message too: it is not in visibleMessages, so without
+    // this it appears below the fold and the send looks like it did nothing.
+    sendingPreviews.length;
     if (!initialScrollDone) return;
     if (autoScroll && messagesEl) {
       setTimeout(() => scrollToBottom(), 0);
@@ -605,7 +675,7 @@
     const wireText = serialize(text, draftMentionMap);
 
     if (stagedFiles.length > 0) {
-      sendingFiles = stagedFiles.map((f) => f.name);
+      const sendToken = beginSendingPreview(stagedFiles, wireText);
       sendFiles(stagedFiles, wireText, {
         replyTo: replyTarget
           ? {
@@ -615,7 +685,7 @@
             }
           : undefined,
       }).finally(() => {
-        sendingFiles = [];
+        clearSendingPreview(sendToken);
       });
       clearStagedFiles();
     } else if (replyTarget) {
@@ -698,7 +768,7 @@
   function handleGifFileSelect(file: File) {
     // A saved uploaded gif re-enters as a fresh file send: re-seeded, and
     // inlined into the message when small enough.
-    sendingFiles = [file.name];
+    const sendToken = beginSendingPreview([file], "");
     sendFiles([file], "", {
       replyTo: replyTarget
         ? {
@@ -710,7 +780,7 @@
     })
       .catch(() => {})
       .finally(() => {
-        sendingFiles = [];
+        clearSendingPreview(sendToken);
         // Clear reply state exactly as submit() does.
         replyTargetId = null;
         autoScroll = true;
@@ -718,7 +788,7 @@
   }
 
   async function handleLoadMore() {
-    if (loadingMore || !hasMoreHistory || messages.length === 0) return;
+    if (loadingMore || !canLoadOlder || messages.length === 0) return;
     loadingMore = true;
     const oldest = messages[0].lamport;
     const more = await loadMoreMessages(oldest);
@@ -1454,7 +1524,9 @@
             <Menu class="size-4" />
           </Button>
         {/if}
-        <h1 class="text-sm font-semibold truncate text-foreground">
+        <!-- select-text, against the heading rule in app.css: a room name is
+             something people copy and paste to each other, not a label. -->
+        <h1 class="select-text text-sm font-semibold truncate text-foreground">
           {roomName || roomCode}
         </h1>
         {#if !isDmChat}
@@ -1691,7 +1763,7 @@
       style="--chat-font-size: {displayPrefs.chatFontSize}px"
       class="chat-messages flex-1 overflow-y-auto overflow-x-hidden px-4 py-2 min-h-0"
     >
-      {#if hasMoreHistory && visibleMessages.length > 0}
+      {#if canLoadOlder && visibleMessages.length > 0}
         <div class="flex justify-center py-2">
           <Button
             variant="ghost"
@@ -1708,7 +1780,7 @@
 
       {#if visibleMessages.length === 0}
         <div class="flex h-full items-center justify-center py-20">
-          <p class="text-sm text-muted-foreground italic">
+          <p class="select-none text-sm text-muted-foreground italic">
             No messages yet. Say something!
           </p>
         </div>
@@ -1994,6 +2066,62 @@
               </div>
             </div>
           {/each}
+
+          {#if sendingPreviews.length > 0}
+            <!-- The message before it exists. It sits where it will land and
+                 pulses until the real one replaces it, which is the whole
+                 point: a line of text above the input described the send
+                 happening somewhere else, and left the place it was going
+                 empty. -->
+            <div class="mb-3 flex flex-col items-end gap-1">
+              <div
+                class="flex max-w-[85%] animate-pulse flex-col gap-1.5 rounded-lg bg-primary/10 p-2"
+                aria-live="polite"
+                aria-label="Sending"
+              >
+                {#each sendingPreviews as p, i (i)}
+                  {#if p.url && p.type.startsWith("image/")}
+                    <img
+                      src={p.url}
+                      alt={p.name}
+                      class="max-h-56 max-w-xs rounded-md object-contain"
+                    />
+                  {:else if p.url && p.type.startsWith("video/")}
+                    <!-- svelte-ignore a11y_media_has_caption -->
+                    <video
+                      src={p.url}
+                      class="max-h-56 max-w-xs rounded-md"
+                      muted
+                      playsinline
+                    ></video>
+                  {:else}
+                    <div
+                      class="flex items-center gap-2 rounded bg-muted/60 px-2 py-1.5"
+                    >
+                      <FileText class="size-4 shrink-0 text-muted-foreground" />
+                      <div class="min-w-0">
+                        <p class="truncate text-xs text-foreground">{p.name}</p>
+                        <p class="text-[10px] text-muted-foreground">
+                          {formatSize(p.size)}
+                        </p>
+                      </div>
+                    </div>
+                  {/if}
+                {/each}
+                {#if sendingCaption}
+                  <p class="whitespace-pre-wrap break-words text-sm">
+                    {humanizeMentions(
+                      sendingCaption,
+                      resolveMentionDisplayName
+                    )}
+                  </p>
+                {/if}
+              </div>
+              <span class="font-mono text-[10px] text-muted-foreground">
+                Sending...
+              </span>
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -2058,24 +2186,6 @@
           {/snippet}
         </Tip>
       </div>
-    </div>
-  {/if}
-
-  {#if sendingFiles.length > 0}
-    <!-- The gap this fills: staged previews clear on Enter, but the message
-         only appears once the file is fingerprinted and hashed for seeding -
-         seconds of dead air on a big file with nothing saying it is going. -->
-    <div
-      class="flex items-center gap-2 border-t border-border bg-muted/30 px-4 py-2 font-mono text-xs text-muted-foreground"
-    >
-      <span
-        class="size-2 shrink-0 animate-pulse rounded-full bg-primary"
-      ></span>
-      <span class="truncate">
-        Sending {sendingFiles.length === 1
-          ? sendingFiles[0]
-          : `${sendingFiles.length} files`}...
-      </span>
     </div>
   {/if}
 

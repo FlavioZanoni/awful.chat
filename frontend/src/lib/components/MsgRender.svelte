@@ -1,7 +1,10 @@
 <script lang="ts">
   import { Tip } from "$lib/components/ui/tooltip";
   import {
+    ChevronDown,
     Download,
+    ExternalLink,
+    Minimize2,
     FileText,
     Bookmark,
     X,
@@ -24,6 +27,29 @@
   import { mailboxPrefs } from "$lib/transport/mailbox.svelte";
   import { putSavedGif, deleteSavedGif, isGifSaved, getAttachmentsByInfoHash } from "$lib/storage";
   import { humanize } from "$lib/mentions";
+  import { mediaBoxStyle } from "$lib/image-size";
+  import {
+    convertImage,
+    convertTargets,
+    saveBlob,
+    withExtension,
+  } from "$lib/image-convert";
+  import {
+    actualSizeZoom,
+    clampPan,
+    clampZoom,
+    distance,
+    midpoint,
+    MIN_ZOOM,
+    zoomAbout,
+    type Point,
+  } from "$lib/image-zoom";
+  import {
+    highlightLanguage,
+    highlightText,
+    previewKind,
+    renderMarkdown,
+  } from "$lib/text-preview";
   import { makeHostApi } from "$lib/plugins/host";
   import { peerIdToDid, transportState, resolveMentionDisplayName } from "$lib/transport/transport.svelte";
   import { getPlugin, getManifest } from "$lib/plugins/registry";
@@ -66,7 +92,284 @@
   let highlightedCode = $state<string | null>(null);
   let ogPreview = $state<OgPreview | null>(null);
   let gifSaved = $state(false);
-  let lightboxUrl = $state<string | null>(null);
+  /**
+   * The open lightbox. An object rather than a bare URL because the download
+   * menu needs the filename to save under and the mime type to decide which
+   * conversions are worth offering.
+   */
+  type Lightbox = {
+    url: string;
+    filename: string;
+    mimeType: string;
+    /** Absent for a remote GIF, whose bytes we do not hold. */
+    size?: number;
+  };
+  let lightbox = $state<Lightbox | null>(null);
+  let formatsOpen = $state(false);
+  let converting = $state<string | null>(null);
+  let convertError = $state<string | null>(null);
+  let previewText = $state<string | null>(null);
+  let previewHtml = $state<string | null>(null);
+  let previewCode = $state<string | null>(null);
+  let previewError = $state<string | null>(null);
+  /** Markdown opens rendered; the toggle is for reading the source itself. */
+  let previewMode = $state<"rendered" | "source">("rendered");
+
+  const lightboxKind = $derived(
+    lightbox
+      ? lightbox.mimeType.startsWith("image/")
+        ? "image"
+        : previewKind(lightbox.filename, lightbox.mimeType, lightbox.size ?? 0)
+      : null
+  );
+
+  /**
+   * Conversion needs the bytes on this origin: a canvas fed a cross-origin
+   * image is tainted and toBlob throws. A remote GIF has no size recorded
+   * either, which is the same signal, so both cases fall back to Original.
+   */
+  const lightboxFormats = $derived(
+    lightbox && lightbox.size !== undefined
+      ? convertTargets(lightbox.mimeType)
+      : []
+  );
+
+  // ── Lightbox zoom ────────────────────────────────────────────────────
+  let zoom = $state(MIN_ZOOM);
+  let pan = $state<Point>({ x: 0, y: 0 });
+  let imgEl = $state<HTMLImageElement | null>(null);
+  /** Live pointers, so two of them can be read as a pinch. */
+  const pointers = new Map<number, Point>();
+  let pinchStart = $state<{ gap: number; zoom: number } | null>(null);
+  let dragFrom = $state<{ pointer: Point; pan: Point } | null>(null);
+  /**
+   * A pan just happened, so the click that follows it is not a click.
+   *
+   * The backdrop closes the viewer, and a drag that begins on the image and
+   * ends over the backdrop would otherwise close it every time.
+   */
+  let panned = false;
+
+  const viewport = () => ({
+    width: typeof window === "undefined" ? 0 : window.innerWidth,
+    height: typeof window === "undefined" ? 0 : window.innerHeight,
+  });
+
+  /** The image's untransformed layout box - offsetWidth ignores transforms. */
+  const layoutSize = () => ({
+    width: imgEl?.offsetWidth ?? 0,
+    height: imgEl?.offsetHeight ?? 0,
+  });
+
+  function resetZoom() {
+    zoom = MIN_ZOOM;
+    pan = { x: 0, y: 0 };
+    pointers.clear();
+    pinchStart = null;
+    dragFrom = null;
+    panned = false;
+  }
+
+  /** Zoom to `next`, holding whatever is under `at` (relative to centre). */
+  function applyZoom(next: number, at: Point) {
+    const to = clampZoom(next);
+    if (to === zoom) return;
+    pan = clampPan(zoomAbout(pan, zoom, to, at), layoutSize(), viewport(), to);
+    zoom = to;
+  }
+
+  /** A pointer position relative to the image's centre. */
+  function fromCentre(e: { clientX: number; clientY: number }): Point {
+    const r = imgEl?.getBoundingClientRect();
+    if (!r) return { x: 0, y: 0 };
+    return {
+      x: e.clientX - (r.left + r.width / 2),
+      y: e.clientY - (r.top + r.height / 2),
+    };
+  }
+
+  function onWheel(e: WheelEvent) {
+    // Or the chat scrolls behind the overlay while you zoom.
+    e.preventDefault();
+    applyZoom(zoom * Math.exp(-e.deltaY * 0.0015), fromCentre(e));
+  }
+
+  /**
+   * Single click, not double.
+   *
+   * The usual argument for double-click is that a single one dismisses the
+   * viewer - but not here: only the backdrop closes it, and a click on the
+   * picture itself did nothing at all. So the cheaper gesture was free, and
+   * spending the expensive one bought nothing.
+   *
+   * A pan ends in a click, so that one is swallowed rather than toggling
+   * zoom every time you finish dragging.
+   */
+  function onImageClick(e: MouseEvent) {
+    if (panned) {
+      panned = false;
+      return;
+    }
+    if (zoom > MIN_ZOOM) {
+      resetZoom();
+      return;
+    }
+    const target = actualSizeZoom(
+      imgEl?.naturalWidth ?? 0,
+      imgEl?.offsetWidth ?? 0
+    );
+    // An image that fits already has nothing to reveal at "actual size", so
+    // fall back to a plain step in rather than doing nothing.
+    applyZoom(target > MIN_ZOOM ? target : 2.5, fromCentre(e));
+  }
+
+  function onPointerDown(e: PointerEvent) {
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    panned = false;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinchStart = { gap: distance(a, b), zoom };
+      dragFrom = null;
+    } else if (zoom > MIN_ZOOM) {
+      dragFrom = { pointer: { x: e.clientX, y: e.clientY }, pan };
+    }
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointers.size >= 2 && pinchStart) {
+      const [a, b] = [...pointers.values()];
+      const gap = distance(a, b);
+      if (pinchStart.gap > 0) {
+        const centre = midpoint(a, b);
+        applyZoom(
+          pinchStart.zoom * (gap / pinchStart.gap),
+          fromCentre({ clientX: centre.x, clientY: centre.y })
+        );
+        panned = true;
+      }
+      return;
+    }
+
+    if (!dragFrom) return;
+    const next = {
+      x: dragFrom.pan.x + (e.clientX - dragFrom.pointer.x),
+      y: dragFrom.pan.y + (e.clientY - dragFrom.pointer.y),
+    };
+    if (Math.abs(next.x - pan.x) > 2 || Math.abs(next.y - pan.y) > 2) {
+      panned = true;
+    }
+    pan = clampPan(next, layoutSize(), viewport(), zoom);
+  }
+
+  function onPointerUp(e: PointerEvent) {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchStart = null;
+    if (pointers.size === 0) dragFrom = null;
+  }
+
+  function openLightbox(next: Lightbox) {
+    resetZoom();
+    lightbox = next;
+    formatsOpen = false;
+    convertError = null;
+    previewText = null;
+    previewHtml = null;
+    previewCode = null;
+    previewError = null;
+    previewMode = "rendered";
+  }
+
+  function closeLightbox() {
+    lightbox = null;
+    formatsOpen = false;
+    resetZoom();
+  }
+
+  async function downloadOriginal() {
+    if (!lightbox) return;
+    try {
+      const res = await fetch(lightbox.url);
+      saveBlob(await res.blob(), lightbox.filename);
+    } catch {
+      // A remote GIF lives on somebody else's host, which owes us no CORS
+      // header - and the <img> beside it never needed one, so "failed to
+      // fetch" reads as a bug rather than as a policy. Hand the URL to the
+      // browser and let it do the ordinary thing.
+      const a = document.createElement("a");
+      a.href = lightbox.url;
+      a.download = lightbox.filename;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.click();
+    }
+  }
+
+  async function downloadAs(mime: string, ext: string) {
+    if (!lightbox) return;
+    converting = mime;
+    convertError = null;
+    try {
+      const res = await fetch(lightbox.url);
+      const out = await convertImage(await res.blob(), mime);
+      saveBlob(out, withExtension(lightbox.filename, ext));
+      formatsOpen = false;
+    } catch (e) {
+      convertError = e instanceof Error ? e.message : String(e);
+    } finally {
+      converting = null;
+    }
+  }
+
+  // Highlighting is its own effect so it runs immediately for a source file
+  // and only on demand for markdown: the grammar chunk should not be fetched
+  // for a document whose source nobody opens.
+  $effect(() => {
+    const open = lightbox;
+    const text = previewText;
+    const wantsSource = lightboxKind === "text" || previewMode === "source";
+    if (!open || text === null || !wantsSource || previewCode !== null) return;
+    const lang = highlightLanguage(open.filename);
+    if (!lang) return;
+    let cancelled = false;
+    void highlightText(text, lang).then((html) => {
+      // null means shiki has no grammar or could not load one, and the plain
+      // <pre> underneath is already the fallback.
+      if (!cancelled && html) previewCode = html;
+    });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  // Text and markdown are read when the viewer opens, not when the message
+  // renders: a room full of .md attachments should not read them all.
+  $effect(() => {
+    const open = lightbox;
+    const kind = lightboxKind;
+    if (!open || (kind !== "text" && kind !== "markdown")) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const text = await (await fetch(open.url)).text();
+        if (cancelled) return;
+        previewText = text;
+        if (kind === "markdown") {
+          const html = await renderMarkdown(text);
+          if (!cancelled) previewHtml = html;
+        }
+      } catch (e) {
+        if (!cancelled)
+          previewError = e instanceof Error ? e.message : String(e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
   let copiedCode = $state(false);
   let videoPlaying = $state(false);
   let videoEl = $state<HTMLVideoElement | null>(null);
@@ -380,6 +683,25 @@
     gifSaved = true;
   }
 
+  let copiedPreview = $state(false);
+
+  /**
+   * Copies the SOURCE, not what is on screen. In rendered markdown the
+   * screen holds prose that was never in the file, and the thing worth
+   * putting on a clipboard is the markdown itself.
+   */
+  async function copyPreview() {
+    if (previewText === null) return;
+    try {
+      await navigator.clipboard.writeText(previewText);
+      copiedPreview = true;
+      setTimeout(() => (copiedPreview = false), 1200);
+    } catch {
+      // Clipboard blocked (insecure context, denied permission): the text is
+      // on screen and selectable, so there is nothing to recover from.
+    }
+  }
+
   async function copyCodeBlock() {
     if (!asCodeBlock) return;
     await navigator.clipboard.writeText(asCodeBlock.code);
@@ -487,17 +809,51 @@
             </div>
           {/if}
 
-          {#if transfer?.blobURL && file.mimeType.startsWith("image/")}
+          {#if file.mimeType.startsWith("image/")}
+            {@const box = mediaBoxStyle(file.width, file.height)}
+            {#if !transfer?.blobURL}
+              <!-- The picture's own shape, held open before a single byte of
+                   it has arrived. This is what stops the chat jumping as
+                   images finish: the space they will need is already spent,
+                   so nothing below them moves when they land. Only possible
+                   because the sender measured and sent the dimensions - an
+                   older sender omits them, box is "", and this renders
+                   nothing at all rather than a wrongly sized guess that
+                   would jump anyway.
+
+                   Gated on an ACTIVE download, not merely on the absence of
+                   bytes: attachments are fetched on demand, so an image
+                   nobody has asked for would otherwise sit here pulsing for
+                   the life of the session next to its own Download button. -->
+              {#if box && transfer?.status === "downloading"}
+                <div
+                  class="mt-2 animate-pulse rounded-md bg-muted/60"
+                  style={box}
+                  aria-hidden="true"
+                ></div>
+              {/if}
+            {:else}
             <div class="group/gif relative mt-2 inline-block">
+              <!-- The box lives on the button, not on GifImage: the same
+                   style the skeleton wore, so the swap costs no reflow. -->
               <button
                 type="button"
                 class="block"
-                onclick={() => (lightboxUrl = transfer.blobURL!)}
+                style={box}
+                onclick={() =>
+                  openLightbox({
+                    url: transfer.blobURL!,
+                    filename: file.filename,
+                    mimeType: file.mimeType,
+                    size: file.size,
+                  })}
               >
                 <GifImage
                   src={transfer.blobURL}
                   alt={file.filename}
-                  class="max-w-xs max-h-56 rounded-md object-contain"
+                  class="{box
+                    ? 'h-full w-full'
+                    : 'max-w-xs max-h-56'} rounded-md object-contain"
                   loading="lazy"
                   animated={file.mimeType === "image/gif"}
                   animate={mediaPrefs.gifAutoplay ? true : "hover"}
@@ -521,14 +877,30 @@
                 </button>
               {/if}
             </div>
-          {:else if transfer?.blobURL && file.mimeType.startsWith("video/")}
+            {/if}
+          {:else if file.mimeType.startsWith("video/")}
+            {@const box = mediaBoxStyle(file.width, file.height)}
+            {#if !transfer?.blobURL}
+              <!-- Same reservation an image gets, on the same condition. A
+                   video shifts too: with no dimensions the browser lays out
+                   a default 300x150 box and resizes once metadata arrives. -->
+              {#if box && transfer?.status === "downloading"}
+                <div
+                  class="mt-2 animate-pulse rounded-md bg-muted/60"
+                  style={box}
+                  aria-hidden="true"
+                ></div>
+              {/if}
+            {:else}
             <!-- svelte-ignore a11y_media_has_caption -->
             <video
               src={transfer.blobURL}
               controls
               preload="metadata"
-              class="mt-2 max-w-xs max-h-56 rounded-md"
+              style={box}
+              class="mt-2 {box ? '' : 'max-w-xs max-h-56'} rounded-md"
             ></video>
+            {/if}
           {:else if transfer?.blobURL && file.mimeType.startsWith("audio/")}
             <AudioPlayer
               src={transfer.blobURL}
@@ -536,14 +908,35 @@
               class="mt-2 max-w-xs"
             />
           {:else if transfer?.blobURL}
-            <a
-              href={transfer.blobURL}
-              download={file.filename}
-              class="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
-            >
-              <FileText class="size-3.5" />
-              Open file
-            </a>
+            <!-- A readable file gets both: reading it here and keeping a copy
+                 are different intentions, and collapsing them into one link
+                 meant picking one for the reader. -->
+            <div class="mt-2 flex flex-wrap items-center gap-3">
+              {#if previewKind(file.filename, file.mimeType, file.size)}
+                <button
+                  type="button"
+                  onclick={() =>
+                    openLightbox({
+                      url: transfer.blobURL!,
+                      filename: file.filename,
+                      mimeType: file.mimeType,
+                      size: file.size,
+                    })}
+                  class="inline-flex cursor-pointer items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <FileText class="size-3.5" />
+                  Open
+                </button>
+              {/if}
+              <a
+                href={transfer.blobURL}
+                download={file.filename}
+                class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <Download class="size-3.5" />
+                Download
+              </a>
+            </div>
           {/if}
         </div>
       {/each}
@@ -575,7 +968,15 @@
     {/if}
   {:else if isGifMessage}
     <div class="group relative inline-block">
-      <button type="button" onclick={() => (lightboxUrl = content)}>
+      <button
+        type="button"
+        onclick={() =>
+          openLightbox({
+            url: content,
+            filename: "gif.gif",
+            mimeType: "image/gif",
+          })}
+      >
         <GifImage
           src={content}
           alt="GIF"
@@ -828,38 +1229,407 @@
   {/if}
 </div>
 
-{#if lightboxUrl}
+{#if lightbox}
   <div
     class="fixed inset-0 z-50 grid place-items-center p-4"
     role="dialog"
     aria-modal="true"
     tabindex="0"
     onkeydown={(e) => {
-      if (e.key === "Escape") lightboxUrl = null;
+      if (e.key === "Escape") closeLightbox();
     }}
   >
     <button
       type="button"
       class="absolute inset-0 bg-black/80"
-      onclick={() => (lightboxUrl = null)}
+      onclick={closeLightbox}
       aria-label="Close preview"
     ></button>
-    <button
-      type="button"
-      class="absolute right-4 top-4 z-10 size-9 rounded-full bg-black/60 text-white inline-flex items-center justify-center"
-      onclick={() => {
-        lightboxUrl = null;
-      }}
-      aria-label="Close"
-    >
-      <X class="size-4" />
-    </button>
-    <button type="button" class="relative z-10 cursor-default">
-      <img
-        src={lightboxUrl}
-        alt="Preview"
-        class="max-h-[90vh] max-w-[90vw] object-contain rounded-md"
-      />
-    </button>
+
+    <!-- Reset, open, download, formats, close - the destructive one last,
+         and the pair that belong together sitting together. -->
+    <div class="absolute right-4 top-4 z-20 flex items-center gap-1.5">
+      {#if lightboxKind === "image" && zoom > MIN_ZOOM}
+        <!-- Only once there is something to reset. Clicking the picture does
+             it too, but nothing on screen ever said so. -->
+        <Tip text="Reset zoom">
+          {#snippet children(props)}
+            <button
+              {...props}
+              type="button"
+              class="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full bg-black/60 px-3 font-mono text-xs text-white hover:bg-black/80"
+              onclick={resetZoom}
+              aria-label="Reset zoom"
+            >
+              <Minimize2 class="size-4" />
+              {zoom.toFixed(1)}x
+            </button>
+          {/snippet}
+        </Tip>
+      {/if}
+
+      <Tip text="Open in a new tab">
+        {#snippet children(props)}
+          <button
+            {...props}
+            type="button"
+            class="size-9 rounded-full bg-black/60 text-white inline-flex items-center justify-center hover:bg-black/80 cursor-pointer"
+            onclick={() =>
+              window.open(lightbox!.url, "_blank", "noopener,noreferrer")}
+            aria-label="Open in a new tab"
+          >
+            <ExternalLink class="size-4" />
+          </button>
+        {/snippet}
+      </Tip>
+      <Tip text="Download original">
+        {#snippet children(props)}
+          <button
+            {...props}
+            type="button"
+            class="size-9 rounded-full bg-black/60 text-white inline-flex items-center justify-center hover:bg-black/80 cursor-pointer"
+            onclick={downloadOriginal}
+            aria-label="Download original"
+          >
+            <Download class="size-4" />
+          </button>
+        {/snippet}
+      </Tip>
+
+      {#if lightboxFormats.length}
+        <div class="relative">
+          <Tip text="Download as...">
+            {#snippet children(props)}
+              <button
+                {...props}
+                type="button"
+                class="size-9 rounded-full bg-black/60 text-white inline-flex items-center justify-center hover:bg-black/80 cursor-pointer"
+                onclick={() => (formatsOpen = !formatsOpen)}
+                aria-haspopup="menu"
+                aria-expanded={formatsOpen}
+                aria-label="Download as another format"
+              >
+                <ChevronDown class="size-4" />
+              </button>
+            {/snippet}
+          </Tip>
+          {#if formatsOpen}
+            <div
+              role="menu"
+              tabindex="-1"
+              class="absolute right-0 top-11 min-w-36 overflow-hidden rounded-md border border-border bg-popover py-1 shadow-lg"
+            >
+              {#each lightboxFormats as fmt (fmt.mime)}
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={converting !== null}
+                  class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left font-mono text-xs text-popover-foreground hover:bg-muted disabled:opacity-60 cursor-pointer"
+                  onclick={() => downloadAs(fmt.mime, fmt.ext)}
+                >
+                  {fmt.label}
+                  {#if converting === fmt.mime}
+                    <span class="text-muted-foreground">...</span>
+                  {/if}
+                </button>
+              {/each}
+              {#if lightbox.mimeType === "image/gif"}
+                <!-- Said plainly rather than discovered afterwards: a canvas
+                     holds one frame, so every conversion here is a still. -->
+                <p
+                  class="border-t border-border/60 px-3 pt-1.5 pb-1 font-mono text-[10px] leading-snug text-muted-foreground"
+                >
+                  Saves a single frame. Use Download original to keep the
+                  animation.
+                </p>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <Tip text="Close">
+        {#snippet children(props)}
+          <button
+            {...props}
+            type="button"
+            class="size-9 rounded-full bg-black/60 text-white inline-flex items-center justify-center hover:bg-black/80 cursor-pointer"
+            onclick={closeLightbox}
+            aria-label="Close"
+          >
+            <X class="size-4" />
+          </button>
+        {/snippet}
+      </Tip>
+    </div>
+
+    {#if convertError}
+      <p
+        class="absolute right-4 top-16 z-20 max-w-72 rounded-md bg-destructive/90 px-3 py-2 font-mono text-xs text-white"
+      >
+        {convertError}
+      </p>
+    {/if}
+
+    {#if lightboxKind === "image"}
+      <!-- A div, not a button: it carries drag handlers, and a draggable
+           button is neither. It still has to be operable from a keyboard,
+           so it takes focus and answers Enter and Space the way the click
+           does. Escape and the backdrop still close it. -->
+      <div
+        role="button"
+        tabindex="0"
+        aria-label={zoom > MIN_ZOOM ? "Reset zoom" : "Zoom in"}
+        onkeydown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          // Escape must keep closing the viewer, so only these two are taken.
+          onImageClick(e as unknown as MouseEvent);
+        }}
+        class="relative z-10 touch-none select-none"
+        style="cursor: {dragFrom
+          ? 'grabbing'
+          : zoom > MIN_ZOOM
+            ? 'zoom-out'
+            : 'zoom-in'}"
+        onwheel={onWheel}
+        onclick={onImageClick}
+        onpointerdown={onPointerDown}
+        onpointermove={onPointerMove}
+        onpointerup={onPointerUp}
+        onpointercancel={onPointerUp}
+      >
+        <img
+          bind:this={imgEl}
+          src={lightbox.url}
+          alt="Preview"
+          draggable="false"
+          class="max-h-[90vh] max-w-[90vw] rounded-md object-contain"
+          style="transform: translate({pan.x}px, {pan.y}px) scale({zoom}); transition: {dragFrom ||
+          pinchStart
+            ? 'none'
+            : 'transform 120ms ease-out'}"
+        />
+      </div>
+    {:else}
+      <div
+        class="relative z-10 flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-md border border-border bg-background"
+      >
+        <div
+          class="flex items-center gap-2 border-b border-border px-4 py-2 font-mono text-xs text-muted-foreground"
+        >
+          <FileText class="size-3.5 shrink-0" />
+          <span class="min-w-0 flex-1 truncate">{lightbox.filename}</span>
+          {#if lightboxKind === "markdown"}
+            <!-- Rendered is the default because it is what the file is for,
+                 but the source is the file - a link target, a code fence, a
+                 stray backtick - and there is no way back to it once the
+                 markdown has been turned into prose. -->
+            <div
+              class="flex shrink-0 overflow-hidden rounded border border-border"
+            >
+              {#each [{ id: "rendered", label: "Rendered" }, { id: "source", label: "Source" }] as tab (tab.id)}
+                <button
+                  type="button"
+                  aria-pressed={previewMode === tab.id}
+                  onclick={() =>
+                    (previewMode = tab.id as "rendered" | "source")}
+                  class="cursor-pointer px-2 py-0.5 transition-colors {previewMode ===
+                  tab.id
+                    ? 'bg-primary/15 text-foreground'
+                    : 'hover:bg-muted'}"
+                >
+                  {tab.label}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        <div class="min-h-0 flex-1 overflow-auto p-4">
+          {#if previewText !== null}
+            <!-- A zero-height sticky row, so the button hangs over the top
+                 right corner and stays there while the file scrolls under
+                 it. Taking it out of flow instead - absolute, with the
+                 scroller absolute behind it - left this panel with no
+                 in-flow content at all, so flex-1 had nothing to size
+                 against and the whole viewer collapsed to its header. -->
+            <div class="sticky top-0 z-10 flex h-0 justify-end">
+              <button
+                type="button"
+                onclick={copyPreview}
+                aria-label={copiedPreview ? "Copied" : "Copy contents"}
+                class="inline-flex size-7 cursor-pointer items-center justify-center rounded border border-border/70 bg-card text-muted-foreground hover:text-foreground"
+              >
+                {#if copiedPreview}
+                  <Check class="size-3.5" />
+                {:else}
+                  <Copy class="size-3.5" />
+                {/if}
+              </button>
+            </div>
+          {/if}
+          {#if previewError}
+            <p class="font-mono text-xs text-destructive">{previewError}</p>
+          {:else if lightboxKind === "markdown" && previewMode === "rendered"}
+            {#if previewHtml}
+              <!-- Sanitized in renderMarkdown before it ever reaches here;
+                   the source is a file another person sent. -->
+              <div class="md-preview">{@html previewHtml}</div>
+            {:else}
+              <p class="font-mono text-xs text-muted-foreground">Loading...</p>
+            {/if}
+          {:else if previewCode || previewText !== null}
+            <!-- One box for both renderings. The plain pre shows first and
+                 shiki replaces it a moment later, so the two have to occupy
+                 exactly the same space: same padding, same line height, and
+                 above all the same wrapping. The fallback used to wrap while
+                 shiki's output scrolls, so a file with long lines changed
+                 height the instant highlighting arrived. -->
+            <div class="code-preview">
+              {#if previewCode}
+                <!-- shiki's own markup, from our own source string. -->
+                {@html previewCode}
+              {:else}
+                <pre>{previewText}</pre>
+              {/if}
+            </div>
+          {:else}
+            <p class="font-mono text-xs text-muted-foreground">Loading...</p>
+          {/if}
+        </div>
+      </div>
+    {/if}
   </div>
 {/if}
+
+<style>
+  /* Rendered markdown. Tailwind's Preflight strips heading and list styling
+     app-wide, which is right for chat and wrong inside a document, so this
+     puts back only what a .md needs to be readable. Scoped to .md-preview so
+     none of it can leak into a message body. */
+  /* Against the global heading rule in app.css: this panel exists to be
+     read and copied, and there a heading is content. */
+  .md-preview,
+  .md-preview :global(*) {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .md-preview :global(h1),
+  .md-preview :global(h2),
+  .md-preview :global(h3) {
+    font-weight: 600;
+    line-height: 1.3;
+    margin: 1.2em 0 0.5em;
+  }
+  .md-preview :global(h1) {
+    font-size: 1.5rem;
+  }
+  .md-preview :global(h2) {
+    font-size: 1.25rem;
+  }
+  .md-preview :global(h3) {
+    font-size: 1.1rem;
+  }
+  .md-preview :global(h1:first-child),
+  .md-preview :global(h2:first-child),
+  .md-preview :global(h3:first-child) {
+    margin-top: 0;
+  }
+  .md-preview :global(p),
+  .md-preview :global(ul),
+  .md-preview :global(ol),
+  .md-preview :global(blockquote),
+  .md-preview :global(pre),
+  .md-preview :global(table) {
+    margin: 0.75em 0;
+  }
+  .md-preview :global(ul) {
+    list-style: disc;
+    padding-left: 1.5em;
+  }
+  .md-preview :global(ol) {
+    list-style: decimal;
+    padding-left: 1.5em;
+  }
+  .md-preview :global(li) {
+    margin: 0.25em 0;
+  }
+  .md-preview :global(a) {
+    color: var(--primary);
+    text-decoration: underline;
+  }
+  .md-preview :global(code) {
+    font-family: ui-monospace, monospace;
+    font-size: 0.875em;
+    background: color-mix(in oklab, var(--muted) 60%, transparent);
+    border-radius: 0.25rem;
+    padding: 0.1em 0.3em;
+  }
+  .md-preview :global(pre) {
+    /* Wide code scrolls inside its own box, so the viewer never scrolls
+       sideways as a whole. */
+    overflow-x: auto;
+    background: color-mix(in oklab, var(--muted) 40%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+  }
+  .md-preview :global(pre code) {
+    background: none;
+    padding: 0;
+  }
+  .md-preview :global(blockquote) {
+    border-left: 3px solid var(--border);
+    padding-left: 0.75rem;
+    color: var(--muted-foreground);
+  }
+  .md-preview :global(table) {
+    display: block;
+    overflow-x: auto;
+    border-collapse: collapse;
+  }
+  .md-preview :global(th),
+  .md-preview :global(td) {
+    border: 1px solid var(--border);
+    padding: 0.35em 0.6em;
+    text-align: left;
+  }
+  .md-preview :global(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.375rem;
+  }
+  .md-preview :global(hr) {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 1.25em 0;
+  }
+  /* The container owns the ground and the padding so that the plain pre and
+     shiki's pre are interchangeable. shiki paints its own background inline,
+     which would otherwise be the one visible difference between them - the
+     same reason chat code blocks force it transparent. */
+  .code-preview {
+    background: color-mix(in oklab, var(--muted) 40%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    /* Wide lines scroll inside the block; the panel itself must not. */
+    overflow-x: auto;
+  }
+  .code-preview :global(pre) {
+    margin: 0;
+    /* Extra room on the right so the copy button never covers the end of
+       the first line. */
+    padding: 0.75rem 2.75rem 0.75rem 0.75rem;
+    background: transparent !important;
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    /* Not pre-wrap: shiki does not wrap, and a fallback that did changed the
+       line count, and so the height, the moment highlighting landed. */
+    white-space: pre;
+    color: var(--foreground);
+  }
+  .code-preview :global(.shiki) {
+    color: inherit;
+  }
+</style>

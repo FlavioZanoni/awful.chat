@@ -295,6 +295,11 @@ export class LibP2PTransport implements PeerTransport {
     // would suppress future "connect" events; stale streams can't be reused.
     // joinedRooms is intentionally KEPT - it's re-subscribed below.
     this.connectedPeers.clear();
+    // Announced, not just cleared. The app mirrors this set reactively, and
+    // a silent wipe leaves stale entries behind: a peer that reconnects
+    // DIRECTLY then produces no relayChanged (was === false already), so its
+    // relay badge stays lit for the rest of the session.
+    for (const id of this.relayedPeers) this.emit("relayChanged", id, false);
     this.relayedPeers.clear();
     this.peerStreams.clear();
     for (const pid of [...this.pendingQueues.keys()])
@@ -548,6 +553,11 @@ export class LibP2PTransport implements PeerTransport {
     this.rendezvousStream = null;
     this.joinedRooms.clear();
     this.connectedPeers.clear();
+    // Announced, not just cleared. The app mirrors this set reactively, and
+    // a silent wipe leaves stale entries behind: a peer that reconnects
+    // DIRECTLY then produces no relayChanged (was === false already), so its
+    // relay badge stays lit for the rest of the session.
+    for (const id of this.relayedPeers) this.emit("relayChanged", id, false);
     this.relayedPeers.clear();
     this.peerStreams.clear();
     for (const pid of [...this.pendingQueues.keys()])
@@ -1679,8 +1689,10 @@ export class LibP2PTransport implements PeerTransport {
     // connection is built, so use its answer rather than a second, wrong one.
     const hasDirect = connections.some((c) => c.direct);
 
+    const was = this.relayedPeers.has(peerId);
     if (hasDirect) this.relayedPeers.delete(peerId);
     else this.relayedPeers.add(peerId);
+    if (was !== !hasDirect) this.emit("relayChanged", peerId, !hasDirect);
   }
 
   private async privateKeyFromRawKey(privateKeyBytes: Uint8Array) {

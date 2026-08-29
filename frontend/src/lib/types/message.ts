@@ -79,6 +79,14 @@ export interface Attachment {
   infoHash: string; // permanent WebTorrent reference
   data?: ArrayBuffer; // only if size < 5MB
   blobURL?: string; // runtime only, never persisted
+  /**
+   * Intrinsic pixel size, when the sender could measure it. Optional because
+   * an older sender does not send it and because not everything is an image;
+   * both cases render the way they always did. Untrusted on arrival - see
+   * isSaneDimension.
+   */
+  width?: number;
+  height?: number;
   status: AttachmentStatus;
   createdAt: number;
 }
@@ -117,6 +125,14 @@ export interface FileEntry {
    * receipt, so they cannot be forged.
    */
   inline?: string;
+  /**
+   * Intrinsic pixel size, when the sender could measure it. Optional because
+   * an older sender does not send it and because not everything is an image;
+   * both cases render the way they always did. Untrusted on arrival - see
+   * isSaneDimension.
+   */
+  width?: number;
+  height?: number;
 }
 
 // ── Wire shapes ───────────────────────────────────────────────────────────────
