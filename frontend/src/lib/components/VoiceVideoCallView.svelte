@@ -707,15 +707,16 @@ import {
       ? (visibleTiles.find((t) => t.id === callFocus.pinnedTileId) ?? null)
       : null
   );
-  // A focused screen/transmission/plugin tile is being WATCHED, not glanced
-  // at: the panel grows (rowClass) and the controls go immersive like
-  // fullscreen (dockedControls).
-  const watchingFocused = $derived(
-    !!focusedTile &&
-      (focusedTile.kind === "screen" ||
-        focusedTile.kind === "transmission" ||
-        focusedTile.kind === "plugin")
-  );
+  // A focused tile is being WATCHED, not glanced at - but only where the
+  // focus visibly changes the layout. Stacked above the chat, the panel
+  // grows (rowClass) and the controls go immersive like fullscreen
+  // (dockedControls). BESIDE the chat the panel is already as big as it
+  // gets: a pin there rearranges tiles but grows nothing, and controls that
+  // vanished on a click that changed so little read as "watching a live
+  // undocked my controls" - so beside stays docked, and fullscreen is the
+  // immersive mode there. Cameras count like shares and app tiles: a
+  // focused face is watched the same way a focused stream is.
+  const watchingFocused = $derived(!!focusedTile && !beside);
   const showThumbnails = $derived(
     focusedTile ? focusedTile.kind !== "screen" : false
   );
@@ -745,11 +746,12 @@ import {
   let transmissionVolumeSettleTimer: ReturnType<typeof setTimeout> | null =
     null;
 
-  // Docked only when there is nothing to watch - pure audio call
-  // Windowed: the controls dock and stay put. Fullscreen AND the focused
-  // tall-panel view are the immersive modes - there the controls (and the
-  // fullscreen button, and plugin tile chrome, which all key off this)
-  // fade after the idle timeout and return on mouse movement.
+  // Docked (visible, in reserved space below the tiles) unless immersive:
+  // fullscreen, or the focused tall-panel view - there the controls (and
+  // the fullscreen button, and plugin tile chrome, which all key off this)
+  // fade after the idle timeout and return on mouse movement. Merely
+  // watching a live in the grid, or focusing one beside the chat, keeps
+  // the controls docked - see watchingFocused.
   const dockedControls = $derived(!isFullscreen && !watchingFocused);
 
   $effect(() => {
