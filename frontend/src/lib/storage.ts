@@ -198,10 +198,25 @@ type AppDB = IDBPDatabase<{
 }>;
 
 let db: AppDB | null = null;
+/**
+ * Single-flight open. Two concurrent getDB() calls used to each open their
+ * own connection with only the last one cached - and an uncached open handle
+ * is unreachable: nothing can ever close it, so it blocks a wipe's
+ * deleteDatabase forever (the blocking() handler below can only close the
+ * cached one).
+ */
+let dbOpening: Promise<AppDB> | null = null;
 
 export async function getDB(): Promise<AppDB> {
   if (db) return db;
+  if (dbOpening) return dbOpening;
+  dbOpening = openDatabase().finally(() => {
+    dbOpening = null;
+  });
+  return dbOpening;
+}
 
+async function openDatabase(): Promise<AppDB> {
   db = (await openDB("awful-chat", 4, {
     async upgrade(database, oldVersion, _newVersion, transaction) {
       if (oldVersion < 1) {
@@ -280,6 +295,19 @@ export async function getDB(): Promise<AppDB> {
       if (oldVersion < 4) {
         database.createObjectStore("phonebook", { keyPath: "peerId" });
       }
+    },
+    blocking() {
+      // Someone wants to delete (or upgrade) this database and our open
+      // handle is what stands in the way. deleteDatabase waits for EXCLUSIVE
+      // access - forever, with no error and no timeout - and during a device
+      // sync the app is still live: a message write that called getDB() in
+      // the gap between wipeLocalDatabase() closing the cached handle and
+      // the delete being processed re-opened the database, and that orphan
+      // handle blocked the wipe for good. The import never ran, the target
+      // froze at 80% and the source at 90%, with nothing to act on. Yielding
+      // here lets the delete through; the next getDB() reopens.
+      db?.close();
+      db = null;
     },
   })) as AppDB;
 
@@ -1895,6 +1923,12 @@ export async function deleteWebAuthnRecord(): Promise<void> {
 }
 
 export async function wipeLocalDatabase(): Promise<void> {
+  // deleteDB, not store-by-store clearing, on purpose: deleting the database
+  // also closes every connection and kills whatever was in flight on them -
+  // notably a background at-rest sweep, which would otherwise keep running
+  // over the rows the import writes next. The delete blocking forever is
+  // handled where the blocker lives: getDB()'s blocking() handler closes any
+  // connection this module re-opened mid-wipe (see below).
   if (db) {
     db.close();
     db = null;
