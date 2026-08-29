@@ -6,6 +6,9 @@ import {
   parsePingArgs,
   PROBE_TIMEOUT_MS,
   summarize,
+  packSeries,
+  unpackSeries,
+  MAX_PUBLISHED_POINTS,
   MAX_TARGETS,
 } from "./logic";
 
@@ -112,5 +115,61 @@ describe("chartCeiling", () => {
     // A lost probe has no height; letting it near the scale would be
     // inventing a number.
     expect(chartCeiling([{ at: 0, rtt: 42 }, { at: 1, rtt: null }])).toBe(50);
+  });
+});
+
+describe("packSeries / unpackSeries", () => {
+  const run = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ at: i * 500.4, rtt: 20.6 + i }));
+
+  it("round-trips a short run unchanged apart from rounding", () => {
+    const packed = packSeries(run(3));
+    expect(packed).toEqual([
+      [0, 21],
+      [500, 22],
+      [1001, 23],
+    ]);
+    expect(unpackSeries(packed)).toEqual([
+      { at: 0, rtt: 21 },
+      { at: 500, rtt: 22 },
+      { at: 1001, rtt: 23 },
+    ]);
+  });
+
+  it("keeps loss as loss through the round trip", () => {
+    const packed = packSeries([{ at: 0, rtt: null }]);
+    expect(packed).toEqual([[0, null]]);
+    expect(unpackSeries(packed)).toEqual([{ at: 0, rtt: null }]);
+  });
+
+  it("thins a long run down to the cap", () => {
+    expect(packSeries(run(500)).length).toBeLessThanOrEqual(
+      MAX_PUBLISHED_POINTS
+    );
+  });
+
+  it("fits three peers of a full run inside the 4KB update cap", () => {
+    // The cap is the reason this is packed at all; a test that does not
+    // check it is not checking the thing that matters.
+    const three = {
+      a: packSeries(run(60)),
+      b: packSeries(run(60)),
+      c: packSeries(run(60)),
+    };
+    expect(JSON.stringify(three).length).toBeLessThan(4096);
+  });
+
+  it("drops garbage rather than trusting a peer's array", () => {
+    expect(
+      unpackSeries([[0, 10], "nope", [1], [2, "x"], [-1, 5], [3, 12]])
+    ).toEqual([
+      { at: 0, rtt: 10 },
+      { at: 3, rtt: 12 },
+    ]);
+  });
+
+  it("is empty for anything that is not an array", () => {
+    expect(unpackSeries(null)).toEqual([]);
+    expect(unpackSeries({ 0: [1, 2] })).toEqual([]);
   });
 });

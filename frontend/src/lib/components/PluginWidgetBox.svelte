@@ -151,7 +151,7 @@
     class="mx-2 mb-1 flex h-8 items-center gap-1.5 overflow-hidden rounded-md border border-primary/25 bg-card shadow-sm px-2"
   >
     <PluginIcon
-      icon={manifest?.icon ?? "🔌"}
+      icon={manifest?.icon ?? "lucide:unplug"}
       class="size-3 shrink-0 text-muted-foreground"
     />
     <div class="min-w-0 flex-1 overflow-hidden">

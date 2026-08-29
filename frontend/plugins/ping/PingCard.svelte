@@ -26,7 +26,9 @@
     chartCeiling,
     nextInterval,
     PROBE_TIMEOUT_MS,
+    packSeries,
     summarize,
+    unpackSeries,
     WINDOW_MS,
     type Sample,
     type Stats,
@@ -83,7 +85,22 @@
   /** Set when a newer /ping takes over. Unlike stopped, this still publishes. */
   let superseded = $state(false);
 
-  const ceiling = $derived(chartCeiling(Object.values(samples).flat()));
+  /**
+   * What the chart draws: our own samples while we are the one measuring,
+   * and the published series otherwise. A viewer has no samples of their
+   * own - the probes ran on somebody else's machine - so without the
+   * published series their chart is simply empty.
+   */
+  const plotted = $derived.by<Record<string, Sample[]>>(() => {
+    if (running || Object.keys(samples).length > 0) return samples;
+    const out: Record<string, Sample[]> = {};
+    for (const t of cardState.targets) {
+      out[t.did] = unpackSeries(cardState.series?.[t.did]);
+    }
+    return out;
+  });
+
+  const ceiling = $derived(chartCeiling(Object.values(plotted).flat()));
   const liveStats = $derived.by(() => {
     const out: Record<string, Stats> = {};
     for (const t of cardState.targets) out[t.did] = summarize(samples[t.did] ?? []);
@@ -151,14 +168,29 @@
           : "[ping] window closed, publishing summary"
       );
       const results: Record<string, Stats> = {};
+      const series: Record<string, ReturnType<typeof packSeries>> = {};
       for (const t of cardState.targets) {
-        results[t.did] = summarize(samples[t.did] ?? []);
+        const mine = samples[t.did] ?? [];
+        results[t.did] = summarize(mine);
+        series[t.did] = packSeries(mine);
       }
-      void host.sendUpdate(card.id, {
+      const update = {
         action: "result",
         results,
+        series,
         relayed: [...relayed],
-      });
+      };
+      // Updates are capped at 4KB. The packed series fits a full run from
+      // three peers with room to spare, but a cadence change could alter
+      // that, and losing the numbers to save the picture is the wrong trade.
+      const withSeries = JSON.stringify(update).length < 3800;
+      if (!withSeries) {
+        console.warn("[ping] series too large to publish, sending stats only");
+      }
+      void host.sendUpdate(
+        card.id,
+        withSeries ? update : { ...update, series: {} }
+      );
     });
 
   });
@@ -234,7 +266,7 @@
         stroke-width="0.4"
       />
       {#each cardState.targets as t, i (t.did)}
-        {@const pts = line(samples[t.did] ?? [])}
+        {@const pts = line(plotted[t.did] ?? [])}
         {#if pts}
           <polyline
             points={pts}

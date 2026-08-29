@@ -1,7 +1,13 @@
 import { definePlugin, type HostApi } from "$lib/plugins/api";
 import { manifest } from "./manifest";
 import PingCard from "./PingCard.svelte";
-import { MAX_TARGETS, parsePingArgs, type Stats } from "./logic";
+import {
+  MAX_TARGETS,
+  parsePingArgs,
+  unpackSeries,
+  type PackedSample,
+  type Stats,
+} from "./logic";
 
 export interface PingTarget {
   did: string;
@@ -14,6 +20,13 @@ export interface PingState {
   ownerDid: string;
   /** Filled in once the window closes, keyed by target DID. */
   results: Record<string, Stats>;
+  /**
+   * The measured points, so everybody else sees the shape and not just the
+   * numbers. Only the device that ran the probes has the samples; without
+   * these the card renders an empty chart for every other person in the
+   * room.
+   */
+  series: Record<string, PackedSample[]>;
   /** Peers that were reached through a relay for the whole run. */
   relayed: string[];
 }
@@ -36,6 +49,7 @@ export function initialState(cardData: unknown): PingState {
     // update - the same fail-closed shape a forged card should have.
     ownerDid: typeof data?.ownerDid === "string" ? data.ownerDid : "",
     results: {},
+    series: {},
     relayed: [],
   };
 }
@@ -60,9 +74,20 @@ export function reduce(
     const s = results[t.did];
     if (s && typeof s === "object") kept[t.did] = s;
   }
+  // Series come off the wire, so they are rebuilt through unpackSeries
+  // rather than trusted: a peer can put anything in that array.
+  const series: Record<string, PackedSample[]> = {};
+  const rawSeries = (data.series ?? {}) as Record<string, unknown>;
+  for (const t of state.targets) {
+    const clean = unpackSeries(rawSeries[t.did]);
+    if (clean.length) {
+      series[t.did] = clean.map((s) => [s.at, s.rtt] as PackedSample);
+    }
+  }
   return {
     ...state,
     results: kept,
+    series,
     relayed: Array.isArray(data.relayed)
       ? (data.relayed as string[]).filter((d) =>
           state.targets.some((t) => t.did === d)

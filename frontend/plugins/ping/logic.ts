@@ -130,3 +130,62 @@ export function chartCeiling(samples: Sample[]): number {
   const step = worst <= 100 ? 25 : worst <= 500 ? 50 : 250;
   return Math.ceil(worst / step) * step;
 }
+
+/**
+ * A sample as it travels: [milliseconds since the run began, round trip].
+ * null is a probe that never answered.
+ */
+export type PackedSample = [number, number | null];
+
+/**
+ * The most points worth publishing per peer.
+ *
+ * A run produces at most one sample every 500ms across a 30s window, so
+ * sixty is already the ceiling for a healthy link - this only bites if the
+ * cadence is ever lowered.
+ */
+export const MAX_PUBLISHED_POINTS = 60;
+
+/**
+ * Pack a run for publication.
+ *
+ * Everyone else in the room sees an empty chart otherwise: the samples live
+ * on the machine that measured them, and one summary line is a poor
+ * substitute for the shape. Pairs rather than objects, and whole
+ * milliseconds rather than float noise, because a plugin update is capped
+ * at 4 KB and `{"at":12345.6789,"rtt":42.1}` spends most of it on syntax.
+ */
+export function packSeries(
+  samples: Sample[],
+  maxPoints = MAX_PUBLISHED_POINTS
+): PackedSample[] {
+  const pack = (s: Sample): PackedSample => [
+    Math.round(s.at),
+    s.rtt === null ? null : Math.round(s.rtt),
+  ];
+  if (samples.length <= maxPoints) return samples.map(pack);
+  // Count the OUTPUT, not the input. Stepping through the input by a
+  // fractional stride overshoots by one on most lengths, and one point past
+  // a budget is still past it.
+  const out: PackedSample[] = [];
+  for (let k = 0; k < maxPoints; k++) {
+    out.push(pack(samples[Math.floor((k * samples.length) / maxPoints)]));
+  }
+  return out;
+}
+
+/** Back to what the chart draws. */
+export function unpackSeries(packed: unknown): Sample[] {
+  if (!Array.isArray(packed)) return [];
+  const out: Sample[] = [];
+  for (const p of packed) {
+    if (!Array.isArray(p) || p.length !== 2) continue;
+    const [at, rtt] = p;
+    if (typeof at !== "number" || !Number.isFinite(at) || at < 0) continue;
+    if (rtt !== null && (typeof rtt !== "number" || !Number.isFinite(rtt))) {
+      continue;
+    }
+    out.push({ at, rtt });
+  }
+  return out;
+}

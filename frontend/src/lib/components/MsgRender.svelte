@@ -3,6 +3,7 @@
   import {
     ChevronDown,
     Download,
+    Unplug,
     ExternalLink,
     Minimize2,
     FileText,
@@ -1003,12 +1004,14 @@
     {#if pluginCardDisabled}
       <!-- Not the error box: the user asked for this, so it is muted like the
            loading state rather than shouting in destructive red. -->
-      <div class="inline-block px-3 py-2 rounded-md bg-muted/50 text-muted-foreground text-sm">
-        🔌 {getManifest(pluginCardPluginId)?.name ?? pluginCardPluginId} is disabled
+      <div class="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-muted/50 text-muted-foreground text-sm">
+        <Unplug class="size-4 shrink-0" />
+        {getManifest(pluginCardPluginId)?.name ?? pluginCardPluginId} is disabled
       </div>
     {:else if pluginCardError}
-      <div class="inline-block px-3 py-2 rounded-md bg-destructive/10 text-destructive text-sm">
-        🔌 Plugin error: {pluginCardError}
+      <div class="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-destructive/10 text-destructive text-sm">
+        <Unplug class="size-4 shrink-0" />
+        Plugin error: {pluginCardError}
       </div>
     {:else if !pluginCardComponent}
       <div class="inline-block px-3 py-2 rounded-md bg-muted/50 text-muted-foreground text-sm animate-pulse">

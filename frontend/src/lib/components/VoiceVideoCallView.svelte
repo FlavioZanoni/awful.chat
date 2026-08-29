@@ -1044,7 +1044,7 @@ import {
       {/if}
       <div class="flex flex-col items-center gap-2">
         <PluginIcon
-          icon={getManifest(tile.pluginId ?? "")?.icon ?? "🔌"}
+          icon={getManifest(tile.pluginId ?? "")?.icon ?? "lucide:unplug"}
           class="size-8 text-primary"
         />
         <button

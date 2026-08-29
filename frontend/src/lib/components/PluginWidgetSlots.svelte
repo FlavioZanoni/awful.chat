@@ -165,7 +165,7 @@
               onclick={() => pick(c)}
               class="flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-left hover:bg-muted"
             >
-              <PluginIcon icon={m?.icon ?? "🔌"} class="size-3 shrink-0" />
+              <PluginIcon icon={m?.icon ?? "lucide:unplug"} class="size-3 shrink-0" />
               <span class="truncate font-mono text-[11px]"
                 >{m?.name ?? c.pluginId}</span
               >
