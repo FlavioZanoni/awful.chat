@@ -44,8 +44,21 @@
    * mirror and the textarea by different amounts, which drifts the mention
    * chips off their glyphs.
    */
+  /**
+   * A FIXED text size, deliberately not the chat font size.
+   *
+   * The composer used to scale with the message font, which grew the box until
+   * it scrolled - the complaint that moved --chat-font-size onto the message
+   * list in the first place. It then kept referencing that variable from a
+   * place the variable no longer reaches, so `var()` resolved to nothing, the
+   * font-size declaration was dropped, and the box inherited a size it was not
+   * laid out for and scrolled again for a different reason.
+   *
+   * The chosen font FAMILY still applies: that variable stays on the chat root
+   * on purpose, so the composer matches what you are reading.
+   */
   const BOX =
-    "border py-2 pl-3 pr-28 font-(family-name:--chat-font-family) text-(length:--chat-font-size) leading-normal";
+    "border py-2 pl-3 pr-28 font-(family-name:--chat-font-family) text-sm leading-normal";
 
   let scrollTop = $state(0);
   /**
