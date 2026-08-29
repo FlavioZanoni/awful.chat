@@ -1,3 +1,14 @@
+<script module lang="ts">
+  /**
+   * Which run is the live one, across every ping card on the page.
+   *
+   * Module scope on purpose: a card cannot otherwise reach the run started
+   * by a different card, and "a new /ping stops the old one" is exactly
+   * that reach.
+   */
+  let activeRun = 0;
+</script>
+
 <script lang="ts">
   /**
    * A live round-trip graph, drawn while it measures.
@@ -29,10 +40,24 @@
     card,
     cardState,
     host,
-  }: { card: { id: string }; cardState: PingState; host: HostApi } = $props();
+  }: {
+    card: { id: string; timestamp: number };
+    cardState: PingState;
+    host: HostApi;
+  } = $props();
 
   /** One line each, in the order they were named. */
   const COLORS = ["#22c55e", "#38bdf8", "#f472b6"];
+
+  /**
+   * How recently a card must have been posted for it to start measuring.
+   *
+   * A refresh re-mounts every ping card in the room's history, and each one
+   * would happily start its own thirty-second run - so reloading a busy
+   * room meant probing every peer that had ever been pinged, all at once.
+   * Only a card that has just been posted is a live request.
+   */
+  const FRESH_CARD_MS = 15_000;
 
   const isOwner = $derived(cardState.ownerDid === host.selfDid());
   const done = $derived(Object.keys(cardState.results).length > 0);
@@ -55,6 +80,8 @@
   let started = false;
   /** Set only when the component goes away, never by a re-render. */
   let stopped = false;
+  /** Set when a newer /ping takes over. Unlike stopped, this still publishes. */
+  let superseded = $state(false);
 
   const ceiling = $derived(chartCeiling(Object.values(samples).flat()));
   const liveStats = $derived.by(() => {
@@ -76,16 +103,29 @@
     // The owner measures once. Everyone else, and every later render of a
     // finished card, just reads.
     if (!isOwner || done || started) return;
+    // A refresh re-mounts the whole room's history, and an old card is a
+    // record of a measurement, not a request for a new one.
+    if (Date.now() - card.timestamp > FRESH_CARD_MS) return;
     started = true;
+    // Newest run wins. Three peers at 500ms is already a steady stream of
+    // probes; leaving the previous run going means measuring a link while
+    // adding traffic to it, which is the one thing the cadence is chosen to
+    // avoid.
+    const myRun = ++activeRun;
+    const supersededNow = () => myRun !== activeRun;
     running = true;
     const startedAt = performance.now();
     const relayed = new Set<string>();
 
     const probe = async (did: string) => {
-      while (!stopped && performance.now() - startedAt < WINDOW_MS) {
+      while (
+        !stopped &&
+        !supersededNow() &&
+        performance.now() - startedAt < WINDOW_MS
+      ) {
         if (host.isRelayed(did)) relayed.add(did);
         const rtt = await host.ping(did, { timeoutMs: PROBE_TIMEOUT_MS });
-        if (stopped) return;
+        if (stopped || supersededNow()) return;
         const at = performance.now() - startedAt;
         samples = { ...samples, [did]: [...(samples[did] ?? []), { at, rtt }] };
         elapsed = at;
@@ -99,9 +139,17 @@
       `[ping] probing ${cardState.targets.length} peer(s) for ${WINDOW_MS / 1000}s`
     );
     void Promise.all(cardState.targets.map((t) => probe(t.did))).then(() => {
+      // stopped means the card is gone and there is nobody to tell. Being
+      // superseded still publishes: the samples taken are real, and a card
+      // frozen mid-graph with no numbers looks like it broke.
       if (stopped) return;
       running = false;
-      console.log("[ping] window closed, publishing summary");
+      superseded = supersededNow();
+      console.log(
+        superseded
+          ? "[ping] superseded by a newer run, publishing what was measured"
+          : "[ping] window closed, publishing summary"
+      );
       const results: Record<string, Stats> = {};
       for (const t of cardState.targets) {
         results[t.did] = summarize(samples[t.did] ?? []);
@@ -121,12 +169,20 @@
     stopped = true;
   });
 
-  /** Samples to an SVG polyline, dropping the gaps that loss leaves. */
+  /**
+   * Samples to an SVG polyline, dropping the gaps that loss leaves.
+   *
+   * x is measured from the FIRST sample, not from the run's start. The
+   * first probe only resolves once it has been answered, so plotting
+   * against the run clock left the line starting somewhere inside the chart
+   * with dead space to its left.
+   */
   function line(list: Sample[]): string {
-    return list
-      .filter((s) => s.rtt !== null)
+    const answered = list.filter((s) => s.rtt !== null);
+    const origin = answered[0]?.at ?? 0;
+    return answered
       .map((s) => {
-        const x = (Math.min(s.at, WINDOW_MS) / WINDOW_MS) * 100;
+        const x = (Math.min(s.at - origin, WINDOW_MS) / WINDOW_MS) * 100;
         const y = 100 - Math.min(100, ((s.rtt as number) / ceiling) * 100);
         return `${x.toFixed(2)},${y.toFixed(2)}`;
       })
@@ -146,8 +202,13 @@
         measuring {Math.round(elapsed / 1000)}s / {WINDOW_MS / 1000}s
       {:else if done}
         {WINDOW_MS / 1000}s window
-      {:else if isOwner}
+      {:else if superseded}
+        stopped by a newer ping
+      {:else if isOwner && Date.now() - card.timestamp <= FRESH_CARD_MS}
         starting...
+      {:else if isOwner}
+        <!-- An old card after a reload: a record, not a live request. -->
+        not measured
       {:else}
         waiting for the result
       {/if}
