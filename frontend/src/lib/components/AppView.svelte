@@ -1083,11 +1083,17 @@
 />
 
 <QueryClientProvider client={queryClient}>
-  {#if identityStore.loading && !identityStore.keypair}
-    <div class="min-h-screen bg-background flex items-center justify-center">
-      <div class="w-2 h-2 rounded-full bg-muted-foreground animate-pulse"></div>
-    </div>
-  {:else if joiningRoom}
+  <!-- No "loading && !keypair" spinner here, and it must not come back.
+       identityStore.loading goes true for EVERY identity operation, not just
+       the first load, and keypair stays null right through signup - the
+       wizard holds its new keypair locally until the last step. So enrolling
+       biometrics mid-signup swapped IdentitySetup out for a spinner and back
+       in again, and a remounted IdentitySetup resets to its "entry" step:
+       cancelling the authenticator prompt dropped the user back on "create a
+       new identity" with the password, mnemonic and keypair they had just
+       generated all gone. The genuine first-load spinner is App.svelte's,
+       gated on identityStore.initializing, which is what that flag is for. -->
+  {#if joiningRoom}
     <div class="min-h-screen bg-background flex items-center justify-center">
       <div class="w-2 h-2 rounded-full bg-muted-foreground animate-pulse"></div>
     </div>
