@@ -106,6 +106,7 @@
   }
 
   async function commitGradients() {
+    gradientTouched = true;
     await saveGradientColors(gradient2Value, gradient3Value ?? undefined);
   }
 
@@ -116,6 +117,27 @@
   let gradient3Value = $state<string | null>(null);
   let gradient3El = $state<HTMLInputElement | null>(null);
   let addColorEl = $state<HTMLButtonElement | null>(null);
+  let nameEditorEl = $state<HTMLElement | null>(null);
+  let tagEditorEl = $state<HTMLElement | null>(null);
+  let colorTouched = $state(false);
+  let gradientTouched = $state(false);
+
+  // Native colour pickers take focus outside the page. That produces a
+  // focusout with no destination, but no in-page pointer event. Only a real
+  // pointerdown outside this editor is a click-away.
+  $effect(() => {
+    if (editing !== "name" && editing !== "tag") return;
+    const onPointerDown = (e: PointerEvent) => {
+      const editor = editing === "name" ? nameEditorEl : tagEditorEl;
+      if (!editor) return;
+      const target = e.target;
+      if (!(target instanceof Node) || editor.contains(target)) return;
+      if (editing === "name") void commitName();
+      else void commitTag();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  });
 
   const profileInitial = $derived(
     (profileStore.nickname || nameValue || "?").charAt(0).toUpperCase()
@@ -165,6 +187,20 @@
   async function commitName() {
     const trimmed = nameValue.trim();
     if (trimmed && trimmed !== profileStore.nickname) await saveName(trimmed);
+    if (colorTouched) {
+      const color = colorValue || undefined;
+      if (color !== (profileStore.color ?? undefined)) await saveColor(color);
+    }
+    if (gradientTouched) {
+      const gradient2 = gradient2Value || undefined;
+      const gradient3 = gradient3Value || undefined;
+      if (
+        gradient2 !== (profileStore.gradient2 ?? undefined) ||
+        gradient3 !== (profileStore.gradient3 ?? undefined)
+      ) {
+        await saveGradientColors(gradient2, gradient3);
+      }
+    }
     editing = null;
   }
 
@@ -293,23 +329,12 @@
              keeps the layout while giving focusout one shared boundary. -->
         <div
           class="contents"
+          bind:this={nameEditorEl}
           onfocusout={(e) => {
-            // A focused control Svelte just swapped out of the DOM (the
-            // + color button replacing itself with the input) fires
-            // focusout with relatedTarget null - indistinguishable from a
-            // click-away except the target is no longer connected. Only a
-            // still-connected target means focus really left the editor.
-            //
-            // The buttons inside this editor also cancel mousedown so they
-            // never take focus at all (see keepFocus). Relying on
-            // relatedTarget alone was not enough: a browser that does not
-            // focus a button on mousedown reports null, which is
-            // indistinguishable from clicking the page background, so
-            // pressing "+ color" committed and unmounted the editor between
-            // mousedown and mouseup and the click never landed.
             if (!(e.target as HTMLElement).isConnected) return;
             const editor = e.currentTarget as HTMLElement;
-            if (!editor.contains(e.relatedTarget as Node)) commitName();
+            const next = e.relatedTarget as Node | null;
+            if (next && !editor.contains(next)) void commitName();
           }}
         >
         <div class="flex flex-wrap items-center gap-2">
@@ -317,7 +342,7 @@
             use:focusOnMount
             bind:value={nameValue}
             onkeydown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Enter") void commitName();
               if (e.key === "Escape") {
                 nameValue = profileStore.nickname;
                 editing = null;
@@ -335,7 +360,13 @@
           <input
             type="color"
             bind:value={colorValue}
-            onchange={() => saveColor(colorValue).catch(() => {})}
+            oninput={() => {
+              colorTouched = true;
+            }}
+            onchange={() => {
+              colorTouched = true;
+              saveColor(colorValue).catch(() => {});
+            }}
             aria-label="Nickname color"
             class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
           />
@@ -468,22 +499,28 @@
         </div>
         </div>
       {:else}
-        <div class="flex flex-wrap items-center gap-2">
+        <div class="flex min-w-0 items-center gap-2">
           <button
             type="button"
-            onclick={() => (editing = "name")}
+            onclick={() => {
+              colorTouched = false;
+              gradientTouched = false;
+              editing = "name";
+            }}
             aria-label="Edit name, color and effect"
-            class="group flex cursor-pointer items-center gap-1.5"
+            class="group flex min-w-0 cursor-pointer items-center gap-1.5 {profileStore.tagText
+              ? 'max-w-[calc(100%-3.5rem)]'
+              : 'max-w-full'}"
           >
             <span
-              class="font-mono text-base font-semibold {effectStyle.class}"
+              class="min-w-0 truncate text-left font-mono text-base font-semibold {effectStyle.class}"
               style={effectStyle.style ||
                 (profileStore.color ? `color: ${profileStore.color}` : "")}
             >
               {profileStore.nickname || "Anonymous"}
             </span>
             <Pencil
-              class="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+              class="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
             />
           </button>
 
@@ -493,7 +530,7 @@
                 type="button"
                 onclick={() => (editing = "tag")}
                 aria-label="Edit tag"
-                class="cursor-pointer rounded px-2 py-0.5 font-mono text-xs font-semibold uppercase hover:opacity-80"
+                class="shrink-0 cursor-pointer rounded px-2 py-0.5 font-mono text-xs font-semibold uppercase hover:opacity-80"
                 style={`background-color: ${profileStore.tagChipColor ?? "#e5e7eb"}; color: ${profileStore.tagTextColor ?? "#000000"}`}
               >
                 {profileStore.tagText}
@@ -517,9 +554,12 @@
              check-button-only silently discarded a typed tag on blur. -->
         <div
           class="flex flex-wrap items-center gap-2"
+          bind:this={tagEditorEl}
           onfocusout={(e) => {
+            if (!(e.target as HTMLElement).isConnected) return;
             const row = e.currentTarget as HTMLElement;
-            if (!row.contains(e.relatedTarget as Node)) commitTag();
+            const next = e.relatedTarget as Node | null;
+            if (next && !row.contains(next)) void commitTag();
           }}
         >
           <input
@@ -539,6 +579,8 @@
           <input
             type="color"
             bind:value={tagTextColor}
+            onchange={() =>
+              saveTagColors(tagTextColor || undefined, tagChipColor || undefined).catch(() => {})}
             aria-label="Tag text color"
             title="Text"
             class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
@@ -546,6 +588,8 @@
           <input
             type="color"
             bind:value={tagChipColor}
+            onchange={() =>
+              saveTagColors(tagTextColor || undefined, tagChipColor || undefined).catch(() => {})}
             aria-label="Tag chip color"
             title="Chip"
             class="size-7 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"

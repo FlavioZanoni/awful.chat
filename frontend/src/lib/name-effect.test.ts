@@ -58,12 +58,9 @@ describe("nameEffectStyle", () => {
 
       // Must ALSO have text-shadow for glow
       expect(result.style).toContain("text-shadow:");
-      expect(result.style).toContain("0 0 8px");
+      expect(result.style).toContain("0 0 3px");
       expect(result.style).toContain("#3b82f6");
-
-      // Must have both animations
-      expect(result.style).toContain("animation:");
-      expect(result.style).toContain("glow");
+      expect(result.style).not.toContain("animation:");
 
       // Must have glow class
       expect(result.class).toContain("name-effect-glow");
@@ -90,14 +87,13 @@ describe("nameEffectStyle", () => {
       // Must have glow text-shadow
       expect(result.style).toContain("text-shadow:");
 
-      // Must have both animations in one property (comma-separated)
+      // Shimmer remains animated; glow stays static and tight.
       expect(result.style).toContain("animation:");
       const animMatch = result.style.match(/animation:\s*([^;]+)/);
       expect(animMatch).toBeTruthy();
       const animations = animMatch![1];
       expect(animations).toContain("shimmer");
-      expect(animations).toContain("glow");
-      // Should be comma-separated, not two separate animation properties
+      expect(animations).not.toContain("glow");
       expect((result.style.match(/animation:/g) || []).length).toBe(1);
     });
   });
@@ -133,16 +129,49 @@ describe("nameEffectStyle", () => {
 
       // Should have text-shadow
       expect(result.style).toContain("text-shadow:");
-      expect(result.style).toContain("0 0 8px");
+      expect(result.style).toContain("0 0 3px");
 
-      // Should have glow animation
-      expect(result.style).toContain("animation:");
-      expect(result.style).toContain("glow");
+      // Glow stays a tight static halo so it does not bloom into a box around
+      // short names while the text is animated by another fill effect.
+      expect(result.style).not.toContain("animation:");
 
       // Should NOT have background-clip (no fill)
       expect(result.style).not.toContain("background-clip:");
       expect(result.style).not.toContain("-webkit-background-clip:");
     });
+  });
+
+  describe("glow preserves the selected fill", () => {
+    it.each([
+      [undefined, false, "#d946ef", "solid"],
+      ["gradient", false, "#d946ef", "gradient"],
+      ["gradient", true, "#d946ef", "shimmer"],
+      ["rainbow", false, "#d946ef", "rainbow"],
+    ] as const)(
+      "keeps the %s fill and uses the saved colour for its glow",
+      (effect, shimmer, color, _label) => {
+        const result = nameEffectStyle(
+          effect,
+          color,
+          "#22d3ee",
+          undefined,
+          shimmer,
+          true
+        );
+
+        expect(result.class).toContain("name-effect-glow");
+        expect(result.style).toContain(`--name-glow-color: ${color}`);
+
+        if (effect === undefined) {
+          expect(result.style).toMatch(
+            new RegExp(`(?:^|; )color: ${color}(?:;|$)`)
+          );
+          expect(result.style).not.toContain("background-clip: text");
+        } else {
+          expect(result.style).toContain("background-clip: text");
+        }
+      }
+    );
   });
 
   describe("no effects", () => {
