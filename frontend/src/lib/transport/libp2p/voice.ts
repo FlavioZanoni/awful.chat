@@ -211,12 +211,20 @@ export class LibP2PVoice implements VoiceTransport {
       await this.audioCtx.resume().catch(() => {});
     }
 
-    try {
-      await this.startMic(this.activeInputDevice ?? undefined);
-    } catch {
-      // listen-only mode
-    }
-
+    // The handler goes up BEFORE the microphone, not after.
+    //
+    // startMic awaits getUserMedia, which can sit for as long as it takes the
+    // user to answer a permission prompt. Registering the protocol after it
+    // left a window where we were already in the call roster - so peers dialled
+    // us - but /voice/1.0.0 was not yet handled, and libp2p failed the dial
+    // with "Protocol selection failed - could not negotiate /voice/1.0.0". It
+    // was intermittent, and worst for whoever had the slowest mic start.
+    //
+    // Safe in this order because the handler admits nobody until the roster
+    // has been set (admitsInboundStream is default-deny), and because a peer
+    // connection built before the mic exists still gets it: startMic walks
+    // remotePeers and addTrack/replaceTracks the new track, and
+    // onnegotiationneeded renegotiates it across.
     if (this.handlerNode !== this.node) {
       // force: registering the same protocol twice throws "Handler already
       // registered", which used to abort the whole join. Replacing is always
@@ -247,6 +255,12 @@ export class LibP2PVoice implements VoiceTransport {
         { force: true }
       );
       this.handlerNode = this.node;
+    }
+
+    try {
+      await this.startMic(this.activeInputDevice ?? undefined);
+    } catch {
+      // listen-only mode
     }
 
     // Both edges just re-run the reconcile: a peer appearing or vanishing is
