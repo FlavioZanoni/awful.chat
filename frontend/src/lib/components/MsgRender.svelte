@@ -832,7 +832,10 @@
               </p>
             </div>
 
-            {#if !isOwn && (!transfer || transfer.status === "pending" || transfer.status === "failed")}
+            <!-- Own messages included: a file above the persistence cap is
+                 gone from this device after a reload, and the only way back
+                 is pulling it from a peer who still holds it. -->
+            {#if !transfer || transfer.status === "pending" || transfer.status === "failed"}
               <Tip text="Download">
                 {#snippet children(props)}
               <button
@@ -882,7 +885,7 @@
                   style={box}
                   aria-hidden="true"
                 ></div>
-              {:else if box && !isOwn && (!transfer || transfer.status === "pending" || transfer.status === "failed")}
+              {:else if box && (!transfer || transfer.status === "pending" || transfer.status === "failed")}
                 <!-- Auto-download off (or failed): the picture's space is
                      still held open, with the fetch one click away ON the
                      picture instead of only up in the chip. -->
@@ -959,7 +962,7 @@
                   style={box}
                   aria-hidden="true"
                 ></div>
-              {:else if box && !isOwn && (!transfer || transfer.status === "pending" || transfer.status === "failed")}
+              {:else if box && (!transfer || transfer.status === "pending" || transfer.status === "failed")}
                 <!-- Same held-open frame and on-media Download as an image. -->
                 <div class="relative mt-2 rounded-md bg-muted/40" style={box}>
                   <button
