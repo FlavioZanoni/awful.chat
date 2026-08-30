@@ -653,7 +653,14 @@ export class MediasoupVideo implements VideoTransport {
     this.active.clear();
     this.pendingTransmissions.clear();
     this.pendingScreenProducerIds.clear();
-    this.watchingTransmissionPeers.clear();
+    // watchingTransmissionPeers is deliberately NOT cleared: it is the user's
+    // intent, not session state. After the rejoin, the join replay re-announces
+    // every live producer, and the ms:new-producer handler auto-consumes screen
+    // producers from peers in this set - so a viewer who was watching a
+    // transmission gets it back without re-clicking. Clearing it here is what
+    // made a mid-movie socket drop end the movie for that viewer: the rejoin
+    // healed the session but demoted the stream to a "click to watch" tile.
+    // leave() still clears it - leaving a room IS a change of intent.
     this.queuedProducers = [];
     this.sendTransport?.close();
     this.recvTransport?.close();
@@ -1044,8 +1051,13 @@ export class MediasoupVideo implements VideoTransport {
             this.watchingTransmissionPeers.has(msg.peerId) ||
             this.consumers.get(msg.peerId)?.some((c) => c.source === "screen")
           ) {
-            this.consumeProducer(msg.peerId, msg.producerId, "screen").catch(
-              () => {}
+            // Retry, not fire-and-forget: after a rejoin this branch is the
+            // only path that restores a watched transmission, and a single
+            // lost consume here was permanent (same shape as finding 8).
+            void this.consumeProducerWithRetry(
+              msg.peerId,
+              msg.producerId,
+              "screen"
             );
             break;
           }

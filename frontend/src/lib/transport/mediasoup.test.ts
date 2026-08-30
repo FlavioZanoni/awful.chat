@@ -216,3 +216,52 @@ describe("getStats consumer stall detector (finding 5)", () => {
     });
   });
 });
+
+describe("a rejoin does not demote a watched transmission (movie-night drop)", () => {
+  it("preserves watchingTransmissionPeers through attemptRejoin's state wipe", async () => {
+    const video = new MediasoupVideo();
+    const internals = internalsOf(video);
+    internals.currentRoomCode = "room";
+    internals.currentPeerId = "me";
+    (internals.watchingTransmissionPeers as Set<string>).add("sharer");
+    (internals.pendingTransmissions as Map<string, string>).set("other", "p9");
+    internals.sessionIsLive = () => false;
+    const join = vi.fn(async () => {});
+    internals.join = join;
+
+    await (internals.attemptRejoin as (g: number) => Promise<void>)(
+      internals.joinGeneration as number
+    );
+
+    expect(join).toHaveBeenCalledWith("room", "me");
+    // Session state is rebuilt from scratch…
+    expect((internals.pendingTransmissions as Map<string, string>).size).toBe(0);
+    // …but the user's watch INTENT survives, so the join replay's
+    // ms:new-producer auto-consumes instead of showing "click to watch".
+    expect(
+      (internals.watchingTransmissionPeers as Set<string>).has("sharer")
+    ).toBe(true);
+  });
+
+  it("auto-consumes (with retry) a replayed screen producer from a watched peer", () => {
+    const video = new MediasoupVideo();
+    const internals = internalsOf(video);
+    internals.device = {}; // joined
+    (internals.watchingTransmissionPeers as Set<string>).add("sharer");
+    const retry = vi.fn(async () => {});
+    internals.consumeProducerWithRetry = retry;
+
+    (internals.handleSignal as (msg: unknown) => void)({
+      type: "ms:new-producer",
+      peerId: "sharer",
+      producerId: "prod-1",
+      source: "screen",
+    });
+
+    expect(retry).toHaveBeenCalledWith("sharer", "prod-1", "screen");
+    // No pending tile for a transmission the viewer already chose to watch.
+    expect(
+      (internals.pendingTransmissions as Map<string, string>).has("sharer")
+    ).toBe(false);
+  });
+});
