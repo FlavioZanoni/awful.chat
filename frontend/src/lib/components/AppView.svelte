@@ -45,6 +45,8 @@
   import ReloadPrompt from "./ReloadPrompt.svelte";
   import InstallPrompt from "./InstallPrompt.svelte";
   import CommandPalette from "./palette/CommandPalette.svelte";
+  import SearchOverlay from "./SearchOverlay.svelte";
+  import { openSearch } from "$lib/search/ui.svelte";
   import type { PaletteHost } from "$lib/palette/host";
   import { Dialog } from "bits-ui";
   import { Notebook, Star, Trash2, Users, X } from "@lucide/svelte";
@@ -1076,7 +1078,22 @@
 <svelte:window
   onpopstate={handlePopState}
   onkeydown={(e) => {
-    if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+
+    // Cmd/Ctrl+F searches the open room (all rooms with Shift, or when no
+    // room is open). It shadows the browser's find on purpose: the page
+    // only ever holds one page of history, so native find searches almost
+    // nothing.
+    if (e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      if (!identityStore.isUnlocked) return;
+      openSearch(
+        e.shiftKey || !transportState.roomCode ? null : transportState.roomCode
+      );
+      return;
+    }
+
+    if (e.shiftKey) return;
     const key = e.key.toLowerCase();
 
     // Cmd/Ctrl+K opens the command palette. preventDefault is required even
@@ -1662,5 +1679,6 @@
        exists in the unlocked tree. -->
   {#if identityStore.isUnlocked}
     <CommandPalette bind:open={paletteOpen} host={paletteHost} />
+    <SearchOverlay openRoom={(code) => handleSelectRoom(code)} />
   {/if}
 </QueryClientProvider>

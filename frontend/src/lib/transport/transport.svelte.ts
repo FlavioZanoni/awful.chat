@@ -112,6 +112,7 @@ import {
   touchCardStates,
 } from "../plugins/state.svelte";
 import { clearLocalCards } from "../plugins/local-cards.svelte";
+import { clearSearchCorpus } from "../search/corpus.svelte";
 import { announceMessage } from "../announce";
 import { mentionsMe } from "../mentions";
 import { appendToDmPanel, dmPanelIsShowing } from "../dm-panel.svelte";
@@ -3215,6 +3216,9 @@ function _disconnectWithoutBroadcasting(): void {
   _transport.disconnect();
   _peerIdToDid.clear();
   clearCardStates();
+  // The search corpus is decrypted message text; it dies with the session
+  // for the same reason card states do.
+  clearSearchCorpus();
   // Session-only plugin surfaces die with the session - a signout to another
   // identity must not inherit the previous identity's private cards.
   clearLocalCards();

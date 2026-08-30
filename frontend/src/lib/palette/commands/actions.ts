@@ -13,8 +13,10 @@ import {
   Phone,
   PhoneOff,
   RefreshCw,
+  Search,
   Trash2,
 } from "@lucide/svelte";
+import { openSearch } from "$lib/search/ui.svelte";
 import { transportState, connect } from "$lib/transport/transport.svelte";
 import {
   joinCall,
@@ -41,6 +43,19 @@ import type { CmdSource } from "../host";
  */
 export const actionCommands: CmdSource = () => {
   const cmds: Cmd[] = [];
+
+  cmds.push({
+    id: "action.searchMessages",
+    title: "Search messages",
+    keywords: ["find", "history", "grep"],
+    group: "Actions",
+    icon: Search,
+    shortcut: ["Ctrl", "F"],
+    action: {
+      kind: "act",
+      perform: () => openSearch(null),
+    },
+  });
 
   cmds.push({
     id: "actions.call.toggle",

@@ -529,6 +529,19 @@ export const STORE_SPECS = {
   // protects. It is sealed now; maxLamport stays clear so the never-regress
   // comparison in setWatermark still works inside its write transaction,
   // where nothing can be decrypted.
+  // One row per room: the message-search index. The entries themselves are
+  // serialized plaintext message text, so they ride in `bytes` and are
+  // sealed like attachment data - a readable search index would undo the
+  // sealed messages store one field over. lastLamport stays clear for the
+  // same reason watermarks' maxLamport does: the staleness check compares
+  // it against the newest message row's clear lamport, no decrypt needed.
+  searchIndex: {
+    storeName: "searchIndex",
+    key: "roomCode",
+    clear: ["lastLamport"],
+    blind: ["roomCode"],
+    bytes: ["data"],
+  },
   watermarks: {
     storeName: "watermarks",
     key: "id",

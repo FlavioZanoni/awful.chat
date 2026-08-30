@@ -195,7 +195,21 @@ type AppDB = IDBPDatabase<{
     key: Blinded;
     value: PhonebookEntry;
   };
+  searchIndex: {
+    key: Blinded;
+    value: SearchIndexRecord;
+  };
 }>;
+
+/** Sealed per-room search index: entries serialized as encrypted bytes. */
+export interface SearchIndexRecord {
+  roomCode: string;
+  /** Highest lamport of any message folded into `data`. Clear on disk so
+   *  staleness is checkable without a decrypt. */
+  lastLamport: number;
+  /** JSON bytes of SearchEntry[]; sealed via the `bytes` spec. */
+  data: ArrayBuffer;
+}
 
 let db: AppDB | null = null;
 /**
@@ -217,7 +231,7 @@ export async function getDB(): Promise<AppDB> {
 }
 
 async function openDatabase(): Promise<AppDB> {
-  db = (await openDB("awful-chat", 4, {
+  db = (await openDB("awful-chat", 5, {
     async upgrade(database, oldVersion, _newVersion, transaction) {
       if (oldVersion < 1) {
         // messages
@@ -294,6 +308,11 @@ async function openDatabase(): Promise<AppDB> {
 
       if (oldVersion < 4) {
         database.createObjectStore("phonebook", { keyPath: "peerId" });
+      }
+
+      if (oldVersion < 5) {
+        // Message-search index, one sealed row per room (see STORE_SPECS).
+        database.createObjectStore("searchIndex", { keyPath: "roomCode" });
       }
     },
     blocking() {
@@ -809,9 +828,30 @@ export async function messageClearFieldsByIds(
   return out;
 }
 
+/** Fired after a message row lands in storage. The search corpus and its
+ *  sealed index keep themselves current through this instead of hooking
+ *  every send/receive/sync call site. */
+const _messageStoredListeners = new Set<(msg: Message) => void>();
+
+export function onMessageStored(cb: (msg: Message) => void): () => void {
+  _messageStoredListeners.add(cb);
+  return () => _messageStoredListeners.delete(cb);
+}
+
+function _notifyMessageStored(msg: Message): void {
+  for (const cb of _messageStoredListeners) {
+    try {
+      cb(msg);
+    } catch (err) {
+      console.warn("[storage] message-stored listener failed:", err);
+    }
+  }
+}
+
 export async function putMessage(message: Message): Promise<void> {
   const database = await getDB();
   await database.put("messages", await _seal("messages", message));
+  _notifyMessageStored(message);
 }
 
 export async function bulkPutMessages(messages: Message[]): Promise<void> {
@@ -819,11 +859,75 @@ export async function bulkPutMessages(messages: Message[]): Promise<void> {
   const sealed = await Promise.all(messages.map((m) => _seal("messages", m)));
   const tx = database.transaction("messages", "readwrite");
   await Promise.all([...sealed.map((m) => tx.store.put(m)), tx.done]);
+  for (const m of messages) _notifyMessageStored(m);
+}
+
+// ── message-search index rows ────────────────────────────────────────────────
+
+export async function getSearchIndex(
+  roomCode: string
+): Promise<SearchIndexRecord | undefined> {
+  const database = await getDB();
+  const row = await database.get("searchIndex", await blindValue(roomCode));
+  if (!row) return undefined;
+  try {
+    return await _open<SearchIndexRecord>("searchIndex", row);
+  } catch {
+    // Sealed under a previous identity's key (or corrupt): treated as
+    // missing, the sweep rebuilds it under the current key.
+    return undefined;
+  }
+}
+
+export async function putSearchIndex(record: SearchIndexRecord): Promise<void> {
+  const database = await getDB();
+  await database.put("searchIndex", await _seal("searchIndex", record));
+}
+
+export async function deleteSearchIndex(roomCode: string): Promise<void> {
+  const database = await getDB();
+  await database.delete("searchIndex", await blindValue(roomCode));
+}
+
+/**
+ * Newest lamport among a room's rows of the given types, read from CLEAR
+ * fields only - this is the search index staleness check, and it must not
+ * cost a decrypt.
+ */
+export async function getNewestLamportOfTypes(
+  roomCode: string,
+  types: readonly ChatMessageType[]
+): Promise<number> {
+  const database = await getDB();
+  const wanted = new Set<ChatMessageType>(types);
+  const blindRoomCode = await blindValue(roomCode);
+  const ranges: Blinded[] = [blindRoomCode];
+  if (!isMigrationComplete()) ranges.push(roomCode as Blinded);
+  let newest = 0;
+  for (const code of ranges) {
+    let cursor = await database
+      .transaction("messages")
+      .store.index("byRoomLamport")
+      .openCursor(
+        IDBKeyRange.bound([code, 0], [code, Number.MAX_SAFE_INTEGER]),
+        "prev"
+      );
+    while (cursor) {
+      if (wanted.has(cursor.value.type)) {
+        newest = Math.max(newest, cursor.value.lamport);
+        break;
+      }
+      cursor = await cursor.continue();
+    }
+  }
+  return newest;
 }
 
 export async function deleteMessagesForRoom(roomCode: string): Promise<void> {
   const database = await getDB();
   const blindRoomCode = await blindValue(roomCode);
+  // The room's search index goes with its messages.
+  await database.delete("searchIndex", blindRoomCode);
 
   // Query both blinded and plaintext ranges to handle messages mid-migration.
   // A legacy row in plaintext would be invisible to getAll(blindRoomCode).
