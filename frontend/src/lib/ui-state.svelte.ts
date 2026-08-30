@@ -17,6 +17,12 @@ export const uiState = $state({
    * Cmd/Ctrl+K, so anything outside that tree travels through here too.
    */
   paletteOpenRequested: false,
+  /**
+   * Somebody asked to navigate to one message - a pinned widget jumping to
+   * its card. Two owners consume it in sequence: AppView opens the room,
+   * ChatView scrolls to the row once the history is on screen and clears it.
+   */
+  jumpToMessage: null as { roomCode: string; messageId: string } | null,
 });
 
 export function openSettings(tab: string | null = null): void {
@@ -34,4 +40,11 @@ export function requestReturnToCall(): void {
  */
 export function openPalette(): void {
   uiState.paletteOpenRequested = true;
+}
+
+export function requestJumpToMessage(
+  roomCode: string,
+  messageId: string
+): void {
+  uiState.jumpToMessage = { roomCode, messageId };
 }

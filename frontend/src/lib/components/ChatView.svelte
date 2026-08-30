@@ -93,7 +93,11 @@
   import { makeHostApi } from "$lib/plugins/host";
   import PluginIcon from "$lib/plugins/PluginIcon.svelte";
   import UserProfileCard from "./UserProfileCard.svelte";
-  import { openSettings, requestReturnToCall } from "$lib/ui-state.svelte";
+  import {
+    openSettings,
+    requestReturnToCall,
+    uiState,
+  } from "$lib/ui-state.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { getRegistry, getPlugin } from "$lib/plugins/registry";
   import { isPluginEnabled } from "$lib/plugins/prefs.svelte";
@@ -763,6 +767,15 @@
       autoResize();
     });
   }
+
+  // Second half of a cross-component jump (see ui-state): AppView got this
+  // room on screen; scroll to the row once the history has rendered.
+  $effect(() => {
+    const jump = uiState.jumpToMessage;
+    if (!jump || jump.roomCode !== roomCode || !initialScrollDone) return;
+    uiState.jumpToMessage = null;
+    requestAnimationFrame(() => jumpToMessage(jump.messageId));
+  });
 
   function jumpToMessage(messageId: string) {
     const el = document.getElementById(`msg-${messageId}`);

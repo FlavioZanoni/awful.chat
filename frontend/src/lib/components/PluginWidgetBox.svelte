@@ -6,6 +6,7 @@
   import { getCardState, onCardStateChange } from "$lib/plugins/state.svelte";
   import { isPluginEnabled, unpinWidget, type PinnedWidget } from "$lib/plugins/prefs.svelte";
   import { makeHostApi } from "$lib/plugins/host";
+  import { requestJumpToMessage } from "$lib/ui-state.svelte";
   import { getMessage, getPluginCardMessages } from "$lib/storage";
   import { roomsStore } from "$lib/rooms.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
@@ -27,6 +28,7 @@
   // A card-backed widget with no live card yet: keep the strip mounted with
   // a quiet label instead of unpinning - the next party revives it.
   let waiting = $state(false);
+  let needsCard = $state(false);
 
   // The pin names only a plugin; which card the strip shows is resolved
   // HERE, live. Waffle-style plugins follow the newest card that is theirs
@@ -63,6 +65,7 @@
           return;
         }
         widgetComponent = (plugin.widget ?? null) as ComponentType | null;
+        needsCard = !!plugin.card;
 
         // No card surface at all: the widget stands alone (device-local
         // plugins like the soundboard). Nothing to scan for.
@@ -153,9 +156,10 @@
   });
 
   // Widgets are a STRIP, not a card: only a dedicated compact view renders.
-  // A card-backed widget also needs its card loaded before mounting.
+  // A card-backed widget also needs its card loaded before mounting - it
+  // must NEVER render with card: null, whatever the scan's timing.
   const ready = $derived(
-    !!widgetComponent && !waiting && (liveCardId === null || card !== null)
+    !!widgetComponent && !waiting && (!needsCard || card !== null)
   );
 </script>
 
@@ -166,10 +170,25 @@
   <div
     class="mx-2 mb-1 flex h-8 items-center gap-1.5 overflow-hidden rounded-md border border-primary/25 bg-card shadow-sm px-2"
   >
-    <PluginIcon
-      icon={manifest?.icon ?? "lucide:unplug"}
-      class="size-3 shrink-0 text-muted-foreground"
-    />
+    {#if card && liveCardId}
+      <!-- The icon is the way BACK to the card: the strip has room for a
+           play button, not the queue - one click puts the full controls on
+           screen, scrolled to and flashed. -->
+      <button
+        type="button"
+        onclick={() => requestJumpToMessage(liveRoomCode, liveCardId!)}
+        aria-label={`Go to the ${manifest?.name ?? pin.pluginId} card`}
+        title={`Go to the ${manifest?.name ?? pin.pluginId} card`}
+        class="shrink-0 cursor-pointer text-muted-foreground hover:text-primary"
+      >
+        <PluginIcon icon={manifest?.icon ?? "lucide:unplug"} class="size-3" />
+      </button>
+    {:else}
+      <PluginIcon
+        icon={manifest?.icon ?? "lucide:unplug"}
+        class="size-3 shrink-0 text-muted-foreground"
+      />
+    {/if}
     <div class="min-w-0 flex-1 overflow-hidden">
       {#if ready && widgetComponent}
         {@const WidgetUi = widgetComponent}
@@ -180,7 +199,7 @@
         />
       {:else if waiting}
         <span class="truncate font-mono text-[11px] text-muted-foreground">
-          {manifest?.name ?? pin.pluginId}
+          {manifest?.name ?? pin.pluginId} · idle
         </span>
       {:else}
         <span class="animate-pulse font-mono text-[11px] text-muted-foreground">

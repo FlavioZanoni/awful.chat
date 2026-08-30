@@ -480,6 +480,23 @@
     void returnToCall();
   });
 
+  // First half of a jump-to-message: get the right conversation on screen.
+  // ChatView does the scrolling and clears the request - not here, or the
+  // scroll target would be gone before the history rendered.
+  $effect(() => {
+    const jump = uiState.jumpToMessage;
+    if (!jump || transportState.roomCode === jump.roomCode) return;
+    if (jump.roomCode.startsWith("dm-")) {
+      const peer = roomsStore.dmRooms.find(
+        (r) => r.roomCode === jump.roomCode
+      )?.participantDid;
+      if (peer) void handleSelectDm(peer);
+      else uiState.jumpToMessage = null;
+      return;
+    }
+    void handleSelectRoom(jump.roomCode);
+  });
+
   /**
    * Promote the floating panel's conversation to the full DMs view. The panel
    * closes: leaving it open over the same conversation would show it twice.
