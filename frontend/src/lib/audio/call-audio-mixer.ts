@@ -9,7 +9,7 @@ const MAX_CALL_SOUND_BYTES = 2 * 1024 * 1024;
  * call. Per owner, because a global cap would let one plugin's stacking
  * evict another plugin's clip - exactly the cross-plugin interference the
  * owner scoping exists to prevent. */
-const MAX_CONCURRENT_SOUNDS_PER_OWNER = 4;
+const MAX_CONCURRENT_SOUNDS_PER_OWNER = 5;
 
 /** Host policy a caller can read instead of learning it from a README. */
 export const CALL_SOUND_MAX_DURATION_MS = MAX_CALL_SOUND_SECONDS * 1000;

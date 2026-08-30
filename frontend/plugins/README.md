@@ -218,7 +218,7 @@ after microphone noise suppression. It returns `{ id, durationMs }`;
 Sounds are scoped to your plugin: your clips can layer, and you can never
 stop (or evict) another plugin's audio. Playback policy is yours - want
 one-at-a-time, stop before you play. The host only enforces a per-plugin
-resource ceiling: past four concurrent clips it evicts your oldest. Host policy caps a decoded clip at `callAudio.maxDurationMs` and the
+resource ceiling: past five concurrent clips it evicts your oldest. Host policy caps a decoded clip at `callAudio.maxDurationMs` and the
 blob at 2MB, validate against the exposed limit rather than hardcoding it.
 The host accepts a Blob, never a URL, and sends no plugin message or file
 transfer. The clips pass through a limiter; the microphone path does not, so

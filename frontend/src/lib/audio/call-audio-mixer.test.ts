@@ -95,11 +95,11 @@ describe("CallAudioMixer", () => {
   it("evicts the owner's own oldest clip past the concurrency cap", async () => {
     const { ctx, sources } = context();
     const mixer = new CallAudioMixer(ctx);
-    for (let i = 0; i < 5; i++)
+    for (let i = 0; i < 6; i++)
       await mixer.play(new Blob(["x"]), { owner: "soundboard" });
     expect(sources[0].stop).toHaveBeenCalledOnce();
     expect(sources[1].stop).not.toHaveBeenCalled();
-    expect(sources[4].start).toHaveBeenCalledOnce();
+    expect(sources[5].start).toHaveBeenCalledOnce();
   });
 
   it("never evicts another owner's clip to make room", async () => {
@@ -108,7 +108,7 @@ describe("CallAudioMixer", () => {
     const { ctx, sources } = context();
     const mixer = new CallAudioMixer(ctx);
     await mixer.play(new Blob(["x"]), { owner: "tts" });
-    for (let i = 0; i < 5; i++)
+    for (let i = 0; i < 6; i++)
       await mixer.play(new Blob(["x"]), { owner: "soundboard" });
     // tts's clip (sources[0]) survives; soundboard evicted its own oldest.
     expect(sources[0].stop).not.toHaveBeenCalled();
