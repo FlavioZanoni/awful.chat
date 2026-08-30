@@ -55,6 +55,7 @@
     Maximize,
     Minimize,
     Radio,
+    CopyX,
     HeadphoneOff,
     Volume2,
     Volume1,
@@ -991,7 +992,7 @@ import {
               ? ''
               : 'pointer-events-none opacity-0'}"
           >
-            <Radio class="size-4" />
+            <CopyX class="size-4" />
           </button>
         {/snippet}
       </Tip>

@@ -114,6 +114,13 @@ select {
   cursor: pointer;
 }
 
+/* Firefox has no ::-webkit-scrollbar; without these it paints the stock
+   browser scrollbar inside every scrollable box, plugin surfaces included. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
 ::-webkit-scrollbar {
   @apply w-2.5 h-2.5;
 }

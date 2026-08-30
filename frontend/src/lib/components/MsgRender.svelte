@@ -1050,7 +1050,7 @@
            minimum canvas instead of each card guessing its own width, and
            min() keeps it inside the bubble on phones. -->
       <div
-        class="inline-block min-w-[min(38rem,100%)] min-h-24 max-w-full rounded-lg border border-primary/25 bg-primary/[0.04] px-3 py-2.5"
+        class="inline-block min-w-[min(42rem,100%)] min-h-24 max-w-full rounded-lg border border-primary/25 bg-primary/[0.04] px-3 py-2.5"
       >
         <div class="mb-1.5 flex items-center justify-end gap-1.5">
           {#if pluginManifest?.repository}
