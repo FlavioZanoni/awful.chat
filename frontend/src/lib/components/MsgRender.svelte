@@ -99,7 +99,14 @@
     size: number
   ): boolean {
     if (status === "downloading") return true;
-    return status === "pending" && size <= INLINE_FILE_MAX_BYTES;
+    // No transfer entry at all is the FIRST render: the entry registers a
+    // beat after the message row does, and waiting for it meant the chip
+    // appeared, then the skeleton, then the image - the skeleton losing the
+    // race it exists to win. A small file materializes either way.
+    return (
+      (status === undefined || status === "pending") &&
+      size <= INLINE_FILE_MAX_BYTES
+    );
   }
 
   // `Message.content` is a TypeScript claim, not a runtime guarantee: a wire
