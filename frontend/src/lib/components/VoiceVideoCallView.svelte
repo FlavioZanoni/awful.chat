@@ -1727,8 +1727,15 @@ import {
           </Tip>
 
           {#if isWatchingTransmission}
+            <!-- Docked, the stop button stands bare like the mic/cam/screen
+                 buttons beside it and only the volume group keeps a card;
+                 floating, the whole cluster shares one card like the rest. -->
             <div
-              class="relative flex items-center gap-2 rounded-xl bg-zinc-900/95 border border-white/10 p-3 py-2"
+              class={cn(
+                "relative flex items-center gap-2",
+                !dockedControls &&
+                  "rounded-xl bg-zinc-900/95 border border-white/10 p-3 py-2"
+              )}
             >
               <Tip text="Stop watching">
                 {#snippet children(props)}
@@ -1743,7 +1750,13 @@ import {
               </button>
                 {/snippet}
               </Tip>
-              <div class="flex items-center gap-2 px-1">
+              <div
+                class={cn(
+                  "flex items-center gap-2 px-1",
+                  dockedControls &&
+                    "rounded-xl bg-zinc-900/95 border border-white/10 px-3 py-2.5"
+                )}
+              >
                 <button
                   type="button"
                   onclick={() =>
