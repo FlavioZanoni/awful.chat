@@ -6,7 +6,11 @@ import {
   setMessageSoundsEnabled,
   setNotificationsEnabled,
 } from "$lib/notify.svelte";
-import { mediaPrefs, setGifAutoplay } from "$lib/media-prefs.svelte";
+import {
+  mediaPrefs,
+  setGifAutoplay,
+  setAutoDownloadMedia,
+} from "$lib/media-prefs.svelte";
 import {
   displayPrefs,
   setCallChatBeside,
@@ -164,6 +168,19 @@ async function loadLocalFonts(): Promise<void> {
     <Switch
       checked={mediaPrefs.gifAutoplay}
       onCheckedChange={(checked) => setGifAutoplay(checked)}
+    />
+  </div>
+  <div class="flex items-center justify-between gap-3">
+    <div class="flex flex-col gap-1 min-w-0">
+      <span class="text-xs font-mono">Auto-download media</span>
+      <span class="text-xs font-mono text-muted-foreground leading-relaxed">
+        Fetch images, videos and audio from peers as soon as they appear,
+        instead of waiting for a Download click. Uses more bandwidth.
+      </span>
+    </div>
+    <Switch
+      checked={mediaPrefs.autoDownloadMedia}
+      onCheckedChange={(checked) => setAutoDownloadMedia(checked)}
     />
   </div>
   <div class="flex items-center justify-between gap-3">

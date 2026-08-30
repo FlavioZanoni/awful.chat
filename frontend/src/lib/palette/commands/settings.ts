@@ -18,7 +18,11 @@ import {
   setShowPeerNicknameColors,
   setSidebarCollapsed,
 } from "$lib/display-prefs.svelte";
-import { mediaPrefs, setGifAutoplay } from "$lib/media-prefs.svelte";
+import {
+  mediaPrefs,
+  setGifAutoplay,
+  setAutoDownloadMedia,
+} from "$lib/media-prefs.svelte";
 import {
   notifyState,
   setMessageSoundsEnabled,
@@ -173,6 +177,19 @@ export const settingsCommands: CmdSource = () => {
       kind: "act",
       keepOpen: true,
       perform: () => setGifAutoplay(!mediaPrefs.gifAutoplay),
+    },
+  });
+
+  cmds.push({
+    id: "settings.toggle:autoDownloadMedia",
+    title: "Auto-download media",
+    keywords: ["toggle", "enable", "disable", "files", "images"],
+    group: "Settings",
+    badge: mediaPrefs.autoDownloadMedia ? "On" : "Off",
+    action: {
+      kind: "act",
+      keepOpen: true,
+      perform: () => setAutoDownloadMedia(!mediaPrefs.autoDownloadMedia),
     },
   });
 

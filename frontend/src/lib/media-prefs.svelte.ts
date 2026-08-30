@@ -4,10 +4,16 @@
  */
 
 const KEY = "awful:gif-autoplay:v1";
+const AUTO_DL_KEY = "awful:auto-download-media:v1";
 
 export const mediaPrefs = $state({
   gifAutoplay:
     typeof localStorage === "undefined" || localStorage.getItem(KEY) !== "0",
+  // Opt-IN: media above the inline cap costs a download per device, so the
+  // default stays a manual click.
+  autoDownloadMedia:
+    typeof localStorage !== "undefined" &&
+    localStorage.getItem(AUTO_DL_KEY) === "1",
 });
 
 export function setGifAutoplay(on: boolean): void {
@@ -19,9 +25,20 @@ export function setGifAutoplay(on: boolean): void {
   }
 }
 
+export function setAutoDownloadMedia(on: boolean): void {
+  mediaPrefs.autoDownloadMedia = on;
+  try {
+    localStorage.setItem(AUTO_DL_KEY, on ? "1" : "0");
+  } catch {
+    // Storage blocked: the choice just does not survive a reload.
+  }
+}
+
 // A second tab flipping the switch should be reflected here, not fought.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === KEY) mediaPrefs.gifAutoplay = e.newValue !== "0";
+    if (e.key === AUTO_DL_KEY)
+      mediaPrefs.autoDownloadMedia = e.newValue === "1";
   });
 }

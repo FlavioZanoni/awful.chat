@@ -1,3 +1,10 @@
+<script module lang="ts">
+  /** infoHashes auto-download already asked for, across every message
+   *  component - one request per file per session, however often rows
+   *  re-render or the same file appears in several rooms. */
+  const _autoRequested = new Set<string>();
+</script>
+
 <script lang="ts">
   import { Tip } from "$lib/components/ui/tooltip";
   import {
@@ -94,6 +101,22 @@
    * pending file ABOVE the inline cap needs a manual Download click, and a
    * skeleton there would pulse forever next to its own Download button.
    */
+  // Opt-in auto-download: fetch media attachments as soon as their message
+  // renders, exactly what clicking Download would do. Media only - a stray
+  // zip stays a manual click - and never retried after a failure, so a dead
+  // seeder does not turn into a request loop.
+  $effect(() => {
+    if (!mediaPrefs.autoDownloadMedia || isOwn) return;
+    for (const file of msg.meta?.files ?? []) {
+      if (!/^(image|video|audio)\//.test(file.mimeType)) continue;
+      const transfer = fileTransfers.get(file.infoHash);
+      if (transfer && transfer.status !== "pending") continue;
+      if (_autoRequested.has(file.infoHash)) continue;
+      _autoRequested.add(file.infoHash);
+      onRequestFileDownload(file, msg.senderId);
+    }
+  });
+
   function expectsBytesSoon(
     status: string | undefined,
     size: number

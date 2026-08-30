@@ -17,9 +17,33 @@
   let { src, label = "audio attachment", class: className = "" }: Props =
     $props();
 
+  // One volume for every audio attachment, remembered on this device - a
+  // per-clip volume would reset to full blast on the next voice note.
+  const VOLUME_KEY = "awful:audio-attachment-volume:v1";
+  function loadVolume(): number {
+    try {
+      const v = Number(localStorage.getItem(VOLUME_KEY));
+      return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 1;
+    } catch {
+      return 1;
+    }
+  }
+
   let el = $state<HTMLAudioElement | null>(null);
   let playing = $state(false);
   let muted = $state(false);
+  let volume = $state(loadVolume());
+  $effect(() => {
+    if (el) el.volume = volume;
+  });
+  function setVolume(value: number) {
+    volume = value;
+    try {
+      localStorage.setItem(VOLUME_KEY, String(value));
+    } catch {
+      // Storage blocked: the level just does not survive a reload.
+    }
+  }
   let currentTime = $state(0);
   let duration = $state(0);
   /** While dragging, the slider owns the position, not the timeupdate events. */
@@ -113,19 +137,41 @@
     {fmt(currentTime)} / {fmt(duration)}
   </span>
 
-  <button
-    type="button"
-    onclick={() => {
-      muted = !muted;
-      if (el) el.muted = muted;
-    }}
-    aria-label={muted ? `Unmute ${label}` : `Mute ${label}`}
-    class="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground hover:text-foreground"
-  >
-    {#if muted}
-      <VolumeX class="size-3.5" />
-    {:else}
-      <Volume2 class="size-3.5" />
-    {/if}
-  </button>
+  <!-- Hovering (or focusing) the mute button reveals the level; the click
+       still mutes. focus-within keeps the popover up while dragging. -->
+  <div class="group/vol relative shrink-0">
+    <button
+      type="button"
+      onclick={() => {
+        muted = !muted;
+        if (el) el.muted = muted;
+      }}
+      aria-label={muted ? `Unmute ${label}` : `Mute ${label}`}
+      class="inline-flex size-6 cursor-pointer items-center justify-center rounded text-muted-foreground hover:text-foreground"
+    >
+      {#if muted || volume === 0}
+        <VolumeX class="size-3.5" />
+      {:else}
+        <Volume2 class="size-3.5" />
+      {/if}
+    </button>
+    <div
+      class="pointer-events-none absolute bottom-full right-0 z-20 pb-1.5 opacity-0 transition-opacity group-hover/vol:pointer-events-auto group-hover/vol:opacity-100 group-focus-within/vol:pointer-events-auto group-focus-within/vol:opacity-100"
+    >
+      <div
+        class="rounded-md border border-border bg-popover px-2 py-1.5 shadow-md"
+      >
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          value={volume}
+          aria-label={`Volume for ${label}`}
+          oninput={(e) => setVolume(Number(e.currentTarget.value))}
+          class="h-1 w-20 cursor-pointer accent-primary"
+        />
+      </div>
+    </div>
+  </div>
 </div>
