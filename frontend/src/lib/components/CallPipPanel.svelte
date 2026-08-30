@@ -255,7 +255,7 @@
              srcObject to match the spotlight, along with the PiP video.
              This way a single spotlight change swaps srcObject on both. -->
         <video
-          class="absolute inset-0 w-full h-full"
+          class="absolute inset-0 w-full h-full object-contain bg-black"
           autoplay
           muted
           playsinline

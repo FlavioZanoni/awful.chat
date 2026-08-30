@@ -1117,7 +1117,7 @@ import {
         autoplay
         playsinline
         muted
-        class="h-full w-full object-contain {tile.isLocal &&
+        class="h-full w-full object-contain bg-black {tile.isLocal &&
         tile.kind === 'camera'
           ? '-scale-x-100'
           : ''}"
