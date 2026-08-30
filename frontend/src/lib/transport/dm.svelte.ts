@@ -1,5 +1,6 @@
 import { identityStore } from "$lib/identity/identity.svelte";
 import { refreshDmRooms } from "$lib/rooms.svelte";
+import { dropRoomCorpus } from "$lib/search/corpus.svelte";
 import {
   deleteMessagesForRoom,
   deletePhonebookEntry,
@@ -722,6 +723,7 @@ export async function removeDmConversation(peerIdOrDid: string): Promise<void> {
   }
   await Promise.all(
     [...candidates].map(async (roomCode) => {
+      dropRoomCorpus(roomCode);
       await deleteMessagesForRoom(roomCode);
       await deleteRoom(roomCode);
     })

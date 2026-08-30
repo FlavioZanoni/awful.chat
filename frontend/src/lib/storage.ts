@@ -872,7 +872,9 @@ export async function getSearchIndex(
   if (!row) return undefined;
   try {
     return await _open<SearchIndexRecord>("searchIndex", row);
-  } catch {
+  } catch (err) {
+    // Locked storage stays loud, same as every other reader in this file.
+    if (isStorageLockedError(err)) throw err;
     // Sealed under a previous identity's key (or corrupt): treated as
     // missing, the sweep rebuilds it under the current key.
     return undefined;
@@ -890,20 +892,23 @@ export async function deleteSearchIndex(roomCode: string): Promise<void> {
 }
 
 /**
- * Newest lamport among a room's rows of the given types, read from CLEAR
- * fields only - this is the search index staleness check, and it must not
- * cost a decrypt.
+ * Newest lamport AND row count among a room's rows of the given types, read
+ * from CLEAR fields only - the search index staleness check, at no decrypt
+ * cost. The count is the half that matters: a repair sync backfills OLDER
+ * messages, which move no lamport high-water mark at all, so "lastLamport
+ * is current" alone would bless an index that silently lost them.
  */
-export async function getNewestLamportOfTypes(
+export async function getSearchableStats(
   roomCode: string,
   types: readonly ChatMessageType[]
-): Promise<number> {
+): Promise<{ newestLamport: number; count: number }> {
   const database = await getDB();
   const wanted = new Set<ChatMessageType>(types);
   const blindRoomCode = await blindValue(roomCode);
   const ranges: Blinded[] = [blindRoomCode];
   if (!isMigrationComplete()) ranges.push(roomCode as Blinded);
   let newest = 0;
+  let count = 0;
   for (const code of ranges) {
     let cursor = await database
       .transaction("messages")
@@ -915,12 +920,12 @@ export async function getNewestLamportOfTypes(
     while (cursor) {
       if (wanted.has(cursor.value.type)) {
         newest = Math.max(newest, cursor.value.lamport);
-        break;
+        count += 1;
       }
       cursor = await cursor.continue();
     }
   }
-  return newest;
+  return { newestLamport: newest, count };
 }
 
 export async function deleteMessagesForRoom(roomCode: string): Promise<void> {

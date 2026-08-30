@@ -15,6 +15,7 @@ import {
   type Room,
 } from "./storage";
 import { identityStore } from "./identity/identity.svelte";
+import { dropRoomCorpus } from "./search/corpus.svelte";
 
 /**
  * Your own messages must never count as unread - they arrive back through
@@ -229,6 +230,9 @@ export async function renameRoom(
  * transport.svelte for the real thing.
  */
 export async function removeRoom(roomCode: string): Promise<void> {
+  // Before the storage delete: an in-flight search sweep must see the drop
+  // and abandon its final index write for this room.
+  dropRoomCorpus(roomCode);
   await deleteMessagesForRoom(roomCode);
   await deleteRoom(roomCode);
   roomsStore.rooms = roomsStore.rooms.filter((r) => r.roomCode !== roomCode);

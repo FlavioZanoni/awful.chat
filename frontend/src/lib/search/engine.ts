@@ -78,14 +78,17 @@ export function entryFromMessage(
   let flags = 0;
 
   if (msg.type === MessageType.PluginCard) {
+    // A malformed card still yields an (empty) entry: the sealed index's
+    // coverage check compares entry count against the searchable ROW count,
+    // and a searchable row with no entry would read as a gap forever.
     let pluginId = "";
     try {
       const parsed = JSON.parse(content) as { pluginId?: string };
       if (typeof parsed.pluginId === "string") pluginId = parsed.pluginId;
     } catch {
-      return null;
+      // Fall through with an empty pluginId.
     }
-    text = pluginName?.(pluginId) ?? pluginId;
+    text = (pluginId && pluginName?.(pluginId)) || pluginId;
   }
 
   if (msg.type === MessageType.File) {

@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  deleteMessagesForRoom,
   getSearchIndex,
   putMessage,
+  bulkPutMessages,
   wipeLocalDatabase,
-  getNewestLamportOfTypes,
+  getSearchableStats,
 } from "$lib/storage";
 import { initStorageCrypto } from "$lib/storage-crypto";
 import { MessageType, type Message } from "$lib/types/message";
@@ -61,7 +63,7 @@ describe("search corpus", () => {
     const record = await getSearchIndex("room-a");
     expect(record).toBeDefined();
     expect(record!.lastLamport).toBe(
-      await getNewestLamportOfTypes("room-a", [MessageType.Text])
+      (await getSearchableStats("room-a", [MessageType.Text])).newestLamport
     );
 
     // "Next session": memory gone, index row still there.
@@ -89,6 +91,33 @@ describe("search corpus", () => {
     await putMessage(msg({ content: "landed after the sweep" }));
     const hits = searchRooms(parseSearchQuery("landed"), ["room-a"]);
     expect(hits).toHaveLength(1);
+  });
+
+  it("re-sweeps when a BACKFILLED older message missed the index flush", async () => {
+    // The repair-sync shape: history arrives with lamports BELOW the room's
+    // high-water mark. lastLamport alone cannot see it - only the entry
+    // count can, and a crash inside the 3s append debounce loses the
+    // in-memory pending queue, which is what clearSearchCorpus simulates.
+    await putMessage(msg({ content: "recent message", lamport: 100 }));
+    await ensureRoomCorpus("room-a");
+    clearSearchCorpus();
+
+    await bulkPutMessages([
+      msg({ content: "backfilled needle from the past", lamport: 5 }),
+    ]);
+    clearSearchCorpus(); // the pending index append dies with the "crash"
+
+    await ensureRoomCorpus("room-a");
+    const hits = searchRooms(parseSearchQuery("backfilled needle"), ["room-a"]);
+    expect(hits).toHaveLength(1);
+  });
+
+  it("deleting a room deletes its sealed index row", async () => {
+    await putMessage(msg({ content: "gone soon" }));
+    await ensureRoomCorpus("room-a");
+    expect(await getSearchIndex("room-a")).toBeDefined();
+    await deleteMessagesForRoom("room-a");
+    expect(await getSearchIndex("room-a")).toBeUndefined();
   });
 
   it("excludes non-searchable types", async () => {

@@ -7,7 +7,7 @@
  */
 import {
   getMessages,
-  getNewestLamportOfTypes,
+  getSearchableStats,
   getSearchIndex,
   onMessageStored,
   putSearchIndex,
@@ -170,16 +170,19 @@ export async function ensureRoomCorpus(roomCode: string): Promise<void> {
   if (c.done || c.sweeping) return;
   c.sweeping = true;
   try {
-    // Fast path: a sealed index that is provably current. lastLamport is a
-    // clear field and so is every message row's lamport, so this check
-    // decrypts one row instead of the room.
-    const [record, newest] = await Promise.all([
+    // Fast path: a sealed index that is provably current, checked against
+    // CLEAR fields only (one decrypt instead of the room). Two conditions,
+    // both load-bearing: lastLamport catches ordinary new messages, and the
+    // entry count catches backfilled OLDER ones - a repair sync moves no
+    // high-water mark, so a lamport check alone would bless an index that
+    // lost its debounced append to a crash and never notice.
+    const [record, stats] = await Promise.all([
       getSearchIndex(roomCode),
-      getNewestLamportOfTypes(roomCode, SEARCHABLE_TYPES),
+      getSearchableStats(roomCode, SEARCHABLE_TYPES),
     ]);
-    if (record && record.lastLamport >= newest) {
+    if (record && record.lastLamport >= stats.newestLamport) {
       const stored = decodeIndex(record.data);
-      if (stored) {
+      if (stored && stored.length === stats.count) {
         for (const entry of stored) add(c, entry);
         c.done = true;
         bump();
@@ -207,6 +210,11 @@ export async function ensureRoomCorpus(roomCode: string): Promise<void> {
     }
     c.done = true;
     bump();
+
+    // The room may have been deleted while the sweep read it - its corpus
+    // object is dropped then, so a stale identity means this write would
+    // resurrect an index row for a room whose messages are gone.
+    if (_rooms.get(roomCode) !== c) return;
 
     // Persist what the sweep learned so the NEXT session pays one decrypt.
     // Live appends that raced the sweep are in the corpus already; write
@@ -261,7 +269,9 @@ export function scopeProgress(roomCodes: readonly string[]): ScopeProgress {
   void corpusState.version;
   let sweeping = 0;
   let sweptTo: number | null = null;
-  let done = roomCodes.length > 0;
+  // An empty scope (no rooms at all, or an in: filter matching none) has
+  // nothing left to sweep - it is done, not forever "searching".
+  let done = true;
   for (const roomCode of roomCodes) {
     const c = _rooms.get(roomCode);
     if (!c || !c.done) done = false;
@@ -270,6 +280,15 @@ export function scopeProgress(roomCodes: readonly string[]): ScopeProgress {
       sweptTo = sweptTo === null ? c.sweptTo : Math.min(sweptTo, c.sweptTo);
   }
   return { sweeping, sweptTo, done };
+}
+
+/** A room was deleted: drop its corpus and pending appends, and invalidate
+ *  any in-flight sweep's final index write (identity check above). The
+ *  sealed row itself is deleted by deleteMessagesForRoom. */
+export function dropRoomCorpus(roomCode: string): void {
+  _rooms.delete(roomCode);
+  _pendingIndex.delete(roomCode);
+  bump();
 }
 
 /** Session teardown: identity switch or disconnect. Memory only - the

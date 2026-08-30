@@ -21,7 +21,10 @@
   }: { openRoom: (roomCode: string) => void | Promise<void> } = $props();
 
   let query = $state("");
-  let selected = $state(0);
+  // Selection is tracked by entry id, not index - the palette's own rule:
+  // results reorder as sweeps stream in, and an index silently comes to
+  // point at a different message than the one highlighted.
+  let selectedId = $state<string | null>(null);
   let inputEl = $state<HTMLInputElement | null>(null);
   let jumping = $state(false);
 
@@ -82,10 +85,17 @@
     searchUi.open ? scopeProgress(scopedRooms) : null
   );
 
+  /** The active row: the selected id if it still ranks, else the first. */
+  const selectedIndex = $derived.by(() => {
+    if (selectedId === null) return 0;
+    const at = results.findIndex((h) => h.entry.id === selectedId);
+    return at >= 0 ? at : 0;
+  });
+
   $effect(() => {
     if (searchUi.open) {
       query = "";
-      selected = 0;
+      selectedId = null;
       requestAnimationFrame(() => inputEl?.focus());
     }
   });
@@ -148,15 +158,18 @@
       closeSearch();
       return;
     }
-    if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      selected = Math.min(selected + 1, results.length - 1);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      selected = Math.max(selected - 1, 0);
+      if (results.length === 0) return;
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      const next = Math.min(
+        Math.max(selectedIndex + delta, 0),
+        results.length - 1
+      );
+      selectedId = results[next].entry.id;
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const hit = results[selected];
+      const hit = results[selectedIndex];
       if (hit) void jumpTo(hit);
     }
   }
@@ -181,7 +194,7 @@
         <input
           bind:this={inputEl}
           bind:value={query}
-          oninput={() => (selected = 0)}
+          oninput={() => (selectedId = null)}
           onkeydown={onKeydown}
           placeholder={searchUi.scope
             ? "Search this room…  from: has: before: after: \"exact\""
@@ -219,9 +232,9 @@
             <button
               type="button"
               onclick={() => void jumpTo(hit)}
-              onpointerenter={() => (selected = index)}
+              onpointerenter={() => (selectedId = hit.entry.id)}
               class="flex w-full flex-col gap-0.5 px-3 py-2 text-left {index ===
-              selected
+              selectedIndex
                 ? 'bg-muted'
                 : 'hover:bg-muted/60'}"
             >

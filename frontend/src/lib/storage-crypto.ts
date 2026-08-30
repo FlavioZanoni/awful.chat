@@ -529,6 +529,16 @@ export const STORE_SPECS = {
   // protects. It is sealed now; maxLamport stays clear so the never-regress
   // comparison in setWatermark still works inside its write transaction,
   // where nothing can be decrypted.
+  watermarks: {
+    storeName: "watermarks",
+    key: "id",
+    // maxLamport, NOT "lamport" - the field name matters. setWatermark's
+    // never-regress check compares it against the stored row INSIDE the
+    // write transaction, where nothing can be decrypted, so sealing it made
+    // the comparison read undefined and silently skip every write.
+    clear: ["maxLamport"],
+    blind: ["id", "roomCode", "senderId"],
+  },
   // One row per room: the message-search index. The entries themselves are
   // serialized plaintext message text, so they ride in `bytes` and are
   // sealed like attachment data - a readable search index would undo the
@@ -541,16 +551,6 @@ export const STORE_SPECS = {
     clear: ["lastLamport"],
     blind: ["roomCode"],
     bytes: ["data"],
-  },
-  watermarks: {
-    storeName: "watermarks",
-    key: "id",
-    // maxLamport, NOT "lamport" - the field name matters. setWatermark's
-    // never-regress check compares it against the stored row INSIDE the
-    // write transaction, where nothing can be decrypted, so sealing it made
-    // the comparison read undefined and silently skip every write.
-    clear: ["maxLamport"],
-    blind: ["id", "roomCode", "senderId"],
   },
 } as const satisfies Record<string, StoreCryptoSpec>;
 
