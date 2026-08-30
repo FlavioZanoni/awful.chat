@@ -20,6 +20,8 @@
     Check,
     CheckCheck,
     Clock,
+    Pin as PinIcon,
+    PinOff,
   } from "@lucide/svelte";
   import {
     MessageType,
@@ -64,7 +66,12 @@
   import { peerIdToDid, transportState, resolveMentionDisplayName } from "$lib/transport/transport.svelte";
   import { getPlugin, getManifest } from "$lib/plugins/registry";
   import { getCardState, onCardStateChange } from "$lib/plugins/state.svelte";
-  import { isPluginEnabled, pluginPrefs } from "$lib/plugins/prefs.svelte";
+  import {
+    isPluginEnabled,
+    pluginPrefs,
+    pinWidget,
+    unpinWidget,
+  } from "$lib/plugins/prefs.svelte";
   import type { PluginComponent } from "$lib/plugins/api";
 
   interface Props {
@@ -431,6 +438,12 @@
   let pluginCardError = $state<string | null>(null);
   let pluginCardDisabled = $state(false);
   let pluginCardPluginId = $state("");
+  /** Whether the card's plugin ships a sidebar widget - gates the header's
+   *  pin button. */
+  let pluginHasWidget = $state(false);
+  const pluginIsPinned = $derived(
+    pluginPrefs.pinnedWidgets.some((p) => p.pluginId === pluginCardPluginId)
+  );
 
   $effect(() => {
     linkedUrl;
@@ -492,6 +505,7 @@
           pluginCardState = undefined;
           pluginCardError = null;
           pluginCardDisabled = true;
+          pluginHasWidget = false;
           return;
         }
         pluginCardDisabled = false;
@@ -500,6 +514,7 @@
           pluginCardError = `Plugin ${pluginId} not found`;
           return;
         }
+        pluginHasWidget = !!plugin.widget;
         if (!plugin.card) {
           pluginCardError = `Plugin ${pluginId} has no card component`;
           return;
@@ -1119,7 +1134,7 @@
       <div
         class="inline-block min-w-[min(42rem,100%)] min-h-24 max-w-full rounded-lg border border-primary/25 bg-primary/[0.04] px-3 py-2.5"
       >
-        <div class="mb-1.5 flex items-center justify-end gap-1.5">
+        <div class="mb-1.5 flex items-center justify-between gap-1.5">
           {#if pluginManifest?.repository}
             <a
               href={pluginManifest.repository}
@@ -1137,6 +1152,36 @@
                 ? ` v${pluginManifest.version}`
                 : ""}
             </span>
+          {/if}
+          {#if pluginHasWidget}
+            <Tip
+              text={pluginIsPinned
+                ? "Unpin from the sidebar"
+                : "Pin this plugin to the sidebar"}
+            >
+              {#snippet children(props)}
+                <button
+                  {...props}
+                  type="button"
+                  onclick={() =>
+                    pluginIsPinned
+                      ? unpinWidget(pluginCardPluginId)
+                      : pinWidget(pluginCardPluginId)}
+                  aria-label={pluginIsPinned
+                    ? "Unpin from the sidebar"
+                    : "Pin this plugin to the sidebar"}
+                  aria-pressed={pluginIsPinned}
+                  class="flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-[10px] transition-colors {pluginIsPinned
+                    ? 'text-primary hover:text-muted-foreground'
+                    : 'text-muted-foreground hover:text-primary'}"
+                >
+                  {#if pluginIsPinned}<PinOff class="size-3" />{:else}<PinIcon
+                      class="size-3"
+                    />{/if}
+                  {pluginIsPinned ? "pinned" : "pin"}
+                </button>
+              {/snippet}
+            </Tip>
           {/if}
         </div>
         {#if pluginHostApi}

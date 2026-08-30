@@ -549,7 +549,9 @@
         filteredCommands.length - 1,
         commandSelectedIndex + 1
       );
-    } else if (e.key === "Tab") {
+    } else if (e.key === "Tab" || e.key === "Enter") {
+      // Enter autocompletes like the mention popup; the completed command
+      // (with its trailing space) closes the popup, so the NEXT Enter runs it.
       e.preventDefault();
       selectCommand(filteredCommands[commandSelectedIndex]);
     } else if (e.key === "Escape") {
