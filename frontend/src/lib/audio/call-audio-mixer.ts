@@ -3,9 +3,13 @@ const MAX_CALL_SOUND_SECONDS = 5;
  * an oversized blob turns into hundreds of MB of PCM, so the gate has to sit
  * in front of it. 2MB of compressed audio is far more than 5s ever needs. */
 const MAX_CALL_SOUND_BYTES = 2 * 1024 * 1024;
-/** Concurrent clips. Enough to layer a soundboard; the oldest is evicted
- * past this so a misbehaving caller cannot stack unbounded sources. */
-const MAX_CONCURRENT_SOUNDS = 4;
+/** Concurrent clips PER OWNER. This is a resource ceiling, not playback
+ * policy - a plugin that wants one-at-a-time stops before it plays; this
+ * only guarantees a looping bug cannot stack unbounded sources into the
+ * call. Per owner, because a global cap would let one plugin's stacking
+ * evict another plugin's clip - exactly the cross-plugin interference the
+ * owner scoping exists to prevent. */
+const MAX_CONCURRENT_SOUNDS_PER_OWNER = 4;
 
 /** Host policy a caller can read instead of learning it from a README. */
 export const CALL_SOUND_MAX_DURATION_MS = MAX_CALL_SOUND_SECONDS * 1000;
@@ -83,9 +87,12 @@ export class CallAudioMixer {
       throw new Error("Sound exceeds the 5 second call limit");
     }
 
-    while (this.sounds.size >= MAX_CONCURRENT_SOUNDS) {
-      const oldest = this.sounds.keys().next().value as string;
-      this.stop(oldest);
+    const owner = options?.owner ?? "";
+    // The map is insertion-ordered, so this owner's list is oldest-first.
+    const owned = [...this.sounds.values()].filter((s) => s.owner === owner);
+    const excess = owned.length - (MAX_CONCURRENT_SOUNDS_PER_OWNER - 1);
+    for (const sound of owned.slice(0, Math.max(0, excess))) {
+      this.stop(sound.id);
     }
 
     // Per-sound gain nodes, not shared ones: shared gains meant a new play

@@ -92,13 +92,27 @@ describe("CallAudioMixer", () => {
     expect(sources[1].start).toHaveBeenCalledOnce();
   });
 
-  it("evicts the oldest clip past the concurrency cap", async () => {
+  it("evicts the owner's own oldest clip past the concurrency cap", async () => {
     const { ctx, sources } = context();
     const mixer = new CallAudioMixer(ctx);
-    for (let i = 0; i < 5; i++) await mixer.play(new Blob(["x"]));
+    for (let i = 0; i < 5; i++)
+      await mixer.play(new Blob(["x"]), { owner: "soundboard" });
     expect(sources[0].stop).toHaveBeenCalledOnce();
     expect(sources[1].stop).not.toHaveBeenCalled();
     expect(sources[4].start).toHaveBeenCalledOnce();
+  });
+
+  it("never evicts another owner's clip to make room", async () => {
+    // The cap is a per-owner resource ceiling: one plugin stacking clips
+    // must not silence a sound a different plugin is playing.
+    const { ctx, sources } = context();
+    const mixer = new CallAudioMixer(ctx);
+    await mixer.play(new Blob(["x"]), { owner: "tts" });
+    for (let i = 0; i < 5; i++)
+      await mixer.play(new Blob(["x"]), { owner: "soundboard" });
+    // tts's clip (sources[0]) survives; soundboard evicted its own oldest.
+    expect(sources[0].stop).not.toHaveBeenCalled();
+    expect(sources[1].stop).toHaveBeenCalledOnce();
   });
 
   it("scopes stop to the owner that started the sound", async () => {
