@@ -9,6 +9,7 @@
   import { requestJumpToMessage } from "$lib/ui-state.svelte";
   import { getMessage, getPluginCardMessages } from "$lib/storage";
   import { roomsStore } from "$lib/rooms.svelte";
+  import { transportState } from "$lib/transport/transport.svelte";
   import { identityStore } from "$lib/identity/identity.svelte";
   import { MessageType } from "$lib/types/message";
   import type { Message } from "$lib/transport/transport.svelte";
@@ -57,6 +58,10 @@
 
   $effect(() => {
     void tick;
+    // Entering a room is a resolve trigger of its own: the party the pin
+    // should follow is usually in the room just opened, and with no plugin
+    // update folding there is otherwise no tick to rescan on.
+    void transportState.roomCode;
     void (async () => {
       try {
         const plugin = await getPlugin(pin.pluginId);
@@ -90,8 +95,15 @@
           lastScan = Date.now();
           const seq = ++scanSeq;
           const found: Candidate[] = [];
-          for (const room of [...roomsStore.rooms, ...roomsStore.dmRooms]) {
-            for (const msg of await getPluginCardMessages(room.roomCode)) {
+          // roomsStore only mirrors SAVED rooms. The room the user is
+          // standing in right now may not be saved - and it is the single
+          // most likely place for the party they are in, so scan it too.
+          const activeRoom = transportState.roomCode;
+          const roomCodes = new Set<string>(activeRoom ? [activeRoom] : []);
+          for (const room of [...roomsStore.rooms, ...roomsStore.dmRooms])
+            roomCodes.add(room.roomCode);
+          for (const roomCode of roomCodes) {
+            for (const msg of await getPluginCardMessages(roomCode)) {
               if (msg.type !== MessageType.PluginCard) continue;
               try {
                 const parsed = JSON.parse(msg.content) as { pluginId?: string };
@@ -101,7 +113,7 @@
               }
               found.push({
                 cardId: msg.id,
-                roomCode: room.roomCode,
+                roomCode,
                 timestamp: msg.timestamp,
               });
             }
@@ -111,9 +123,13 @@
           let picked: Candidate | null = null;
           // Cap the widgetMine probes: each cache-miss getCardState folds a
           // card's full update history, and a room spammed with stray cards
-          // must not turn every rescan into that N times over. The party
-          // you are in is in practice among the newest few cards anyway.
-          for (const c of found.slice(0, 8)) {
+          // must not turn every rescan into that N times over. The active
+          // room is exempt from the cap - the party you are in is almost
+          // always in the room you are standing in, and old test cards
+          // elsewhere must not push it out of the probe window.
+          for (const c of found.filter(
+            (c, i) => i < 8 || c.roomCode === activeRoom
+          )) {
             if (plugin.widgetMine) {
               const state = await getCardState(c.cardId, c.roomCode, plugin);
               if (!plugin.widgetMine(state, selfDid)) continue;
