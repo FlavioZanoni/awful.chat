@@ -114,17 +114,21 @@ optional components on the definition, all receive the same
   bottom. Use it for personal controls such as a device-local soundboard.
 
 - `widget` - a one-row strip for the sidebar slots (dotted "+ pin" boxes
-  above the call controls; users pick a card from any of their rooms).
+  above the call controls). A pin names your PLUGIN, not a card: the
+  picker lists enabled plugins that ship a widget, and the box resolves
+  the current subject live, so the strip follows the user between
+  parties instead of pointing at the one card they happened to pin.
   Design for a single connection-status-sized row of simple controls -
   plugins without a `widget` component do not appear in the picker.
-  Widgets act on the card's own room even while another room is open.
-  Set `singletonWidget: true` when only the NEWEST card of your plugin is
-  ever worth pinning (a watch-together: old parties are dead parties) -
-  the picker then offers just that one and pinning replaces the previous.
-  Pair it with `widgetMine(cardState, selfDid)`, a PURE predicate saying
-  whether a card is currently the user's (a party they are a member of) -
-  the pinned strip then follows the newest card that matches, so joining
-  a new party moves the widget automatically.
+  Widgets act on their card's own room even while another room is open.
+  Card-backed plugins get the newest card `widgetMine(cardState,
+  selfDid)` claims (a PURE predicate: "is this card currently the
+  user's" - a party they are a member of), falling back to the plugin's
+  newest card so an unjoined party is still one click away; with no card
+  anywhere the strip waits under a plain label. A plugin with no `card`
+  surface at all (a device-local soundboard) mounts its widget with
+  `card: null` and `cardState: undefined`. `singletonWidget` is
+  deprecated and ignored - one pin per plugin is true by construction.
 - `callTile` - the plugin appears in the call grid as a "streamer" (a
   watch-together player, a shared board). Click-to-join like screen
   shares: render nothing loud before the user opts in. Content renders
