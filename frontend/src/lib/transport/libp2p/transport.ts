@@ -1064,6 +1064,10 @@ export class LibP2PTransport implements PeerTransport {
     for (const [nonce, probe] of [...this.rttProbes]) {
       if (probe.peerId !== peerId) continue;
       this.rttProbes.delete(nonce);
+      // Clock probes resolve through settleClock; without this they sat out
+      // their full timeout on every disconnect race, exactly what this loop
+      // exists to prevent for RTT probes.
+      probe.settleClock?.(null);
       probe.settle(null);
     }
     this.pingMisses.delete(peerId);

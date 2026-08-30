@@ -405,9 +405,8 @@ them into an offset. `decideCorrection` never touches the network itself.
 
 One YouTube-specific note: the iframe player rounds fractional playback
 rates to its discrete steps, so Syncplay's rate-nudge lane does not exist
-there - pass a config with `rateThresholdMs` equal to `seekThresholdMs` to
-collapse the rate band, and corrections become seek-or-nothing (see
-waffle-party's adoption).
+there - act only on `"seek"` corrections and treat `"rate"` as none, which
+is what waffle-party's adoption does.
 
 The first consumer is `anime-party` in
 [awful-org/awfully-awesome](https://github.com/awful-org/awfully-awesome),
