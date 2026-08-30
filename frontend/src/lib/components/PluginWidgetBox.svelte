@@ -123,15 +123,15 @@
           found.sort((a, b) => b.timestamp - a.timestamp);
           const selfDid = identityStore.did || "";
           let picked: Candidate | null = null;
-          // Cap the widgetMine probes: each cache-miss getCardState folds a
-          // card's full update history, and a room spammed with stray cards
-          // must not turn every rescan into that N times over. The active
-          // room is exempt from the cap - the party you are in is almost
-          // always in the room you are standing in, and old test cards
-          // elsewhere must not push it out of the probe window.
-          for (const c of found.filter(
-            (c, i) => i < 8 || c.roomCode === activeRoom
-          )) {
+          // Probe up to 64 cards, newest first, stopping at the first that
+          // is "mine". The old cap of 8 (active room exempt) was too tight
+          // in practice: every CLOSED party's card is newer than the one
+          // you are in and burns a probe slot doing it, so a day of test
+          // parties pushed the real one out of the window and the strip
+          // read idle while the music played. Cost stays bounded: probes
+          // hit the shared card-state cache after their first fold, and the
+          // ceiling exists only for a pathological pile of stray cards.
+          for (const c of found.slice(0, 64)) {
             if (plugin.widgetMine) {
               const state = await getCardState(c.cardId, c.roomCode, plugin);
               if (!plugin.widgetMine(state, selfDid)) continue;
