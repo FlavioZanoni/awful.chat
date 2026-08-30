@@ -27,6 +27,7 @@ import {
   playCallAudio,
   stopCallAudio,
 } from "$lib/transport/voice.svelte";
+import { CALL_SOUND_MAX_DURATION_MS } from "$lib/audio/call-audio-mixer";
 
 export function makeHostApi(pluginId: string, roomCode: string): HostApi {
   const nowPlayingToken = Symbol(pluginId);
@@ -37,8 +38,15 @@ export function makeHostApi(pluginId: string, roomCode: string): HostApi {
     closeLocalCard,
     callAudio: {
       blockedReason: getCallAudioBlockedReason,
-      play: playCallAudio,
-      stop: stopCallAudio,
+      maxDurationMs: CALL_SOUND_MAX_DURATION_MS,
+      // Owner-scoped: a plugin can layer several of its own clips (the mixer
+      // caps concurrency), stop them by id or all at once - and can never
+      // stop another plugin's sound. The host keeps its own unscoped stop
+      // for deafen and teardown.
+      play: (blob, options) =>
+        playCallAudio(blob, { ...options, owner: pluginId }),
+      stop: (id) =>
+        stopCallAudio(id ? { id, owner: pluginId } : { owner: pluginId }),
     },
     setNowPlaying(info) {
       setNowPlayingFor(nowPlayingToken, info);

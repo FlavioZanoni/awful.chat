@@ -1,37 +1,53 @@
 const MAX_CALL_SOUND_SECONDS = 5;
+/** Encoded-bytes ceiling, checked BEFORE decodeAudioData: decoding is where
+ * an oversized blob turns into hundreds of MB of PCM, so the gate has to sit
+ * in front of it. 2MB of compressed audio is far more than 5s ever needs. */
+const MAX_CALL_SOUND_BYTES = 2 * 1024 * 1024;
+/** Concurrent clips. Enough to layer a soundboard; the oldest is evicted
+ * past this so a misbehaving caller cannot stack unbounded sources. */
+const MAX_CONCURRENT_SOUNDS = 4;
+
+/** Host policy a caller can read instead of learning it from a README. */
+export const CALL_SOUND_MAX_DURATION_MS = MAX_CALL_SOUND_SECONDS * 1000;
 
 export interface CallSoundPlayback {
   id: string;
   durationMs: number;
 }
 
+interface ActiveSound {
+  id: string;
+  owner: string;
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+  monitorGain: GainNode;
+}
+
 /** Owns the one stable outgoing call track. Microphone rebuilds reconnect
- * behind it; intentional clips enter after noise suppression. */
+ * behind it; intentional clips enter beside it.
+ *
+ * The microphone feeds the destination DIRECTLY - the limiter shapes only
+ * the clips. Routing voice through the limiter changed how everyone sounded
+ * all the time to protect against the few seconds a clip plays; a clip
+ * already capped at -3dB on its own bus leaves the summed signal little
+ * room to clip, and plain voice stays byte-for-byte what it was. */
 export class CallAudioMixer {
   private destination: MediaStreamAudioDestinationNode;
   private limiter: DynamicsCompressorNode;
   private microphoneSource: MediaStreamAudioSourceNode | null = null;
-  private soundSource: AudioBufferSourceNode | null = null;
-  private soundGain: GainNode;
-  private monitorGain: GainNode;
-  private activeId: string | null = null;
+  /** Insertion-ordered: eviction takes the oldest. */
+  private sounds = new Map<string, ActiveSound>();
   private sequence = 0;
 
   constructor(private context: AudioContext) {
     this.destination = context.createMediaStreamDestination();
     this.limiter = context.createDynamicsCompressor();
-    this.soundGain = context.createGain();
-    this.monitorGain = context.createGain();
-    this.soundGain.gain.value = 0.8;
-    this.monitorGain.gain.value = 0.18;
     this.limiter.threshold.value = -3;
     this.limiter.knee.value = 3;
     this.limiter.ratio.value = 12;
     this.limiter.attack.value = 0.003;
     this.limiter.release.value = 0.12;
     this.limiter.connect(this.destination);
-    this.soundGain.connect(this.limiter);
-    this.monitorGain.connect(context.destination);
   }
 
   outputStream(): MediaStream {
@@ -43,13 +59,19 @@ export class CallAudioMixer {
     this.microphoneSource = null;
     if (!stream || stream.getAudioTracks().length === 0) return;
     this.microphoneSource = this.context.createMediaStreamSource(stream);
-    this.microphoneSource.connect(this.limiter);
+    this.microphoneSource.connect(this.destination);
   }
 
-  async play(blob: Blob, options?: { volume?: number }): Promise<CallSoundPlayback> {
+  async play(
+    blob: Blob,
+    options?: { volume?: number; owner?: string }
+  ): Promise<CallSoundPlayback> {
     const volume = options?.volume ?? 1;
     if (!Number.isFinite(volume) || volume < 0 || volume > 1) {
       throw new Error("Sound volume must be between 0 and 1");
+    }
+    if (blob.size > MAX_CALL_SOUND_BYTES) {
+      throw new Error("Sound file is too large for a call sound (2MB max)");
     }
     if (this.context.state === "suspended") await this.context.resume();
     const encoded = await blob.arrayBuffer();
@@ -61,42 +83,67 @@ export class CallAudioMixer {
       throw new Error("Sound exceeds the 5 second call limit");
     }
 
-    this.stop();
-    this.soundGain.gain.value = 0.8 * volume;
-    this.monitorGain.gain.value = 0.18 * volume;
+    while (this.sounds.size >= MAX_CONCURRENT_SOUNDS) {
+      const oldest = this.sounds.keys().next().value as string;
+      this.stop(oldest);
+    }
+
+    // Per-sound gain nodes, not shared ones: shared gains meant a new play
+    // re-leveled whatever was still sounding, which is single-slot thinking.
+    const gain = this.context.createGain();
+    gain.gain.value = 0.8 * volume;
+    gain.connect(this.limiter);
+    const monitorGain = this.context.createGain();
+    monitorGain.gain.value = 0.18 * volume;
+    monitorGain.connect(this.context.destination);
+
     const source = this.context.createBufferSource();
     const id = `call-sound-${Date.now()}-${this.sequence++}`;
     source.buffer = buffer;
-    source.connect(this.soundGain);
-    source.connect(this.monitorGain);
-    source.onended = () => {
-      if (this.activeId !== id) return;
-      source.disconnect();
-      this.soundSource = null;
-      this.activeId = null;
-    };
-    this.soundSource = source;
-    this.activeId = id;
+    source.connect(gain);
+    source.connect(monitorGain);
+    source.onended = () => this.stop(id);
+    this.sounds.set(id, {
+      id,
+      owner: options?.owner ?? "",
+      source,
+      gain,
+      monitorGain,
+    });
     source.start();
     return { id, durationMs: Math.round(buffer.duration * 1000) };
   }
 
-  stop(id?: string): void {
-    if (!this.soundSource || (id && id !== this.activeId)) return;
-    const source = this.soundSource;
-    this.soundSource = null;
-    this.activeId = null;
-    source.onended = null;
-    try { source.stop(); } catch {}
-    source.disconnect();
+  /** Stop one sound by id; with `owner` set, only if that owner started it. */
+  stop(id: string, owner?: string): void {
+    const sound = this.sounds.get(id);
+    if (!sound || (owner !== undefined && sound.owner !== owner)) return;
+    this.sounds.delete(id);
+    sound.source.onended = null;
+    try {
+      sound.source.stop();
+    } catch {}
+    sound.source.disconnect();
+    sound.gain.disconnect();
+    sound.monitorGain.disconnect();
+  }
+
+  /** Stop every sound this owner started. */
+  stopOwner(owner: string): void {
+    for (const sound of [...this.sounds.values()]) {
+      if (sound.owner === owner) this.stop(sound.id);
+    }
+  }
+
+  /** Stop everything - the host's own lever (deafen, teardown). */
+  stopAll(): void {
+    for (const id of [...this.sounds.keys()]) this.stop(id);
   }
 
   dispose(): void {
-    this.stop();
+    this.stopAll();
     this.microphoneSource?.disconnect();
     this.microphoneSource = null;
-    this.soundGain.disconnect();
-    this.monitorGain.disconnect();
     this.limiter.disconnect();
   }
 }

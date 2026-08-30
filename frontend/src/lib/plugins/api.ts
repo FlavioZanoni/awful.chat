@@ -108,10 +108,17 @@ export interface HostApi {
    *  It is never a Message: no signing, storage, sync, unread or notification. */
   showLocalCard(data?: unknown): string;
   closeLocalCard(id: string): void;
-  /** Play a local audio blob through this user's outgoing call track. */
+  /** Play a local audio blob through this user's outgoing call track.
+   *  Sounds are scoped to the calling plugin: several of this plugin's clips
+   *  can layer (the host caps concurrency and evicts the oldest), and stop()
+   *  never touches another plugin's audio. */
   callAudio: {
     blockedReason(): "not-in-call" | "deafened" | null;
+    /** Host policy ceiling for a decoded clip - validate against this
+     *  instead of hardcoding the number. */
+    maxDurationMs: number;
     play(blob: Blob, options?: { volume?: number }): Promise<{ id: string; durationMs: number }>;
+    /** Stop one of this plugin's sounds by id, or all of them with no id. */
     stop(id?: string): void;
   };
   seededRandom(seed: string): () => number; // deterministic PRNG

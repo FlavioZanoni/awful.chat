@@ -63,6 +63,7 @@ const voiceMock = {
   setOutputVolume: (v: number) => {
     outputVolume = v;
   },
+  stopCallAudio: vi.fn(),
 };
 
 const videoMock = {

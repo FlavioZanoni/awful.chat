@@ -106,6 +106,7 @@ import {
   foldUpdate,
   touchCardStates,
 } from "../plugins/state.svelte";
+import { clearLocalCards } from "../plugins/local-cards.svelte";
 import { announceMessage } from "../announce";
 import { mentionsMe } from "../mentions";
 import { appendToDmPanel, dmPanelIsShowing } from "../dm-panel.svelte";
@@ -3171,6 +3172,9 @@ function _disconnectWithoutBroadcasting(): void {
   _transport.disconnect();
   _peerIdToDid.clear();
   clearCardStates();
+  // Session-only plugin surfaces die with the session - a signout to another
+  // identity must not inherit the previous identity's private cards.
+  clearLocalCards();
   transportState.peerDidVersion += 1;
   // disconnect() fully stops and nulls the libp2p node, so the relay
   // connection is gone too. Without clearing this flag, connect()/joinRoom()

@@ -513,9 +513,8 @@ export function setShareAudioDespiteEchoRisk(enabled: boolean): void {
 
 export function setDeafened(deafened: boolean): void {
   if (deafened) {
-    // Optional chaining keeps older/test transport doubles compatible while
-    // the concrete voice transport always provides this capability.
-    _voice.stopCallAudio?.();
+    // Every plugin's call sounds, not just one: deafening means silence.
+    _voice.stopCallAudio();
     // Save current states before deafening
     _voiceOutputBeforeDeafen = _voice.getOutputVolume();
     _videoOutputBeforeDeafen = transportState.transmissionOutputVolume;

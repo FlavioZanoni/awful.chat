@@ -132,8 +132,14 @@ export interface VoiceTransport {
   getOutputVolume(): number;
 
   // intentional local sounds mixed after microphone processing
-  playCallAudio(blob: Blob, options?: { volume?: number }): Promise<{ id: string; durationMs: number }>;
-  stopCallAudio(id?: string): void;
+  playCallAudio(
+    blob: Blob,
+    options?: { volume?: number; owner?: string }
+  ): Promise<{ id: string; durationMs: number }>;
+  /** No filter stops everything (a host action - deafen, teardown). An
+   * `owner` scopes to that owner's sounds; an `id` with `owner` stops one
+   * sound only if that owner started it. */
+  stopCallAudio(filter?: { id?: string; owner?: string }): void;
 
   // events
   on<K extends keyof VoiceEvents>(event: K, handler: VoiceEvents[K]): void;

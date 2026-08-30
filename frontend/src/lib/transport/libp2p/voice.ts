@@ -749,13 +749,20 @@ export class LibP2PVoice implements VoiceTransport {
     return this.currentOutputVolume;
   }
 
-  playCallAudio(blob: Blob, options?: { volume?: number }): Promise<{ id: string; durationMs: number }> {
+  playCallAudio(
+    blob: Blob,
+    options?: { volume?: number; owner?: string }
+  ): Promise<{ id: string; durationMs: number }> {
     if (!this.callAudioMixer) throw new Error("Not in a call");
     return this.callAudioMixer.play(blob, options);
   }
 
-  stopCallAudio(id?: string): void {
-    this.callAudioMixer?.stop(id);
+  stopCallAudio(filter?: { id?: string; owner?: string }): void {
+    const mixer = this.callAudioMixer;
+    if (!mixer) return;
+    if (filter?.id) mixer.stop(filter.id, filter.owner);
+    else if (filter?.owner !== undefined) mixer.stopOwner(filter.owner);
+    else mixer.stopAll();
   }
 
   async setDtlnEnabled(enabled: boolean): Promise<void> {

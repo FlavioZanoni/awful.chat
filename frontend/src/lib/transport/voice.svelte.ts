@@ -265,7 +265,7 @@ export function getCallAudioBlockedReason(): "not-in-call" | "deafened" | null {
 
 export async function playCallAudio(
   blob: Blob,
-  options?: { volume?: number }
+  options?: { volume?: number; owner?: string }
 ): Promise<{ id: string; durationMs: number }> {
   const blocked = getCallAudioBlockedReason();
   if (blocked === "not-in-call") throw new Error("Join the call to play");
@@ -273,6 +273,6 @@ export async function playCallAudio(
   return getVoice().playCallAudio(blob, options);
 }
 
-export function stopCallAudio(id?: string): void {
-  _voice?.stopCallAudio(id);
+export function stopCallAudio(filter?: { id?: string; owner?: string }): void {
+  _voice?.stopCallAudio(filter);
 }

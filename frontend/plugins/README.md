@@ -212,13 +212,18 @@ not autocomplete and do not fire.
 
 **Call sounds** use `host.callAudio`. `blockedReason()` returns
 `"not-in-call"`, `"deafened"`, or `null`. `play(blob)` decodes a local audio
-blob, rejects decoded content longer than five seconds, stops the plugin
-user's previous call sound, and mixes the clip into their existing outgoing
-P2P voice track after microphone noise suppression. It returns
-`{ id, durationMs }`; `stop(id?)` stops that playback. The host accepts a Blob,
-never a URL, and sends no plugin message or file transfer. Microphone mute
-still gates only microphone samples, so an intentional call sound can play
-while muted. Stop playback when your surface unmounts.
+blob and mixes the clip into the user's existing outgoing P2P voice track
+after microphone noise suppression. It returns `{ id, durationMs }`;
+`stop(id)` stops that clip, `stop()` stops every clip this plugin started.
+Sounds are scoped to your plugin: your clips can layer (the host caps
+concurrency and evicts the oldest), and you can never stop another plugin's
+audio. Host policy caps a decoded clip at `callAudio.maxDurationMs` and the
+blob at 2MB, validate against the exposed limit rather than hardcoding it.
+The host accepts a Blob, never a URL, and sends no plugin message or file
+transfer. The clips pass through a limiter; the microphone path does not, so
+voice is untouched when nothing plays. Microphone mute still gates only
+microphone samples, so an intentional call sound can play while muted. Stop
+playback when your surface unmounts.
 
 **Disabling**: users can toggle any plugin off in settings. Your cards then
 render as a neutral fallback naming the plugin; nothing else breaks, and
