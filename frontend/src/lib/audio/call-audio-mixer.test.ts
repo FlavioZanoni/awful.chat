@@ -139,9 +139,9 @@ describe("CallAudioMixer", () => {
     await mixer.play(new Blob(["x"]), { volume: 0.25 });
     // Per play: [gain, monitorGain]. The first clip's levels are untouched.
     expect(gains[0].gain.value).toBe(0.8);
-    expect(gains[1].gain.value).toBe(0.18);
+    expect(gains[1].gain.value).toBe(0.8);
     expect(gains[2].gain.value).toBe(0.2);
-    expect(gains[3].gain.value).toBe(0.045);
+    expect(gains[3].gain.value).toBe(0.2);
   });
 
   it.each([-0.01, 1.01, Number.NaN])("rejects invalid volume %s", async (volume) => {

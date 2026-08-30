@@ -101,7 +101,12 @@ export class CallAudioMixer {
     gain.gain.value = 0.8 * volume;
     gain.connect(this.limiter);
     const monitorGain = this.context.createGain();
-    monitorGain.gain.value = 0.18 * volume;
+    // Self-monitor at the SAME level peers receive. The original 0.18 was a
+    // whisper - with a soundboard's 50% default volume it landed at 9% gain,
+    // which read as "my sound did nothing". Echo is not the concern it looks
+    // like: the mic runs with echo cancellation on, and AEC exists precisely
+    // to subtract what the speakers are playing.
+    monitorGain.gain.value = 0.8 * volume;
     monitorGain.connect(this.context.destination);
 
     const source = this.context.createBufferSource();
