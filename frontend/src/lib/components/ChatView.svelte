@@ -13,6 +13,7 @@
     Copy,
     Check,
     ImagePlay,
+    SquareSlash,
     ChevronUp,
     Smile,
     Reply,
@@ -507,6 +508,23 @@
     commandPopupOpen = /^\/[a-z0-9-]*$/.test(draft);
     commandSelectedIndex = 0;
     if (commandHint) commandHint = null;
+  }
+
+  /** The slash button: same popup as typing "/", click again to undo. */
+  function toggleCommandPalette() {
+    if (commandPopupOpen) {
+      draft = draft.replace(/^\//, "");
+      updateCommandState();
+      return;
+    }
+    if (!draft.startsWith("/")) draft = "/" + draft;
+    updateCommandState();
+    requestAnimationFrame(() => {
+      textareaEl?.focus();
+      if (textareaEl) {
+        textareaEl.selectionStart = textareaEl.selectionEnd = draft.length;
+      }
+    });
   }
 
   function selectCommand(cmd: { name: string; usage: string }) {
@@ -2340,6 +2358,21 @@
           target.value = "";
         }}
       />
+      <Tip text="Plugin commands">
+        {#snippet children(props)}
+          <Button
+            {...props}
+            type="button"
+            variant="ghost"
+            size="icon"
+            onclick={toggleCommandPalette}
+            aria-label="Plugin commands"
+            class="size-11 sm:size-10 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
+          >
+            <SquareSlash class="size-4" />
+          </Button>
+        {/snippet}
+      </Tip>
       <div class="relative flex w-full items-center">
         <MentionInput
           bind:el={textareaEl}
