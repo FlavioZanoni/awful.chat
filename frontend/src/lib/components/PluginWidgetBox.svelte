@@ -24,15 +24,17 @@
   let widgetComponent = $state<ComponentType | null>(null);
   let widgetState = $state<unknown>(undefined);
   let gone = $state(false);
+  // A card-backed widget with no live card yet: keep the strip mounted with
+  // a quiet label instead of unpinning - the next party revives it.
+  let waiting = $state(false);
 
-  // Singleton widgets pin the PLUGIN, not a card: when one party ends and a
-  // new one starts (a new card, maybe in another room), the strip follows.
-  // The pin's stored cardId is just the starting point (the slot list keys
-  // each box by pin.cardId, so `pin` never changes under a mounted box).
-  // svelte-ignore state_referenced_locally
-  let liveCardId = $state(pin.cardId);
-  // svelte-ignore state_referenced_locally
-  let liveRoomCode = $state(pin.roomCode);
+  // The pin names only a plugin; which card the strip shows is resolved
+  // HERE, live. Waffle-style plugins follow the newest card that is theirs
+  // (widgetMine on its folded state - "am I a member"), falling back to the
+  // newest card at all so a not-yet-joined party is still one click away.
+  // Card-less plugins (a soundboard) render with no card whatsoever.
+  let liveCardId = $state<string | null>(null);
+  let liveRoomCode = $state("");
   let lastScan = 0;
   let scanSeq = 0;
   let rescanTimer: ReturnType<typeof setTimeout> | null = null;
@@ -60,12 +62,15 @@
           gone = true;
           return;
         }
-        // The strip follows the newest card the plugin says is YOURS
-        // (widgetMine on its folded state - for waffle, "am I a member"),
-        // so ending one party and joining another moves the widget with
-        // you. Throttled to one scan per 5s of ticks; while no card
-        // matches, the strip stays where it is.
-        if (plugin.singletonWidget && Date.now() - lastScan <= 5000) {
+        widgetComponent = (plugin.widget ?? null) as ComponentType | null;
+
+        // No card surface at all: the widget stands alone (device-local
+        // plugins like the soundboard). Nothing to scan for.
+        if (!plugin.card) return;
+
+        // Throttled to one scan per 5s of ticks; while nothing changes,
+        // the strip stays where it is.
+        if (Date.now() - lastScan <= 5000) {
           // Trailing edge: a tick swallowed by the throttle still deserves a
           // scan once the window passes, or a join whose updates all land
           // inside the window (join + owner sync usually do) never moves
@@ -78,7 +83,7 @@
               },
               5100 - (Date.now() - lastScan)
             );
-        } else if (plugin.singletonWidget) {
+        } else {
           lastScan = Date.now();
           const seq = ++scanSeq;
           const found: Candidate[] = [];
@@ -113,6 +118,9 @@
             picked = c;
             break;
           }
+          // Nothing is "mine": show the newest card anyway, so a party you
+          // have not joined yet is reachable from the strip.
+          picked ??= found[0] ?? null;
           // A newer scan may have started while this one awaited: the last
           // writer would win regardless of staleness, silently un-following
           // what the newer scan found.
@@ -123,24 +131,32 @@
             card = null;
           }
         }
-        const msg = card ?? (await getMessage(liveCardId)) ?? null;
-        if (!msg) {
-          // The card's room was deleted: the pin points at nothing.
-          gone = true;
+
+        if (!liveCardId) {
+          waiting = true;
           return;
         }
+        const msg = card ?? (await getMessage(liveCardId)) ?? null;
+        if (!msg) {
+          // The card's room was deleted; wait for the next one.
+          waiting = true;
+          card = null;
+          return;
+        }
+        waiting = false;
         card = msg;
         widgetState = await getCardState(liveCardId, liveRoomCode, plugin);
-        // Widgets are a STRIP, not a card: only a dedicated compact view
-        // renders here. A plugin without one shows a plain label - falling
-        // back to the chat card filled the sidebar with a full card, which
-        // is the wrong shape for this surface.
-        widgetComponent = (plugin.widget ?? null) as ComponentType | null;
       } catch {
         gone = true;
       }
     })();
   });
+
+  // Widgets are a STRIP, not a card: only a dedicated compact view renders.
+  // A card-backed widget also needs its card loaded before mounting.
+  const ready = $derived(
+    !!widgetComponent && !waiting && (liveCardId === null || card !== null)
+  );
 </script>
 
 {#if !gone && isPluginEnabled(pin.pluginId)}
@@ -155,14 +171,14 @@
       class="size-3 shrink-0 text-muted-foreground"
     />
     <div class="min-w-0 flex-1 overflow-hidden">
-      {#if widgetComponent && card}
+      {#if ready && widgetComponent}
         {@const WidgetUi = widgetComponent}
         <WidgetUi
           {card}
           cardState={widgetState}
           host={hostApi}
         />
-      {:else if card}
+      {:else if waiting}
         <span class="truncate font-mono text-[11px] text-muted-foreground">
           {manifest?.name ?? pin.pluginId}
         </span>
@@ -174,7 +190,7 @@
     </div>
     <button
       type="button"
-      onclick={() => unpinWidget(pin.cardId)}
+      onclick={() => unpinWidget(pin.pluginId)}
       aria-label="Unpin widget"
       class="shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive"
     >

@@ -138,10 +138,13 @@ export interface PluginDefinition {
    * Props: { localCard, host, close }. It is not backed by a chat message. */
   localCard?: PluginComponent;
   /**
-   * Compact view for a pinned sidebar widget box. Same props as `card`
-   * ({ card, cardState, host }); when absent, pinning falls back to the
-   * card component, so every plugin is pinnable with zero changes. Keep it
-   * glanceable - the box is small and capped in height.
+   * Compact view for a pinned sidebar widget box. Pins name the PLUGIN, not
+   * a card: the box resolves the current subject live - the newest card
+   * widgetMine claims, else the plugin's newest card - so the strip follows
+   * you between parties. Props are { card, cardState, host }; for a plugin
+   * with no `card` surface at all (a device-local soundboard) the widget
+   * mounts with card: null and cardState: undefined. Keep it glanceable -
+   * the box is small and capped in height.
    */
   widget?: PluginComponent;
   /**
@@ -166,20 +169,19 @@ export interface PluginDefinition {
    */
   callTileViewers?: (cardState: unknown) => string[];
   /**
-   * Only ONE card of this plugin is ever worth pinning (a watch-together:
-   * old parties are dead parties). The sidebar picker offers only the
-   * newest card, and pinning it replaces any existing pin of this plugin.
-   * Leave off for plugins where several cards coexist meaningfully (two
-   * polls from different rooms).
+   * @deprecated Pins are one-per-plugin by construction now (a pin names
+   * the plugin, not a card), which is all this flag ever bought. Accepted
+   * and ignored so existing definitions keep compiling.
    */
   singletonWidget?: boolean;
   /**
-   * For singleton widgets: is this card currently YOURS, derived from its
-   * reduced state - PURE (e.g. "am I a member of this party"). The pinned
-   * strip follows the newest card for which this returns true, so ending
-   * one party and joining another moves the widget with you; while no card
-   * matches, the strip stays where it is. Absent, the strip follows the
-   * plugin's newest card unconditionally.
+   * Is this card currently YOURS, derived from its reduced state - PURE
+   * (e.g. "am I a member of this party"). The pinned strip follows the
+   * newest card for which this returns true, so ending one party and
+   * joining another moves the widget with you; while no card matches, the
+   * strip shows the plugin's newest card, so a party you have not joined
+   * is still one click away. Absent, the strip follows the newest card
+   * unconditionally.
    */
   widgetMine?: (cardState: unknown, selfDid: string) => boolean;
   // Pure reducer. Host feeds persisted updates in lamport order (history

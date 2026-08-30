@@ -9,17 +9,6 @@
     pinWidget,
     pluginPrefs,
   } from "$lib/plugins/prefs.svelte";
-  import { getPluginCardMessages } from "$lib/storage";
-  import { roomsStore } from "$lib/rooms.svelte";
-  import { MessageType } from "$lib/types/message";
-
-  interface Candidate {
-    pluginId: string;
-    cardId: string;
-    roomCode: string;
-    roomName: string;
-    timestamp: number;
-  }
 
   const hasPlugins = getRegistry().size > 0;
   const emptySlots = $derived(
@@ -27,9 +16,14 @@
   );
 
   let pickerOpen = $state(false);
-  let candidates = $state<Candidate[]>([]);
+  let candidates = $state<string[]>([]);
   let loading = $state(false);
 
+  // Pins name PLUGINS, so the picker lists plugins, not cards: every enabled
+  // plugin that ships a widget surface and is not already pinned. Which card
+  // (if any) the strip shows is the widget box's business, resolved live -
+  // pinning used to require hunting for an existing card first, and froze
+  // the pin to it.
   async function openPicker() {
     if (pickerOpen) {
       pickerOpen = false;
@@ -38,67 +32,23 @@
     pickerOpen = true;
     loading = true;
     try {
-      const rooms = [...roomsStore.rooms, ...roomsStore.dmRooms];
-      const pinned = new Set(pluginPrefs.pinnedWidgets.map((p) => p.cardId));
-      const found: Candidate[] = [];
-      for (const room of rooms) {
-        const cards = await getPluginCardMessages(room.roomCode);
-        for (const msg of cards) {
-          if (msg.type !== MessageType.PluginCard || pinned.has(msg.id))
-            continue;
-          try {
-            const pluginId = (JSON.parse(msg.content) as { pluginId?: string })
-              .pluginId;
-            if (!pluginId || !isPluginEnabled(pluginId)) continue;
-            found.push({
-              pluginId,
-              cardId: msg.id,
-              roomCode: room.roomCode,
-              roomName: room.name || room.roomCode,
-              timestamp: msg.timestamp,
-            });
-          } catch {
-            // Malformed card content: not pinnable.
-          }
-        }
+      const pinned = new Set(pluginPrefs.pinnedWidgets.map((p) => p.pluginId));
+      const found: string[] = [];
+      for (const pluginId of getRegistry().keys()) {
+        if (pinned.has(pluginId) || !isPluginEnabled(pluginId)) continue;
+        const def = await getPlugin(pluginId).catch(() => null);
+        // Only plugins that SHIP a widget surface are pickable - a plugin
+        // with no compact view would pin a strip showing nothing but a name.
+        if (def?.widget) found.push(pluginId);
       }
-      found.sort((a, b) => b.timestamp - a.timestamp);
-      // Only plugins that SHIP a widget surface are pickable - offering a
-      // poll or roulette card with no compact view pinned a strip that
-      // could show nothing but the plugin's name. And singleton plugins
-      // (a watch-together) offer only their NEWEST card - old parties are
-      // dead parties.
-      const defs = new Map<
-        string,
-        { widget: boolean; singleton: boolean }
-      >();
-      const deduped: Candidate[] = [];
-      for (const c of found) {
-        if (!defs.has(c.pluginId)) {
-          const def = await getPlugin(c.pluginId).catch(() => null);
-          defs.set(c.pluginId, {
-            widget: !!def?.widget,
-            singleton: !!def?.singletonWidget,
-          });
-        }
-        const d = defs.get(c.pluginId)!;
-        if (!d.widget) continue;
-        if (d.singleton && deduped.some((x) => x.pluginId === c.pluginId))
-          continue;
-        deduped.push(c);
-      }
-      candidates = deduped.slice(0, 20);
+      candidates = found;
     } finally {
       loading = false;
     }
   }
 
-  async function pick(c: Candidate) {
-    const def = await getPlugin(c.pluginId).catch(() => null);
-    pinWidget(
-      { pluginId: c.pluginId, cardId: c.cardId, roomCode: c.roomCode },
-      { replacePlugin: !!def?.singletonWidget }
-    );
+  function pick(pluginId: string) {
+    pinWidget(pluginId);
     pickerOpen = false;
   }
 </script>
@@ -154,24 +104,19 @@
           </p>
         {:else if candidates.length === 0}
           <p class="px-2 py-1 font-mono text-[11px] text-muted-foreground">
-            Nothing pinnable - only plugins with a sidebar widget show here
-            (try /play).
+            Nothing pinnable - only plugins with a sidebar widget show here.
           </p>
         {:else}
-          {#each candidates as c (c.cardId)}
-            {@const m = getManifest(c.pluginId)}
+          {#each candidates as pluginId (pluginId)}
+            {@const m = getManifest(pluginId)}
             <button
               type="button"
-              onclick={() => pick(c)}
+              onclick={() => pick(pluginId)}
               class="flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-left hover:bg-muted"
             >
               <PluginIcon icon={m?.icon ?? "lucide:unplug"} class="size-3 shrink-0" />
               <span class="truncate font-mono text-[11px]"
-                >{m?.name ?? c.pluginId}</span
-              >
-              <span
-                class="ml-auto max-w-24 truncate font-mono text-[10px] text-muted-foreground"
-                >{c.roomName}</span
+                >{m?.name ?? pluginId}</span
               >
             </button>
           {/each}
@@ -179,7 +124,7 @@
       </div>
     {/if}
 
-    {#each pluginPrefs.pinnedWidgets as pin, i (pin.cardId)}
+    {#each pluginPrefs.pinnedWidgets as pin, i (pin.pluginId)}
       <div
         class="relative transition-all duration-200 {i > 0
           ? '-mt-7 group-hover/stack:mt-0'

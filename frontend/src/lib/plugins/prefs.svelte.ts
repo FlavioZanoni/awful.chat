@@ -4,27 +4,49 @@
  */
 
 const DISABLED_PLUGINS_KEY = "awful:plugin-disabled:v1";
-const PINNED_WIDGETS_KEY = "awful:plugin-widgets:v1";
+const PINNED_WIDGETS_KEY = "awful:plugin-widgets:v2";
+const LEGACY_PINNED_WIDGETS_KEY = "awful:plugin-widgets:v1";
 export const MAX_PINNED_WIDGETS = 3;
 
+/**
+ * A pin names a PLUGIN, nothing more. v1 pinned a specific card, which froze
+ * "pin waffle" to one particular party - ending it and joining the next left
+ * the strip pointing at a corpse. The widget box resolves the plugin's
+ * current subject at render time (widgetMine picks "my" card), and card-less
+ * plugins (a soundboard) need no card at all.
+ */
 export interface PinnedWidget {
   pluginId: string;
-  cardId: string;
-  roomCode: string;
 }
 
 function readPinnedWidgets(): PinnedWidget[] {
   if (typeof localStorage === "undefined") return [];
   try {
     const parsed = JSON.parse(localStorage.getItem(PINNED_WIDGETS_KEY) ?? "[]");
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (p): p is PinnedWidget =>
-        !!p &&
-        typeof p.pluginId === "string" &&
-        typeof p.cardId === "string" &&
-        typeof p.roomCode === "string"
+    if (Array.isArray(parsed)) {
+      const pins = parsed.filter(
+        (p): p is PinnedWidget => !!p && typeof p.pluginId === "string"
+      );
+      if (pins.length > 0) return pins;
+    }
+  } catch {
+    // fall through to the legacy key
+  }
+  // v1 migration: card pins collapse to their plugin, deduplicated.
+  try {
+    const legacy = JSON.parse(
+      localStorage.getItem(LEGACY_PINNED_WIDGETS_KEY) ?? "[]"
     );
+    if (!Array.isArray(legacy)) return [];
+    const seen = new Set<string>();
+    const pins: PinnedWidget[] = [];
+    for (const p of legacy) {
+      const pluginId = (p as { pluginId?: unknown })?.pluginId;
+      if (typeof pluginId !== "string" || seen.has(pluginId)) continue;
+      seen.add(pluginId);
+      pins.push({ pluginId });
+    }
+    return pins.slice(-MAX_PINNED_WIDGETS);
   } catch {
     return [];
   }
@@ -58,29 +80,19 @@ function persistPinned(): void {
   }
 }
 
-export function isWidgetPinned(cardId: string): boolean {
-  return pluginPrefs.pinnedWidgets.some((p) => p.cardId === cardId);
-}
-
-/** Pin a card to a sidebar box. At capacity the OLDEST pin makes room.
- *  replacePlugin: singleton plugins swap out their previous pin instead of
- *  occupying a second slot. */
-export function pinWidget(
-  pin: PinnedWidget,
-  opts?: { replacePlugin?: boolean }
-): void {
-  const rest = pluginPrefs.pinnedWidgets.filter(
-    (p) =>
-      p.cardId !== pin.cardId &&
-      (!opts?.replacePlugin || p.pluginId !== pin.pluginId)
+/** Pin a plugin to a sidebar box. At capacity the OLDEST pin makes room;
+ *  one pin per plugin by construction. */
+export function pinWidget(pluginId: string): void {
+  const rest = pluginPrefs.pinnedWidgets.filter((p) => p.pluginId !== pluginId);
+  pluginPrefs.pinnedWidgets = [...rest, { pluginId }].slice(
+    -MAX_PINNED_WIDGETS
   );
-  pluginPrefs.pinnedWidgets = [...rest, pin].slice(-MAX_PINNED_WIDGETS);
   persistPinned();
 }
 
-export function unpinWidget(cardId: string): void {
+export function unpinWidget(pluginId: string): void {
   pluginPrefs.pinnedWidgets = pluginPrefs.pinnedWidgets.filter(
-    (p) => p.cardId !== cardId
+    (p) => p.pluginId !== pluginId
   );
   persistPinned();
 }
