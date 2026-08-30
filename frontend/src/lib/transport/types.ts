@@ -86,6 +86,12 @@ export interface PeerTransport {
    * answer within the timeout. Null means loss, never "very slow".
    */
   measureRtt(peerId: string, timeoutMs?: number): Promise<number | null>;
+  /** One NTP-style clock probe (t1 = t2, the pong is inline); null on loss
+   *  or a peer whose build predates clocked pongs. */
+  measureClock(
+    peerId: string,
+    timeoutMs?: number
+  ): Promise<{ t0: number; t1: number; t2: number; t3: number } | null>;
 }
 
 export interface VoiceEvents {

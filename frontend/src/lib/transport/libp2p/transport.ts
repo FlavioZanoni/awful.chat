@@ -102,7 +102,14 @@ function pingFrame(nonce: number): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({ type: "__ping", n: nonce }));
 }
 function pongFrame(nonce: number): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify({ type: "__pong", n: nonce }));
+  // `w` is this side's wall clock at reply time. The pong is built inline on
+  // the receive path, so one timestamp serves as both the NTP t1 (received)
+  // and t2 (sent) - it makes the ping path double as a clock-offset probe
+  // (measureClock) for watch-together sync. Old peers ignore the field, and
+  // a pong without it simply yields no clock sample.
+  return new TextEncoder().encode(
+    JSON.stringify({ type: "__pong", n: nonce, w: Date.now() })
+  );
 }
 const RENDEZVOUS_RECONNECT_DELAY_MS = 2_000;
 /**
@@ -241,7 +248,16 @@ export class LibP2PTransport implements PeerTransport {
    */
   private rttProbes = new Map<
     number,
-    { peerId: string; sentAt: number; settle: (rtt: number | null) => void }
+    {
+      peerId: string;
+      sentAt: number;
+      settle: (rtt: number | null) => void;
+      /** Set by measureClock probes: wall clock at send, and a resolver fed
+       *  the pong's remote wall timestamp (or null when the peer's build
+       *  predates it). */
+      sentWallAt?: number;
+      settleClock?: (remoteWallMs: number | null) => void;
+    }
   >();
   private pingNonceCounter = 0;
   /** Nonces issued for the CURRENT unconfirmed stream, per peer. */
@@ -995,6 +1011,51 @@ export class LibP2PTransport implements PeerTransport {
     });
   }
 
+  /**
+   * One NTP-style clock probe: the four timestamps estimateClock (the watch
+   * library) folds into an offset. t0/t3 are this side's wall clock around
+   * the round trip; t1 = t2 = the peer's wall clock from the pong, one value
+   * because the reply is built inline on their receive path. Null when the
+   * peer did not answer in time or runs a build whose pongs carry no clock.
+   */
+  async measureClock(
+    peerId: string,
+    timeoutMs = 2000
+  ): Promise<{ t0: number; t1: number; t2: number; t3: number } | null> {
+    if (!this.node || !this.connectedPeers.has(peerId)) return null;
+    const nonce = ++this.pingNonceCounter;
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (
+        sample: { t0: number; t1: number; t2: number; t3: number } | null
+      ) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        this.rttProbes.delete(nonce);
+        resolve(sample);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      const sentWallAt = Date.now();
+      this.rttProbes.set(nonce, {
+        peerId,
+        sentAt: performance.now(),
+        sentWallAt,
+        settle: () => {},
+        settleClock: (remoteWallMs) => {
+          if (remoteWallMs === null) return finish(null);
+          finish({
+            t0: sentWallAt,
+            t1: remoteWallMs,
+            t2: remoteWallMs,
+            t3: Date.now(),
+          });
+        },
+      });
+      void this.send(peerId, pingFrame(nonce)).catch(() => finish(null));
+    });
+  }
+
   private dropPeer(peerId: string): void {
     this.debugStats.disconnects++;
     this.droppedAt.set(peerId, Date.now());
@@ -1574,7 +1635,7 @@ export class LibP2PTransport implements PeerTransport {
 
         // Liveness frames are ours, not the app's.
         if (payload.byteLength <= MAX_LIVENESS_FRAME_BYTES) {
-          let live: { type?: string; n?: number } | null = null;
+          let live: { type?: string; n?: number; w?: number } | null = null;
           try {
             live = JSON.parse(FRAME_DECODER.decode(payload));
           } catch {
@@ -1600,9 +1661,16 @@ export class LibP2PTransport implements PeerTransport {
               const probe = this.rttProbes.get(live.n);
               if (probe) {
                 this.rttProbes.delete(live.n);
-                // Timed on this side only. Subtracting timestamps taken on
-                // two machines would measure their clock disagreement, which
-                // is unbounded, not the round trip.
+                // A clock probe wants the remote wall timestamp; an RTT
+                // probe deliberately ignores it. Timed on this side only:
+                // subtracting timestamps taken on two machines would measure
+                // their clock disagreement, which is unbounded, not the
+                // round trip.
+                probe.settleClock?.(
+                  typeof live.w === "number" && Number.isFinite(live.w)
+                    ? live.w
+                    : null
+                );
                 probe.settle(performance.now() - probe.sentAt);
               }
             }

@@ -102,6 +102,17 @@ export interface HostApi {
    * the numbers belong to whoever is asking.
    */
   ping(did: string, opts?: { timeoutMs?: number }): Promise<number | null>;
+  /**
+   * One NTP-style clock probe against a peer: the four timestamps
+   * `estimateClock` in $lib/plugins/watch folds into an offset (t1 equals
+   * t2 - the peer answers inline). Null is loss, or a peer running a build
+   * whose probes carry no clock. Like ping, it is one sample, not a
+   * schedule: take several and median-filter via estimateClock.
+   */
+  clockSample(
+    did: string,
+    opts?: { timeoutMs?: number }
+  ): Promise<{ t0: number; t1: number; t2: number; t3: number } | null>;
   /** Is this peer reached through a relay rather than directly? */
   isRelayed(did: string): boolean;
   /** Show one session-only plugin surface in this room's conversation.

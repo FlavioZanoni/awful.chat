@@ -3886,6 +3886,15 @@ export async function measureRtt(
   return _transport.measureRtt(peerId, timeoutMs);
 }
 
+/** One NTP-style clock sample against a peer, by DID - see measureClock. */
+export async function measureClockSample(
+  did: string,
+  timeoutMs?: number
+): Promise<{ t0: number; t1: number; t2: number; t3: number } | null> {
+  const peerId = didToPeerId(did) ?? did;
+  return _transport.measureClock(peerId, timeoutMs);
+}
+
 export function isRelayed(peerId: string): boolean {
   return transportState.relayedPeers.has(peerId);
 }

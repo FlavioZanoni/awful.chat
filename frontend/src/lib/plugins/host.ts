@@ -11,6 +11,7 @@ import {
   onBeforeDisconnect,
   didToPeerId,
   isRelayed,
+  measureClockSample,
   measureRtt,
   onPeerDisconnect,
   peerIdToDid,
@@ -126,6 +127,7 @@ export function makeHostApi(pluginId: string, roomCode: string): HostApi {
       );
     },
     ping: (did, opts) => measureRtt(did, opts?.timeoutMs),
+    clockSample: (did, opts) => measureClockSample(did, opts?.timeoutMs),
     // isRelayed works in peerIds; every plugin surface works in DIDs, so
     // the translation belongs here rather than in each caller.
     isRelayed: (did) => isRelayed(didToPeerId(did) ?? did),

@@ -111,6 +111,7 @@ covers it:
 | `showLocalCard(data?)` / `closeLocalCard(id)` | Open (returns its id) / close the private floating surface |
 | `setNowPlaying(info \| null)` | OS media surface (lock screen, media keys) |
 | `ping(did, opts?)` / `isRelayed(did)` | One link probe / is this peer relayed |
+| `clockSample(did, opts?)` | One NTP-style clock probe for `estimateClock` |
 | `callAudio` / `callCapture` | Play into the call / tap the call locally |
 | `seededRandom(seed)` | Deterministic PRNG |
 | `storage.get(k)` / `storage.set(k, v)` | Device-local key-value store |
@@ -396,10 +397,17 @@ fast-forward thresholds carry no paired speedup rate, so this is derived
 from the same "a small rate change is neither visible nor audible" design
 reasoning, applied symmetrically to the behind-schedule case.
 
-Clock offset is a plugin's own job to gather, through `host.ping` (above):
-sample several round trips, fold them into `ClockSample`s, and hand them to
-`estimateClock`, which does the NTP-style math once you have the samples.
-`decideCorrection` never touches the network itself.
+Clock offset is a plugin's own job to gather, through `host.clockSample`:
+each call is one probe returning the four NTP timestamps (t1 = t2, the peer
+answers inline), or null on loss or against a build whose probes carry no
+clock. Sample several, hand them to `estimateClock`, which median-filters
+them into an offset. `decideCorrection` never touches the network itself.
+
+One YouTube-specific note: the iframe player rounds fractional playback
+rates to its discrete steps, so Syncplay's rate-nudge lane does not exist
+there - pass a config with `rateThresholdMs` equal to `seekThresholdMs` to
+collapse the rate band, and corrections become seek-or-nothing (see
+waffle-party's adoption).
 
 The first consumer is `anime-party` in
 [awful-org/awfully-awesome](https://github.com/awful-org/awfully-awesome),
