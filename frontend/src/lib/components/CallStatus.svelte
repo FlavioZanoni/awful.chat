@@ -7,7 +7,6 @@
   } from "$lib/transport/transport.svelte";
   import {
     CornerUpLeft,
-    Headphones,
     Signal,
     SignalHigh,
     WifiOff,
@@ -297,15 +296,6 @@
                 class="p-1.5 rounded bg-yellow-500/10 text-yellow-400"
               >
                 <Radio class="size-4" />
-              </div>
-            {/snippet}
-          </Tip>
-        {/if}
-        {#if deafened}
-          <Tip text="Deafened">
-            {#snippet children(props)}
-              <div {...props} class="p-1.5 rounded bg-red-500/20 text-red-400">
-                <Headphones class="size-4" />
               </div>
             {/snippet}
           </Tip>
