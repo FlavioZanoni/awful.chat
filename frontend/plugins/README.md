@@ -55,7 +55,7 @@ export const manifest: PluginManifest = {
   // root, with the group heading linking there; a deeper path (the plugin's
   // folder in a monorepo) also gets its own source link on the row.
   repository: "https://github.com/you/your-plugin",
-  apiVersion: 1,
+  apiVersion: 1,           // must be 1; the registry skips (and logs) anything else
   commands: [{ name: "wheel", usage: "/wheel Question? option1, option2" }],
 };
 ```
@@ -70,11 +70,18 @@ import WheelCard from "./WheelCard.svelte";
 export default definePlugin({
   manifest,
   card: WheelCard,
-  initialState: () => ({ spun: false, winner: null as number | null }),
+  // initialState receives the payload sendCard was given - seed from it.
+  // Ignoring the argument while your reducer bounds-checks against state
+  // means every update is rejected against empty data.
+  initialState: (cardData) => ({
+    options: (cardData as { options?: string[] })?.options ?? [],
+    spun: false,
+    winner: null as number | null,
+  }),
   reduce(state, update, ctx) {
     // First spin wins; every later spin is a no-op.
     if (state.spun || update.data.action !== "spin") return state;
-    return { spun: true, winner: pickWinner(update, ctx) };
+    return { ...state, spun: true, winner: pickWinner(state, update, ctx) };
   },
   commands: {
     wheel: async (args, host) => {
@@ -86,6 +93,35 @@ export default definePlugin({
 ```
 
 ## The contract
+
+**Host API at a glance.** Everything a plugin may call lives on `host`;
+each entry is detailed in the sections below or right here when one line
+covers it:
+
+| Member | What it does |
+| --- | --- |
+| `sendCard(payload)` | Post a card to the host's room; resolves to its `cardId` |
+| `sendUpdate(cardId, data, opts?)` | Attach an update; `{ ephemeral: true }` for live-only |
+| `sendUpdateImmediately(cardId, data)` | Teardown-safe sendUpdate for departure beacons |
+| `cards()` | This plugin's existing cards in the host's room |
+| `onCardStateChange(cb)` | Fires after a persisted update folds; returns unsubscribe |
+| `roomCode()` / `selfDid()` | The room this host is bound to; the user's own DID |
+| `peers()` | Connected peers as `{ did, name }` |
+| `onPeerDisconnect(cb)` / `onBeforeDisconnect(cb)` | A peer left / this page is going away; both return unsubscribe |
+| `showLocalCard(data?)` / `closeLocalCard(id)` | Open (returns its id) / close the private floating surface |
+| `setNowPlaying(info \| null)` | OS media surface (lock screen, media keys) |
+| `ping(did, opts?)` / `isRelayed(did)` | One link probe / is this peer relayed |
+| `callAudio` / `callCapture` | Play into the call / tap the call locally |
+| `seededRandom(seed)` | Deterministic PRNG |
+| `storage.get(k)` / `storage.set(k, v)` | Device-local key-value store |
+
+**Per-plugin storage**: `host.storage` is a device-local key-value store,
+namespaced per PLUGIN (not per room - prefix your keys with
+`host.roomCode()` if you want room scoping). Values are JSON-serialized
+into localStorage, so keep them small; a blocked or full store fails
+silently (`get` returns `undefined`). Nothing here syncs anywhere - shared
+state belongs in cards and updates, and bulk bytes (a soundboard's clips)
+belong in your own IndexedDB.
 
 **Cards** are chat messages your component renders. They persist, sync to
 peers who were offline, and survive reloads. Your card component receives
@@ -100,9 +136,9 @@ screens) and the plugin name and version in its header. Give your card's
 root `w-full` and let the frame own the sizing; only cap inner elements
 that should not stretch (a banner image, a fixed-size canvas).
 
-**Surfaces.** A card can render in more places than the chat. All are
-optional components on the definition, all receive the same
-`{ card, cardState, host }` props:
+**Surfaces.** A plugin can render in more places than the chat. All are
+optional components on the definition. `widget` and `callTile` receive the
+card props (`{ card, cardState, host }`); `localCard` has its own (below):
 
 - `localCard` - a private, session-only surface opened with
   `host.showLocalCard(data)`. It FLOATS over the invoking client's current
@@ -110,9 +146,12 @@ optional components on the definition, all receive the same
   “Only you” marker - a control panel, not a message: it is never signed,
   stored, synchronized, counted as unread, notified, previewed, replied to,
   or reacted to, and it never scrolls away with the history. The component
-  receives `{ localCard, host, close }`. One local card exists per plugin
-  and room; calling `showLocalCard` again replaces its local data. Use it
-  for personal controls such as a device-local soundboard.
+  receives `{ localCard, host, close }` - `localCard.data` carries whatever
+  you passed to `showLocalCard`, and `close()` dismisses the surface (so
+  does the host's X button, and `host.closeLocalCard(id)` with the id
+  `showLocalCard` returned). One local card exists per plugin and room;
+  calling `showLocalCard` again replaces its local data. Use it for
+  personal controls such as a device-local soundboard.
 
 - `widget` - a one-row strip for the sidebar slots (dotted "+ pin" boxes
   above the call controls). A pin names your PLUGIN, not a card: the
@@ -162,7 +201,15 @@ replays; `{ ephemeral: true }` sends live-only (cursors, ticks) and is capped
 at ~4 per second per sender. Your `reduce(state, update, ctx)` folds them:
 history first in a deterministic order, then live. Keep it pure, keep it a
 function of its inputs, and the same state materializes on every client and
-every reload.
+every reload. The context carries `{ senderDid, senderName, updateId,
+lamport, ephemeral }` - the identity fields are host-verified, and
+`ephemeral` tells a reducer this update will never replay.
+
+The starting state comes from `initialState(cardData)`, which receives the
+payload passed to `sendCard` - seed options and questions from it. A
+reducer that bounds-checks against state while `initialState` ignores its
+argument sees empty data and rejects every update; that exact bug shipped
+once, which is why the parameter is worth this paragraph.
 
 Two related host calls: `host.cards()` lists the plugin's existing cards in
 the host's room (cheap - it reads only card rows), and
@@ -203,9 +250,9 @@ and clamp values exactly as you would any network input.
 on. Derive outcomes from message ids (`ctx.updateId`, `ctx.senderDid`) so
 every client computes the same result - inside `reduce` that means hashing
 those ids yourself (`reduce` receives no `host`; see wheel's `hashSeed`),
-while command handlers and components can use `host.seededRandom(seed)`. Honest limit: the sender of a message
-influences its id, so seeded outcomes are consistent and verifiable, not
-adversarially fair.
+while command handlers and components can use `host.seededRandom(seed)`.
+Honest limit: the sender of a message influences its id, so seeded outcomes
+are consistent and verifiable, not adversarially fair.
 
 **Size caps**: card payloads up to 16 KB, updates 4 KB, serialized as JSON.
 Oversize sends are rejected by the host. Ship bytes through the file layer,
@@ -223,8 +270,9 @@ after microphone noise suppression. It returns `{ id, durationMs }`;
 Sounds are scoped to your plugin: your clips can layer, and you can never
 stop (or evict) another plugin's audio. Playback policy is yours - want
 one-at-a-time, stop before you play. The host only enforces a per-plugin
-resource ceiling: past five concurrent clips it evicts your oldest. Host policy caps a decoded clip at `callAudio.maxDurationMs` and the
-blob at 2MB, validate against the exposed limit rather than hardcoding it.
+resource ceiling: past five concurrent clips it evicts your oldest. Host
+policy caps a decoded clip at `callAudio.maxDurationMs` and the blob at
+2MB - validate against the exposed limit rather than hardcoding it.
 The host accepts a Blob, never a URL, and sends no plugin message or file
 transfer. The clips pass through a limiter; the microphone path does not, so
 voice is untouched when nothing plays. Microphone mute still gates only
