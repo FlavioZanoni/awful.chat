@@ -1,4 +1,5 @@
 import { MessageType, type Message } from "$lib/types/message";
+import { getManifest } from "$lib/plugins/registry";
 
 /**
  * Extract displayable text for a message when it is quoted in a reply.
@@ -9,6 +10,20 @@ import { MessageType, type Message } from "$lib/types/message";
  * and sent result always agree on what appears in the quote.
  */
 export function getQuotableText(msg: Message): string {
+  // A plugin card's content is its JSON payload - quoting that raw showed
+  // {"pluginId":... in the reply. Name the plugin instead.
+  if (msg.type === MessageType.PluginCard) {
+    let name = "plugin";
+    try {
+      const parsed = JSON.parse(msg.content) as { pluginId?: string };
+      if (typeof parsed.pluginId === "string" && parsed.pluginId)
+        name = getManifest(parsed.pluginId)?.name ?? parsed.pluginId;
+    } catch {
+      // Malformed card: the generic placeholder stands.
+    }
+    return `[Plugin: ${name}]`;
+  }
+
   // Text quotes as itself; a bare image link (the GIF picker) does not.
   if (msg.content && !isUrlLike(msg.content)) {
     return trimContent(msg.content);

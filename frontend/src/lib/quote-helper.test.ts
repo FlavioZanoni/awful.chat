@@ -18,6 +18,25 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 }
 
 describe("quote helper", () => {
+  it("quotes a plugin card by plugin name, never its JSON payload", () => {
+    const quoted = getQuotableText(
+      makeMessage({
+        type: MessageType.PluginCard,
+        content: JSON.stringify({ pluginId: "some-plugin", data: { x: 1 } }),
+      })
+    );
+    expect(quoted).toBe("[Plugin: some-plugin]");
+    expect(quoted).not.toContain("{");
+  });
+
+  it("quotes a malformed plugin card with a generic placeholder", () => {
+    expect(
+      getQuotableText(
+        makeMessage({ type: MessageType.PluginCard, content: "not json" })
+      )
+    ).toBe("[Plugin: plugin]");
+  });
+
   it("returns text content for a normal text message", () => {
     const msg = makeMessage({ content: "Hello, world!" });
     expect(getQuotableText(msg)).toBe("Hello, world!");

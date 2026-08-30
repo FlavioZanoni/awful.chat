@@ -33,9 +33,11 @@
 
   // The pin names only a plugin; which card the strip shows is resolved
   // HERE, live. Waffle-style plugins follow the newest card that is theirs
-  // (widgetMine on its folded state - "am I a member"), falling back to the
-  // newest card at all so a not-yet-joined party is still one click away.
-  // Card-less plugins (a soundboard) render with no card whatsoever.
+  // (widgetMine on its folded state - "am I a member") and show NOTHING
+  // otherwise: a strip with controls to a party the user is not in is a
+  // remote control for someone else's music. Plugins without a mine notion
+  // follow the newest card; card-less plugins (a soundboard) render with no
+  // card whatsoever.
   let liveCardId = $state<string | null>(null);
   let liveRoomCode = $state("");
   let lastScan = 0;
@@ -137,9 +139,6 @@
             picked = c;
             break;
           }
-          // Nothing is "mine": show the newest card anyway, so a party you
-          // have not joined yet is reachable from the strip.
-          picked ??= found[0] ?? null;
           // A newer scan may have started while this one awaited: the last
           // writer would win regardless of staleness, silently un-following
           // what the newer scan found.
@@ -148,6 +147,23 @@
             liveCardId = picked.cardId;
             liveRoomCode = picked.roomCode;
             card = null;
+          } else if (!picked && plugin.widgetMine && liveCardId) {
+            // Nothing is "mine" anymore (left the party, or it closed):
+            // release the strip rather than keep CONTROLS to a party the
+            // user is not in. No newest-card fallback for mine-aware
+            // plugins for the same reason - the strip is "the party I am
+            // in", never "someone's party nearby".
+            liveCardId = null;
+            liveRoomCode = "";
+            card = null;
+          } else if (!picked && !plugin.widgetMine) {
+            // Plugins without a mine notion keep the newest-card behavior.
+            const fallback = found[0] ?? null;
+            if (fallback && fallback.cardId !== liveCardId) {
+              liveCardId = fallback.cardId;
+              liveRoomCode = fallback.roomCode;
+              card = null;
+            }
           }
         }
 
