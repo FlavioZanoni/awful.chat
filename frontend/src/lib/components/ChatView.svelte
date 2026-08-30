@@ -380,7 +380,28 @@
     return byMessage;
   });
 
+  // Coalesce instant scrolls to one per frame. Three independent paths ask
+  // for a scroll on new content (the message-count effect, the send preview,
+  // and the MutationObserver below - which fires once per DOM change), and a
+  // sync burst triggers all of them repeatedly. Each call re-measured and
+  // re-set scrollTop, fighting the browser's own scroll anchoring - the
+  // visible jitter while history poured in. One rAF, one measurement.
+  let _scrollQueued = false;
   function scrollToBottom(behavior: ScrollBehavior = "instant") {
+    if (behavior === "instant") {
+      if (_scrollQueued) return;
+      _scrollQueued = true;
+      requestAnimationFrame(() => {
+        _scrollQueued = false;
+        if (!messagesEl) return;
+        messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: "instant" });
+      });
+      return;
+    }
+    _scrollToBottomNow(behavior);
+  }
+
+  function _scrollToBottomNow(behavior: ScrollBehavior) {
     if (!messagesEl) return;
     messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior });
   }

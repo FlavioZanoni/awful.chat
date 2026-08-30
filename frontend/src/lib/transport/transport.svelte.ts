@@ -6,7 +6,12 @@ import {
 import { measureMedia } from "$lib/image-size";
 import { identityStore } from "../identity/identity.svelte";
 import { getQuotableText } from "../quote-helper";
-import { _noteRefused, _withRefused } from "./refused-lamports";
+import {
+  _noteRefused,
+  _withRefused,
+  REFUSED_MAX_SENDERS,
+} from "./refused-lamports";
+import { allowSyncReaction } from "./sync-throttle";
 import { blindValue } from "../storage-crypto";
 import {
   getOwnProfile,
@@ -1138,6 +1143,10 @@ async function _handleDigest(
   // merely named, and never fall back to whatever room the UI has open.
   _stats.digestsIn++;
   if (!roomCode || !_transport.rooms().includes(roomCode)) return;
+  // Senders in a digest are peer-chosen strings, and every entry costs a
+  // blindValue plus map work downstream. A room never accumulates anywhere
+  // near this many senders honestly; a digest that does is dropped whole.
+  if (Object.keys(theirWatermarks).length > REFUSED_MAX_SENDERS) return;
 
   // A DM digest may ONLY come from that conversation's counterparty (or one
   // of our own paired devices). _handleSyncBatch has always enforced this on
@@ -1189,7 +1198,15 @@ async function _handleDigest(
     (sid) => (theirWatermarks[sid] ?? -1) < highest.get(sid)!
   );
 
-  if (theyAreMissing.length > 0) {
+  // The push decrypts every missing row and re-attaches inline bytes - the
+  // single most expensive reaction a frame can trigger. Throttled per
+  // (peer, room): a member looping empty digests got the whole room
+  // re-decrypted and re-uploaded per frame. One push hands over everything
+  // missing, so an honest peer has nothing to ask again inside the window.
+  if (
+    theyAreMissing.length > 0 &&
+    allowSyncReaction(`push|${peerId}|${roomCode}`)
+  ) {
     await _pushMissingTo(peerId, roomCode, theirWatermarks);
   }
 
@@ -1208,7 +1225,10 @@ async function _handleDigest(
   );
   // Reply for the SAME room: routing through _syncPeer digested whatever
   // room the UI had open, so a background room only ever healed one way.
-  if (weAreBehind)
+  // Throttled: this reply bypasses the _syncPeer debounce by design, and a
+  // peer forging an absurd watermark could bounce a reply out of us per
+  // frame, forever.
+  if (weAreBehind && allowSyncReaction(`reply|${peerId}|${roomCode}`))
     _sendDigestForRoom(peerId, roomCode, { peerKnowsRoom: true }).catch(
       () => {}
     );
@@ -1634,13 +1654,21 @@ async function _handleSyncBatch(
   if (fresh.some((m) => m.lamport < windowFloor)) {
     const page = await getMessages(roomCode);
     if (transportState.roomCode !== roomCode) return;
+    // Identity-preserving: a row already on screen keeps its OBJECT, not
+    // just its key. The re-read built brand-new objects for every id, so
+    // every mounted row saw all its props change and re-rendered - a sync
+    // burst repainted the entire visible chat once per batch, which is the
+    // flicker. Message rows are immutable once stored (re-delivery writes
+    // an identical row), so reuse by id is safe.
+    const held = new Map(transportState.messages.map((m) => [m.id, m]));
+    const merged = page.map((m) => held.get(m.id) ?? m);
     const seen = new Set(page.map((m) => m.id));
     // Keep anything already on screen that the newest page does not cover
     // (the user may have paged back), so a refill never loses scrollback.
     const kept = transportState.messages.filter(
       (m) => m.roomCode === roomCode && !seen.has(m.id)
     );
-    transportState.messages = [...kept, ...page].sort(MSG_ORDER);
+    transportState.messages = [...kept, ...merged].sort(MSG_ORDER);
     return;
   }
 
@@ -1656,11 +1684,26 @@ function _handleSyncComplete(peerId: string, roomCode?: string): void {
   // it healed only via the slow one-room-per-tick rotation.
   const room = roomCode ?? transportState.roomCode;
   if (room && transportState.roomCode === room) {
-    transportState.messages = [...transportState.messages].sort(MSG_ORDER);
+    // Only when actually out of order: the unconditional sort replaced the
+    // array identity on EVERY inbound SyncComplete, re-running the view's
+    // derived chain and its autoscroll for nothing.
+    const msgs = transportState.messages;
+    let sorted = true;
+    for (let i = 1; i < msgs.length; i++) {
+      if (MSG_ORDER(msgs[i - 1], msgs[i]) > 0) {
+        sorted = false;
+        break;
+      }
+    }
+    if (!sorted) transportState.messages = [...msgs].sort(MSG_ORDER);
   }
   // Same rule as the repair tick: only members of THAT room may be told it
   // exists. Gossiping a completed sync to every peer leaked the room code to
   // everyone we happened to be connected to.
+  // Throttled per room: this fan-out fires on EVERY inbound SyncComplete,
+  // including a bare gratuitous one, and each costs one digest per room
+  // member - a one-frame-in, N-frames-out amplifier without the window.
+  if (!allowSyncReaction(`fanout|${room ?? "*"}`)) return;
   const gossipTo = room
     ? _transport.peersInRoom(room)
     : _transport.peers();
