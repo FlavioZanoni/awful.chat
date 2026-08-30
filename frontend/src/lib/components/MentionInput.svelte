@@ -13,6 +13,9 @@
     /** The underlying textarea, for caret math and focus by the parent. */
     el?: HTMLTextAreaElement | null;
     placeholder?: string;
+    /** Widens the left padding for an icon button the caller overlays
+     *  there, the same way pr-28 clears the right-side buttons. */
+    padLeft?: boolean;
     oninput?: () => void;
     onkeydown?: (e: KeyboardEvent) => void;
   }
@@ -22,6 +25,7 @@
     segments,
     el = $bindable(null),
     placeholder,
+    padLeft = false,
     oninput,
     onkeydown,
   }: Props = $props();
@@ -57,8 +61,9 @@
    * The chosen font FAMILY still applies: that variable stays on the chat root
    * on purpose, so the composer matches what you are reading.
    */
-  const BOX =
-    "border py-2 pl-3 pr-28 font-(family-name:--chat-font-family) text-sm leading-normal";
+  const BOX = $derived(
+    `border py-2 ${padLeft ? "pl-11" : "pl-3"} pr-28 font-(family-name:--chat-font-family) text-sm leading-normal`
+  );
 
   let scrollTop = $state(0);
   /**

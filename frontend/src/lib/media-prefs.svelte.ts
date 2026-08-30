@@ -9,11 +9,11 @@ const AUTO_DL_KEY = "awful:auto-download-media:v1";
 export const mediaPrefs = $state({
   gifAutoplay:
     typeof localStorage === "undefined" || localStorage.getItem(KEY) !== "0",
-  // Opt-IN: media above the inline cap costs a download per device, so the
-  // default stays a manual click.
+  // On by default: media showing up without a click is the expected chat
+  // behavior; the toggle exists for metered connections.
   autoDownloadMedia:
-    typeof localStorage !== "undefined" &&
-    localStorage.getItem(AUTO_DL_KEY) === "1",
+    typeof localStorage === "undefined" ||
+    localStorage.getItem(AUTO_DL_KEY) !== "0",
 });
 
 export function setGifAutoplay(on: boolean): void {
@@ -39,6 +39,6 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === KEY) mediaPrefs.gifAutoplay = e.newValue !== "0";
     if (e.key === AUTO_DL_KEY)
-      mediaPrefs.autoDownloadMedia = e.newValue === "1";
+      mediaPrefs.autoDownloadMedia = e.newValue !== "0";
   });
 }

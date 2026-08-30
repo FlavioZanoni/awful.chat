@@ -2358,27 +2358,28 @@
           target.value = "";
         }}
       />
-      <Tip text="Plugin commands">
-        {#snippet children(props)}
-          <Button
-            {...props}
-            type="button"
-            variant="ghost"
-            size="icon"
-            onclick={toggleCommandPalette}
-            aria-label="Plugin commands"
-            class="size-11 sm:size-10 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
-          >
-            <SquareSlash class="size-4" />
-          </Button>
-        {/snippet}
-      </Tip>
       <div class="relative flex w-full items-center">
+        <Tip text="Plugin commands">
+          {#snippet children(props)}
+            <Button
+              {...props}
+              type="button"
+              variant="ghost"
+              size="icon"
+              onclick={toggleCommandPalette}
+              aria-label="Plugin commands"
+              class="absolute left-1.5 top-1/2 z-10 size-8 shrink-0 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <SquareSlash class="size-4" />
+            </Button>
+          {/snippet}
+        </Tip>
         <MentionInput
           bind:el={textareaEl}
           bind:value={draft}
           segments={draftSegments}
           onkeydown={handleKeydown}
+          padLeft
           placeholder="Type a message..."
           oninput={() => {
             autoResize();
