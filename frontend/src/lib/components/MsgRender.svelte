@@ -882,6 +882,24 @@
                   style={box}
                   aria-hidden="true"
                 ></div>
+              {:else if box && !isOwn && (!transfer || transfer.status === "pending" || transfer.status === "failed")}
+                <!-- Auto-download off (or failed): the picture's space is
+                     still held open, with the fetch one click away ON the
+                     picture instead of only up in the chip. -->
+                <div class="relative mt-2 rounded-md bg-muted/40" style={box}>
+                  <button
+                    type="button"
+                    onclick={() => onRequestFileDownload(file, msg.senderId)}
+                    aria-label={`Download ${file.filename}`}
+                    class="absolute inset-0 flex cursor-pointer items-center justify-center"
+                  >
+                    <span
+                      class="flex size-10 items-center justify-center rounded-full border border-border bg-background/80 text-foreground shadow-sm transition hover:bg-background"
+                    >
+                      <Download class="size-4" />
+                    </span>
+                  </button>
+                </div>
               {/if}
             {:else}
             <div class="group/gif relative mt-2 inline-block">
@@ -941,6 +959,22 @@
                   style={box}
                   aria-hidden="true"
                 ></div>
+              {:else if box && !isOwn && (!transfer || transfer.status === "pending" || transfer.status === "failed")}
+                <!-- Same held-open frame and on-media Download as an image. -->
+                <div class="relative mt-2 rounded-md bg-muted/40" style={box}>
+                  <button
+                    type="button"
+                    onclick={() => onRequestFileDownload(file, msg.senderId)}
+                    aria-label={`Download ${file.filename}`}
+                    class="absolute inset-0 flex cursor-pointer items-center justify-center"
+                  >
+                    <span
+                      class="flex size-10 items-center justify-center rounded-full border border-border bg-background/80 text-foreground shadow-sm transition hover:bg-background"
+                    >
+                      <Download class="size-4" />
+                    </span>
+                  </button>
+                </div>
               {/if}
             {:else}
             <!-- svelte-ignore a11y_media_has_caption -->

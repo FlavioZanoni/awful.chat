@@ -21,6 +21,7 @@ import type {
   FileSignalWireMessage,
 } from "$lib/types/message";
 import { base64ToBytes, encode } from "$lib/utils";
+import { mediaPrefs } from "$lib/media-prefs.svelte";
 import type { FileTransferSnapshot } from "./types";
 import type { WebTorrentFileTransport } from "./file/webtorrent";
 
@@ -255,6 +256,10 @@ export function maybePeerIdFromSenderId(senderId: string): string | null {
 }
 
 export function shouldAutoDownload(mimeType: string): boolean {
+  // The preference gates every automatic fetch path in one place - message
+  // receipt, seeder announce and render-time backfill all route through
+  // here. Off means media waits for its Download button like any other file.
+  if (!mediaPrefs.autoDownloadMedia) return false;
   // Audio joins the list so a track can just be played: the inline player has
   // nothing to play until the bytes are here, and audio is smaller than the
   // video already being fetched.
