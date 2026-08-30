@@ -24,6 +24,9 @@ import { MessageType } from "$lib/types/message";
 import { closeLocalCard, upsertLocalCard } from "./local-cards.svelte";
 import {
   getCallAudioBlockedReason,
+  getCallCaptureBlockedReason,
+  getCallCaptureStreams,
+  onCallCaptureChange,
   playCallAudio,
   stopCallAudio,
 } from "$lib/transport/voice.svelte";
@@ -47,6 +50,11 @@ export function makeHostApi(pluginId: string, roomCode: string): HostApi {
         playCallAudio(blob, { ...options, owner: pluginId }),
       stop: (id) =>
         stopCallAudio(id ? { id, owner: pluginId } : { owner: pluginId }),
+    },
+    callCapture: {
+      blockedReason: getCallCaptureBlockedReason,
+      streams: getCallCaptureStreams,
+      onChange: onCallCaptureChange,
     },
     setNowPlaying(info) {
       setNowPlayingFor(nowPlayingToken, info);

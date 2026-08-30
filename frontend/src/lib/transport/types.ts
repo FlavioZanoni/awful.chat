@@ -131,6 +131,10 @@ export interface VoiceTransport {
   setOutputVolume(volume: number): void;
   getOutputVolume(): number;
 
+  // audio a local recorder/transcriber may tap: "self" plus one entry per
+  // audible peer; every stream is a clone the caller owns (and stops)
+  captureStreams(): { id: string; stream: MediaStream }[];
+
   // intentional local sounds mixed after microphone processing
   playCallAudio(
     blob: Blob,

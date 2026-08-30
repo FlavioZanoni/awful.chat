@@ -121,6 +121,26 @@ export interface HostApi {
     /** Stop one of this plugin's sounds by id, or all of them with no id. */
     stop(id?: string): void;
   };
+  /** Tap the call's audio locally - a recorder or transcriber captures what
+   *  this client already renders or transmits. Nothing leaves the device
+   *  through this API. */
+  callCapture: {
+    blockedReason(): "not-in-call" | null;
+    /** Snapshot: one entry per audible participant, self included. "self"
+     *  is the OUTGOING stream (post noise suppression, call sounds
+     *  included) - exactly what peers hear, so mute captures silence.
+     *  Every stream is a CLONE the plugin owns: stop its tracks when done,
+     *  and take a fresh snapshot on change. */
+    streams(): {
+      id: string;
+      name: string;
+      self: boolean;
+      stream: MediaStream;
+    }[];
+    /** Fires when the set of audible participants changes. Returns
+     *  unsubscribe - call it when your surface unmounts. */
+    onChange(cb: () => void): () => void;
+  };
   seededRandom(seed: string): () => number; // deterministic PRNG
   storage: {
     get(k: string): Promise<unknown>;

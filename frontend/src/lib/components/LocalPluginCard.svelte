@@ -22,7 +22,9 @@
   });
 </script>
 
-<div class="ml-auto mt-3 w-full max-w-2xl rounded-lg border border-primary/25 bg-card shadow-sm">
+<!-- Rendered inside ChatView's floating layer, not the message flow - the
+     wrapper there owns width, stacking and scroll. -->
+<div class="w-full rounded-lg border border-primary/25 bg-card">
   <div class="flex items-center gap-2 border-b border-border/70 px-3 py-2">
     <PluginIcon icon={manifest?.icon ?? "lucide:plug"} class="size-4" />
     <span class="min-w-0 flex-1 truncate text-xs font-semibold">

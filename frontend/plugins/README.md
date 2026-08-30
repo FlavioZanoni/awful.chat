@@ -105,13 +105,14 @@ optional components on the definition, all receive the same
 `{ card, cardState, host }` props:
 
 - `localCard` - a private, session-only surface opened with
-  `host.showLocalCard(data)`. It appears in the invoking client's current
-  conversation with an “Only you” marker, but it is not a message: it is
-  never signed, stored, synchronized, counted as unread, notified, previewed,
-  replied to, or reacted to. The component receives
-  `{ localCard, host, close }`. One local card exists per plugin and room;
-  calling `showLocalCard` again replaces its local data and moves it to the
-  bottom. Use it for personal controls such as a device-local soundboard.
+  `host.showLocalCard(data)`. It FLOATS over the invoking client's current
+  conversation (bottom-right, above the chat, under the app's menus) with an
+  “Only you” marker - a control panel, not a message: it is never signed,
+  stored, synchronized, counted as unread, notified, previewed, replied to,
+  or reacted to, and it never scrolls away with the history. The component
+  receives `{ localCard, host, close }`. One local card exists per plugin
+  and room; calling `showLocalCard` again replaces its local data. Use it
+  for personal controls such as a device-local soundboard.
 
 - `widget` - a one-row strip for the sidebar slots (dotted "+ pin" boxes
   above the call controls). A pin names your PLUGIN, not a card: the
@@ -229,6 +230,17 @@ transfer. The clips pass through a limiter; the microphone path does not, so
 voice is untouched when nothing plays. Microphone mute still gates only
 microphone samples, so an intentional call sound can play while muted. Stop
 playback when your surface unmounts.
+
+**Call capture** uses `host.callCapture` - the tap for a recorder or
+transcriber. `streams()` returns a snapshot with one entry per audible
+participant: `self: true` is the OUTGOING stream (post noise suppression,
+call sounds included - exactly what peers hear, so a muted mic captures
+silence), and each peer entry carries their display name. Every stream is a
+CLONE your plugin owns: stop its tracks when you are done, and take a fresh
+snapshot when `onChange(cb)` fires (people joining or leaving). Nothing
+captured leaves the device through this API - what you do with the bytes
+(a local recording, a transcript) is your plugin's responsibility to make
+obvious to its user.
 
 **Disabling**: users can toggle any plugin off in settings. Your cards then
 render as a neutral fallback naming the plugin; nothing else breaks, and

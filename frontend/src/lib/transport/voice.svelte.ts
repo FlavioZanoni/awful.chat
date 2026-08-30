@@ -276,3 +276,49 @@ export async function playCallAudio(
 export function stopCallAudio(filter?: { id?: string; owner?: string }): void {
   _voice?.stopCallAudio(filter);
 }
+
+// ── Call capture (recorder/transcriber plugins) ──────────────────────────────
+
+export interface CallCaptureSource {
+  /** "self", or the peer's DID when bound, else their peerId. */
+  id: string;
+  /** Display name as the roster shows it. */
+  name: string;
+  self: boolean;
+  /** A CLONE - the caller owns it and must stop its tracks when done. */
+  stream: MediaStream;
+}
+
+export function getCallCaptureBlockedReason(): "not-in-call" | null {
+  return transportState.inCall ? null : "not-in-call";
+}
+
+/**
+ * One entry per audible participant, self included. Snapshot semantics:
+ * call again (see onCallCaptureChange) when people join or leave. "self" is
+ * the outgoing stream - what peers hear from this user, mute included.
+ */
+export function getCallCaptureStreams(): CallCaptureSource[] {
+  if (!transportState.inCall || !_voice) return [];
+  return _voice.captureStreams().map(({ id, stream }) => {
+    if (id === "self") return { id, name: "You", self: true, stream };
+    const did = peerIdToDid(id);
+    const name =
+      (did ? transportState.peerNames.get(did) : undefined) ??
+      transportState.peerNames.get(id) ??
+      id.slice(0, 8);
+    return { id: did || id, name, self: false, stream };
+  });
+}
+
+/** Fires when the set of audible participants changes. Returns unsubscribe. */
+export function onCallCaptureChange(cb: () => void): () => void {
+  const voice = getVoice();
+  const handler = () => cb();
+  voice.on("trackAdded", handler);
+  voice.on("trackRemoved", handler);
+  return () => {
+    voice.off("trackAdded", handler);
+    voice.off("trackRemoved", handler);
+  };
+}

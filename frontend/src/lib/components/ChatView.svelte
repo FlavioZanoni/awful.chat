@@ -1782,7 +1782,26 @@
       class="flex min-h-0 min-w-0 flex-col overflow-hidden {chatColClass}"
     >
 
-  <div class="flex flex-1 min-h-0 overflow-hidden">
+  <div class="relative flex flex-1 min-h-0 overflow-hidden">
+    <!-- Private plugin surfaces float OVER the chat, they are not part of
+         it: a control panel that lives in the message flow scrolls away
+         with the history and shoves the conversation around every time it
+         opens. z-40 sits above message content but below the app's chrome
+         layer (menus and dialogs at z-50). -->
+    {#if visibleLocalCards.length > 0}
+      <div
+        class="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex max-h-full flex-col items-end gap-2 p-3"
+      >
+        {#each visibleLocalCards as entry (entry.id)}
+          <div
+            class="pointer-events-auto w-full max-w-sm overflow-y-auto rounded-lg shadow-xl"
+            style="max-height: min(70vh, 100%)"
+          >
+            <LocalPluginCard {entry} />
+          </div>
+        {/each}
+      </div>
+    {/if}
     <div
       bind:this={messagesEl}
       onscroll={handleScroll}
@@ -1804,7 +1823,7 @@
         </div>
       {/if}
 
-      {#if visibleMessages.length === 0 && visibleLocalCards.length === 0}
+      {#if visibleMessages.length === 0}
         <div class="flex h-full items-center justify-center py-20">
           <p class="select-none text-sm text-muted-foreground italic">
             No messages yet. Say something!
@@ -2091,10 +2110,6 @@
                 </div>
               </div>
             </div>
-          {/each}
-
-          {#each visibleLocalCards as entry (entry.id)}
-            <LocalPluginCard {entry} />
           {/each}
 
           {#if sendingPreviews.length > 0}

@@ -633,6 +633,25 @@ export class LibP2PVoice implements VoiceTransport {
     return this.muted;
   }
 
+  /**
+   * The audio a recorder/transcriber plugin may tap: everything this client
+   * already renders or transmits. "self" is the OUTGOING stream - post
+   * noise suppression, call sounds included - i.e. exactly what peers hear
+   * from this user (so mute is honest: a muted mic captures silence).
+   * Every stream is a CLONE: stopping a handed-out track must never kill
+   * the call's own audio, and the caller owns stopping its clones.
+   */
+  captureStreams(): { id: string; stream: MediaStream }[] {
+    const out: { id: string; stream: MediaStream }[] = [];
+    if (this.processedStream) {
+      out.push({ id: "self", stream: this.processedStream.clone() });
+    }
+    for (const [peerId, remote] of this.remotePeers) {
+      if (remote.stream) out.push({ id: peerId, stream: remote.stream.clone() });
+    }
+    return out;
+  }
+
   getMicStream(): MediaStream | null {
     return this.micStream;
   }
