@@ -293,8 +293,10 @@ describe("getCardState rebuild loop", () => {
 
     const state = await getCardState("card1", "room-1", plugin);
     // After exhausting retries, the build is known to be stale and must not
-    // be installed. The returned state is undefined (no entry installed).
-    expect(state).toBeUndefined();
+    // be INSTALLED - but the caller still gets it: a momentarily stale
+    // render beats undefined, which mounted cards whose reducers then threw
+    // on every state read.
+    expect(state).toEqual([]);
     expect(cardStates.has("card1")).toBe(false);
     // Still stops after 3 calls (initial + 2 retries), not looping forever.
     expect(vi.mocked(getMessagesOfTypes).mock.calls.length).toBe(3);

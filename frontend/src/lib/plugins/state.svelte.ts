@@ -43,7 +43,17 @@ export function onCardStateChange(cb: () => void): () => void {
   return () => _subscribers.delete(cb);
 }
 function bumpTick(): void {
-  for (const cb of _subscribers) cb();
+  for (const cb of _subscribers) {
+    try {
+      cb();
+    } catch (err) {
+      // Subscribers run synchronously inside whatever installed the state -
+      // an unguarded throw here surfaced as "failed to load plugin card" on
+      // a DIFFERENT, perfectly healthy card. One bad listener repaints
+      // nothing but itself.
+      console.warn("[plugins] card-state subscriber failed:", err);
+    }
+  }
 }
 
 /** Re-render cards after a locally-sent update that had no cached entry. */
@@ -309,10 +319,13 @@ export async function getCardState(
     // the next fold attempt trigger another build once updates stabilize.
     if (_missedFold.has(cardId)) {
       _missedFold.delete(cardId);
-      // A concurrent build may have already installed an entry while we were reading;
-      // return that if it exists.
+      // A concurrent build may have already installed an entry while we were
+      // reading; return that if it exists. Otherwise hand back the (known
+      // slightly stale) build WITHOUT installing it: a momentarily stale
+      // render beats `undefined`, which mounted cards whose reducers then
+      // threw on every state read.
       const existing = cardStates.get(cardId);
-      return existing?.state;
+      return existing ? existing.state : built.state;
     }
     // No longer flagged after retries: built state matches storage. A concurrent
     // getCardState may have set the entry first; live folds have been applying to
