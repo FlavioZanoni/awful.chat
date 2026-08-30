@@ -3463,9 +3463,15 @@ export async function sendFiles(
   const wire = messageToWire(msg);
   if (_inlineByHash.size) {
     wire.meta = {
+      // From the SAME dim-enriched entries the stored message carries.
+      // Rebuilding from `seeded` dropped width/height from the wire for
+      // every inline-sized file - which is every ordinary chat image - so
+      // receivers never got the dimensions and the loading skeleton only
+      // ever worked on the sender's own echo.
       files: seeded.map((f) => {
+        const withDims = { ...f, ...dimsByHash.get(f.infoHash) };
         const b64 = _inlineByHash.get(f.infoHash);
-        return b64 ? { ...f, inline: b64 } : f;
+        return b64 ? { ...withDims, inline: b64 } : withDims;
       }),
     };
   }

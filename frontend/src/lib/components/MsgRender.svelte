@@ -29,6 +29,8 @@
   import { putSavedGif, deleteSavedGif, isGifSaved, getAttachmentsByInfoHash } from "$lib/storage";
   import { humanize } from "$lib/mentions";
   import { mediaBoxStyle } from "$lib/image-size";
+  import { INLINE_FILE_MAX_BYTES } from "$lib/transport/files.svelte";
+
   import {
     convertImage,
     convertTargets,
@@ -81,6 +83,24 @@
   };
 
   let { msg, isOwn, fileTransfers, onRequestFileDownload }: Props = $props();
+
+  /**
+   * Whether a not-yet-loaded media file deserves its skeleton. An active
+   * download obviously does. A PENDING one does too when it is small enough
+   * to auto-materialize (inline bytes ride the message, and stored bytes
+   * hydrate on room open) - that pending window is where the layout shift
+   * actually happens, on every reload and every live image, and gating on
+   * "downloading" alone meant the skeleton practically never rendered. A
+   * pending file ABOVE the inline cap needs a manual Download click, and a
+   * skeleton there would pulse forever next to its own Download button.
+   */
+  function expectsBytesSoon(
+    status: string | undefined,
+    size: number
+  ): boolean {
+    if (status === "downloading") return true;
+    return status === "pending" && size <= INLINE_FILE_MAX_BYTES;
+  }
 
   // `Message.content` is a TypeScript claim, not a runtime guarantee: a wire
   // message is JSON.parse output that is only cast, so a peer can put a number
@@ -822,11 +842,11 @@
                    nothing at all rather than a wrongly sized guess that
                    would jump anyway.
 
-                   Gated on an ACTIVE download, not merely on the absence of
-                   bytes: attachments are fetched on demand, so an image
-                   nobody has asked for would otherwise sit here pulsing for
-                   the life of the session next to its own Download button. -->
-              {#if box && transfer?.status === "downloading"}
+                   Gated on bytes being EXPECTED (see expectsBytesSoon), not
+                   merely absent: a large attachment nobody asked to download
+                   would otherwise sit here pulsing for the life of the
+                   session next to its own Download button. -->
+              {#if box && expectsBytesSoon(transfer?.status, file.size)}
                 <div
                   class="mt-2 animate-pulse rounded-md bg-muted/60"
                   style={box}
@@ -885,7 +905,7 @@
               <!-- Same reservation an image gets, on the same condition. A
                    video shifts too: with no dimensions the browser lays out
                    a default 300x150 box and resizes once metadata arrives. -->
-              {#if box && transfer?.status === "downloading"}
+              {#if box && expectsBytesSoon(transfer?.status, file.size)}
                 <div
                   class="mt-2 animate-pulse rounded-md bg-muted/60"
                   style={box}
