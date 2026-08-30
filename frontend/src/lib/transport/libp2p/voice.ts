@@ -2,7 +2,7 @@ import type { Libp2p } from "libp2p";
 import type { VoiceTransport, VoiceEvents } from "../types";
 import type { AppServices, LibP2PTransport } from "./transport";
 import type { DtlnProcessor } from "$lib/audio/dtln-processor";
-import { getIceServers } from "../ice-server-list";
+import { getIceServers, onIceServersChanged } from "../ice-server-list";
 import { MessageType } from "$lib/types/message";
 import { encode } from "$lib/utils";
 import { CallAudioMixer } from "$lib/audio/call-audio-mixer";
@@ -37,6 +37,14 @@ const VOICE_LINK_GRACE_MS = 20_000;
 const VOICE_SETUP_DEADLINE_MS = 30_000;
 /** Age past which a never-connected link stops overriding the peer's redial ask. */
 const VOICE_ASK_TRUMPS_HANDSHAKE_MS = 10_000;
+/**
+ * Wedge grace for a link that HAS connected before. Much shorter than
+ * VOICE_LINK_GRACE_MS: an established link showing no progress for this
+ * long is dead, and every extra second here is a second of a deaf pair.
+ * The never-connected case keeps the long grace - slow TURN handshakes
+ * legitimately take that long, and the setup deadline caps them anyway.
+ */
+const VOICE_ESTABLISHED_GRACE_MS = 8_000;
 /**
  * Ceiling on ICE candidates buffered per peer while waiting on their remote
  * description: an admitted peer that never completes offer/answer should not
@@ -148,6 +156,9 @@ interface RemotePeer {
    * this can lag live reality by up to VOICE_RECONCILE_MS.
    */
   lastBytesReceivedAt: number;
+  /** A media stall was already announced for this link; reset when bytes
+   *  flow again, so the degraded status fires once per episode. */
+  stallSignaled: boolean;
 }
 
 export class LibP2PVoice implements VoiceTransport {
@@ -238,7 +249,23 @@ export class LibP2PVoice implements VoiceTransport {
   constructor(
     private transport: LibP2PTransport,
     private dtln: DtlnProcessor | null = null
-  ) {}
+  ) {
+    // ICE servers are snapshotted at pc creation, so a pair built before
+    // TURN credentials landed is STUN-only for its whole life - a
+    // mobile/CGNAT peer then burns the full setup deadline for nothing.
+    // When the list changes, rebuild every link that has never connected;
+    // established links are left alone.
+    onIceServersChanged(() => {
+      for (const [peerId, remote] of [...this.remotePeers]) {
+        if (remote.everConnected) continue;
+        this.teardownRemotePeer(peerId);
+        this.emit("peerLeft", peerId);
+        this.nextDialAt.delete(peerId);
+        this.dialBackoff.delete(peerId);
+      }
+      this.reconcileLinks();
+    });
+  }
 
   async join(_roomCode: string): Promise<void> {
     this.node = this.transport.p2pNode;
@@ -296,6 +323,17 @@ export class LibP2PVoice implements VoiceTransport {
   setCallPeers(peerIds: Iterable<string>): void {
     this.callPeers = new Set(peerIds);
     this.rosterSeen = true;
+    const now = Date.now();
+    for (const [peerId, entry] of this.pendingRosterSignals) {
+      if (now - entry.at > 20_000) {
+        this.pendingRosterSignals.delete(peerId);
+        continue;
+      }
+      if (!this.admitsInboundStream(peerId)) continue;
+      this.pendingRosterSignals.delete(peerId);
+      // Replayed through the front door so every admission rule still runs.
+      for (const signal of entry.signals) this.handleWireSignal(peerId, signal);
+    }
     this.reconcileLinks();
   }
 
@@ -331,11 +369,59 @@ export class LibP2PVoice implements VoiceTransport {
     // creates the RTCPeerConnection and attaches the live mic track, so only
     // roster members may have one. Identity is the peerId the frame's stream
     // is Noise-authenticated to, never anything on the wire.
-    if (!this.admitsInboundStream(peerId)) return;
+    if (!this.admitsInboundStream(peerId)) {
+      // A joiner's roster can lag the dialer's first offer by a presence
+      // heartbeat, and dropping that offer also cost the dialer's 10s
+      // ask-refusal window on top - the "takes forever to connect" pair.
+      // Park a bounded handful and replay them on admission.
+      this.bufferRosterSignal(peerId, signal);
+      return;
+    }
     // Only an offer creates state; an answer or candidate for a peer we hold
     // nothing for is stale and handleSignal drops it.
-    if (signal.type === "offer") this.ensureRemotePeer(peerId);
-    this.handleSignal(peerId, signal).catch(() => {});
+    if (signal.type === "offer") {
+      const existing = this.remotePeers.get(peerId);
+      // An offer landing right after WE asked for a redial is the dialer
+      // serving from a FRESH pc. Renegotiating its new DTLS fingerprint
+      // into our established one is browser roulette (a silent reject in
+      // the catch below); meet it with a fresh pc of our own.
+      if (
+        existing &&
+        existing.everConnected &&
+        Date.now() - (this.lastRedialAsk.get(peerId) ?? 0) < VOICE_REDIAL_ASK_MS
+      ) {
+        this.teardownRemotePeer(peerId);
+        this.emit("peerLeft", peerId);
+      }
+      this.ensureRemotePeer(peerId);
+    }
+    this.handleSignal(peerId, signal).catch(() => {
+      // A swallowed offer/answer failure used to have NO repair path: the
+      // pair waited out the setup deadline plus the wedge grace in
+      // silence. Candidates fail benignly (stale after a rebuild); the
+      // session descriptions do not. Both branches are rate-limited.
+      if (signal.type === "ice") return;
+      if (peerId > this.transport.selfId()) {
+        this.askForRedial(peerId, Date.now());
+      } else {
+        this.handleRedialRequest(peerId);
+      }
+    });
+  }
+
+  /** Signals parked for peers the roster has not admitted yet. */
+  private pendingRosterSignals = new Map<
+    string,
+    { at: number; signals: unknown[] }
+  >();
+
+  private bufferRosterSignal(peerId: string, signal: unknown): void {
+    const entry = this.pendingRosterSignals.get(peerId);
+    if (!entry && this.pendingRosterSignals.size >= 8) return;
+    const target = entry ?? { at: Date.now(), signals: [] };
+    if (target.signals.length >= 32) return;
+    target.signals.push(signal);
+    this.pendingRosterSignals.set(peerId, target);
   }
 
   /** Dev-only view of what the voice layer thinks it is holding. */
@@ -419,10 +505,16 @@ export class LibP2PVoice implements VoiceTransport {
           // dead in all but name. Waiting for linkIsHealthy to tear it down
           // (the full wedge grace) before asking added most of the "takes
           // forever to come back" - ask now; the dialer applies the same
-          // blip grace to its own end before honoring it.
+          // blip grace to its own end before honoring it. The second arm is
+          // the deaf-pair shape: "connected" with flat inbound bytes never
+          // leaves "connected", so without it nobody ever asked.
           remote.everConnected &&
-          remote.pc.connectionState !== "connected" &&
-          now - remote.okAt >= VOICE_BLIP_GRACE_MS
+          ((remote.pc.connectionState !== "connected" &&
+            now - remote.okAt >= VOICE_BLIP_GRACE_MS) ||
+            (remote.pc.connectionState === "connected" &&
+              remote.lastBytesReceived !== null &&
+              now - remote.lastBytesReceivedAt >=
+                VOICE_MEDIA_STALL_MS + VOICE_BLIP_GRACE_MS))
         ) {
           this.askForRedial(peerId, now);
         }
@@ -473,6 +565,13 @@ export class LibP2PVoice implements VoiceTransport {
       remote.pc.connectionState !== "connected" &&
       !remote.everConnected &&
       now - remote.createdAt < VOICE_ASK_TRUMPS_HANDSHAKE_MS &&
+      // A pc still holding an UNANSWERED local offer is not "in progress":
+      // the ask itself is proof the offer never landed on the other side,
+      // and protecting it for 10s was most of a slow join.
+      !(
+        remote.pc.signalingState === "have-local-offer" &&
+        remote.pc.remoteDescription === null
+      ) &&
       this.linkIsHealthy(remote, now)
     ) {
       return;
@@ -530,11 +629,23 @@ export class LibP2PVoice implements VoiceTransport {
         now - remote.lastBytesReceivedAt < VOICE_MEDIA_STALL_MS
       ) {
         remote.okAt = now;
+        remote.stallSignaled = false;
         // A working link is the only proof worth resetting the backoff on:
         // opening a signalling stream says nothing about whether media flows.
         this.nextDialAt.delete(remote.peerId);
         this.dialBackoff.delete(remote.peerId);
         return true;
+      }
+      // Media stalled while the state machine still reads "connected" -
+      // the deaf-pair shape. Say so once, so the UI can mark the tile
+      // instead of showing a healthy pair that cannot hear each other.
+      if (!remote.stallSignaled) {
+        remote.stallSignaled = true;
+        this.emit("status", {
+          type: "voice-degraded",
+          peerId: remote.peerId,
+          message: `No audio arriving from ${remote.peerId.slice(-8)} - repairing...`,
+        });
       }
     }
     // A link that has never worked does not get the benefit of "progress":
@@ -546,8 +657,12 @@ export class LibP2PVoice implements VoiceTransport {
     }
     // "new" / "connecting" / "disconnected", or "connected" with media
     // stalled: legitimate for a moment, a wedge once it outlasts a
-    // handshake and an ICE restart.
-    return now - remote.okAt < VOICE_LINK_GRACE_MS;
+    // handshake and an ICE restart. A link that has ALREADY carried audio
+    // earns much less patience than one still setting up.
+    return (
+      now - remote.okAt <
+      (remote.everConnected ? VOICE_ESTABLISHED_GRACE_MS : VOICE_LINK_GRACE_MS)
+    );
   }
 
   /**
@@ -607,6 +722,7 @@ export class LibP2PVoice implements VoiceTransport {
     this.active.clear();
     this.callPeers.clear();
     this.rosterSeen = false;
+    this.pendingRosterSignals.clear();
     this.lastRedialAsk.clear();
     this.lastRedialServed.clear();
     this.dialing.clear();
@@ -1176,6 +1292,7 @@ export class LibP2PVoice implements VoiceTransport {
       okAt: Date.now(),
       lastBytesReceived: null,
       lastBytesReceivedAt: Date.now(),
+      stallSignaled: false,
     };
     this.remotePeers.set(peerId, remote);
     return remote;

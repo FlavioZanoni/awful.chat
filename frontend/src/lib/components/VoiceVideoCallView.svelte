@@ -74,6 +74,8 @@ import { getManifest } from "$lib/plugins/registry";
 import { onCardStateChange } from "$lib/plugins/state.svelte";
 import PluginCallTileView from "./PluginCallTileView.svelte";
 import PluginIcon from "$lib/plugins/PluginIcon.svelte";
+import { peerQualityState } from "$lib/call-peer-quality.svelte";
+import type { PeerVoiceQuality } from "$lib/call-quality";
 import {
   ambientStyle,
   glowFor,
@@ -105,6 +107,9 @@ import {
     deafened?: boolean;
     /** Announced in the call but their voice link is not up yet. */
     connecting?: boolean;
+    /** Per-peer voice verdict from the shared quality map; undefined until
+     *  any event lands. Drives the degraded/failed ring and chip. */
+    quality?: PeerVoiceQuality;
     /** getStats saw the consumer stop advancing - a track object exists
      *  but proves nothing about whether RTP is still arriving
      *  (sfu-audit finding 14). */
@@ -375,6 +380,7 @@ import {
         connecting:
           !p.audioTrack && !p.videoTrack && !iceConnectedPeers.has(peerId),
         stalled: p.videoStalled,
+        quality: peerQualityState.peers.get(peerId),
       });
     }
     if (localScreenTrack) {
@@ -1082,7 +1088,11 @@ import {
       {tile.connecting ? 'connecting-wave' : ''}
       {isSpeaking
       ? 'ring-2 ring-primary shadow-[0_0_8px_rgba(0,255,136,0.4)]'
-      : ''}
+      : tile.quality === 'failed'
+        ? 'ring-2 ring-red-500/80'
+        : tile.quality === 'degraded'
+          ? 'ring-2 ring-amber-500/70'
+          : ''}
       {isPendingTx ? 'ring-1 ring-primary/40 hover:ring-primary/80' : ''}"
     onclick={() => {
       if (isPendingTx) {
@@ -1199,6 +1209,20 @@ import {
           {/if}
           Frozen - reconnecting
         </div>
+      </div>
+    {/if}
+
+    {#if !tile.isLocal && tile.kind === "camera" && (tile.quality === "degraded" || tile.quality === "failed")}
+      <!-- The pair-specific feedback that used to not exist: a link that is
+           degraded (media stalled / ICE blip) or failed says so ON the
+           peer it concerns, instead of only nudging the aggregate badge. -->
+      <div
+        class="pointer-events-none absolute right-1.5 top-1.5 z-20 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] {tile.quality ===
+        'failed'
+          ? 'text-red-400'
+          : 'text-amber-400'}"
+      >
+        {tile.quality === "failed" ? "voice failed - redialing" : "voice degraded"}
       </div>
     {/if}
 

@@ -213,13 +213,18 @@ describe("linkIsHealthy: inbound-media watchdog (finding 3)", () => {
     )!;
     const now = Date.now();
     remote.lastBytesReceived = 50_000;
-    remote.lastBytesReceivedAt = now - 9_000; // past the 8s stall threshold
-    remote.okAt = now - 9_000; // no progress since the stall started
-    // Still inside the 20s wedge grace, so not unhealthy YET - but okAt must
-    // not have been bumped to "now": that refresh is exactly what hid a
-    // stalled sender (finding 1/2) or a dropped renegotiation (finding 4)
-    // forever, because connectionState alone kept reading "connected".
+    remote.lastBytesReceivedAt = now - 6_000; // inside the 8s stall window
+    remote.okAt = now - 6_000;
+    // Bytes still counted as flowing: healthy, and okAt refreshes.
     expect(callLinkIsHealthy(internals, remote, now)).toBe(true);
+
+    // Past the stall threshold, okAt must NOT refresh - that refresh is
+    // exactly what hid a stalled sender forever - and an ESTABLISHED link
+    // gets only the short grace now (8s, not the 20s setup grace), so at
+    // 9s of no progress it is already unhealthy and torn down for redial.
+    remote.lastBytesReceivedAt = now - 9_000;
+    remote.okAt = now - 9_000;
+    expect(callLinkIsHealthy(internals, remote, now)).toBe(false);
     expect(remote.okAt).toBe(now - 9_000);
   });
 

@@ -9,6 +9,11 @@ import { peerIdToDid } from "./transport.svelte";
 import { looksLikeDid } from "$lib/identity/identity-utils";
 import type { LibP2PVoice } from "./libp2p/voice";
 import type { DtlnProcessor } from "../audio/dtln-processor";
+import {
+  applyPeerQualityEvent,
+  notePeerQualityTrack,
+} from "$lib/call-peer-quality.svelte";
+import type { CallQualityStatusEvent } from "$lib/call-quality";
 
 let _voice: LibP2PVoice | null = null;
 let _dtln: DtlnProcessor | null = null;
@@ -26,6 +31,7 @@ export function initVoice(voice: LibP2PVoice, dtln: DtlnProcessor): void {
   _dtln = dtln;
 
   _voice.on("trackAdded", (peerId, track) => {
+    notePeerQualityTrack(peerId);
     // Apply the remembered volume for this identity the moment audio exists;
     // a manual change during the call still wins (it also updates storage).
     // RETRY while the did binding lands: voice ICE routinely beats the
@@ -96,6 +102,16 @@ export function initVoice(voice: LibP2PVoice, dtln: DtlnProcessor): void {
   // listen on _transport's "status" stream instead (finding 8).
   _voice.on("status", (status) => {
     _transport.announce(status);
+    // Feed the shared per-peer quality map here, not in a component:
+    // a verdict must exist whether or not CallStatus happens to be mounted.
+    if (
+      status.type === "voice-ice-connected" ||
+      status.type === "voice-connection-failed" ||
+      status.type === "voice-degraded" ||
+      status.type === "voice-peer-left"
+    ) {
+      applyPeerQualityEvent(status as CallQualityStatusEvent);
+    }
   });
 
   restoreVoicePrefs();

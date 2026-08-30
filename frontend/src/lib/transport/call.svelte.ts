@@ -23,6 +23,7 @@ import {
 import { setTransmissionOutputVolume } from "./transmission.svelte";
 import { buildShareOptions, classifyShareAudio } from "./share-audio";
 import { loadAudioPrefs, saveAudioPrefs } from "./audio-prefs";
+import { resetPeerQuality } from "$lib/call-peer-quality.svelte";
 import {
   cancelErrorClear,
   describeMediaError,
@@ -168,6 +169,14 @@ async function _joinCall(): Promise<void> {
     transportState.inCall = true;
     transportState.callRoomCode = transportState.roomCode; // Track which room the call is in
     _syncVoiceRoster();
+    // Announce BEFORE the SFU join: presence is what lets everyone else
+    // dial us, voice is P2P and does not need the SFU - and a dead or slow
+    // media server used to sit its full request timeout between us joining
+    // and anyone learning we had.
+    _sendCallPresence();
+    // Heartbeat: peers expire silent roster entries after 60s, so a healthy
+    // call re-announces itself well inside that window.
+    _presenceHeartbeat = setInterval(() => _sendCallPresence(), 20_000);
     // Voice is peer-to-peer; only camera and screen share go through the SFU.
     // Awaiting this unguarded meant a media server that was down (or a VPS
     // whose DNS had moved) failed the whole join, taking out calls that never
@@ -185,10 +194,9 @@ async function _joinCall(): Promise<void> {
     _syncVoiceRoster();
     acquireWakeLock();
     playJoinSound();
+    // A second announce after the SFU join: cheap, and covers a peer whose
+    // first one raced the transport still settling.
     _sendCallPresence();
-    // Heartbeat: peers expire silent roster entries after 60s, so a healthy
-    // call re-announces itself well inside that window.
-    _presenceHeartbeat = setInterval(() => _sendCallPresence(), 20_000);
     transportState.muted = _voice.isMuted();
     _sendCallState();
     transportState.localMicStream = _voice.getMicStream();
@@ -239,6 +247,8 @@ export function leaveCall(): void {
     clearInterval(_presenceHeartbeat);
     _presenceHeartbeat = null;
   }
+  // Per-peer voice verdicts are about links that no longer exist.
+  resetPeerQuality();
   if (transportState.inCall) {
     playLeaveSound();
     transportState.inCall = false;

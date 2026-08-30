@@ -52,6 +52,35 @@ let cached: RTCIceServer[] = [...STUN_SERVERS];
 type TimerHandle = ReturnType<typeof setTimeout>;
 let refreshTimer: TimerHandle | undefined;
 
+/** Retry cadence after a FAILED fetch. Without one, a fetch that failed
+ *  while the relay stayed connected never ran again ("the next connect()
+ *  calls this" - except connect() early-returns while connected), leaving
+ *  the whole session STUN-only and every relayed peer unreachable. */
+const RETRY_MS = 20_000;
+
+const _changeListeners = new Set<() => void>();
+
+/** Fires when the cached ICE list changes (TURN credentials landing).
+ *  Consumers rebuild connections that were created before the change. */
+export function onIceServersChanged(cb: () => void): () => void {
+  _changeListeners.add(cb);
+  return () => _changeListeners.delete(cb);
+}
+
+function _notifyChanged(): void {
+  for (const cb of _changeListeners) {
+    try {
+      cb();
+    } catch (err) {
+      console.warn("[ice] server-change listener failed:", err);
+    }
+  }
+}
+
+function _scheduleRetry(): void {
+  refreshTimer = setTimeout(() => void refreshTurnCredentials(), RETRY_MS);
+}
+
 /** ICE servers for a new RTCPeerConnection. Read synchronously at PC creation. */
 export function getIceServers(): RTCIceServer[] {
   return cached;
@@ -90,7 +119,10 @@ export async function refreshTurnCredentials(): Promise<void> {
       (import.meta.env.VITE_API_URL as string | undefined) ||
       "https://awful.frav.in";
     const res = await fetch(`${base}/turn-credentials`);
-    if (!res.ok) return; // error → stay STUN-only, try again next connect
+    if (!res.ok) {
+      _scheduleRetry(); // transient server trouble: keep trying
+      return;
+    }
     // 204 is the relay saying TURN_SECRET is unset. It is a documented,
     // supported state, not a fault - and it is `ok`, so it has to be caught
     // here or it falls through to a JSON parse of an empty body.
@@ -103,6 +135,7 @@ export async function refreshTurnCredentials(): Promise<void> {
       console.warn(
         "[ice] /turn-credentials did not return JSON - no TURN available, relayed peers will not connect"
       );
+      _scheduleRetry();
       return;
     }
     const d = (await res.json()) as {
@@ -118,6 +151,7 @@ export async function refreshTurnCredentials(): Promise<void> {
       d.urls.length === 0 ||
       !d.urls.every((u) => typeof u === "string")
     ) {
+      _scheduleRetry();
       return;
     }
     cached = withTurn({
@@ -125,6 +159,7 @@ export async function refreshTurnCredentials(): Promise<void> {
       username: d.username,
       credential: d.credential,
     });
+    _notifyChanged();
     // ttl is in seconds (relay/turn.go). A missing or unusable ttl leaves
     // this credential unrefreshed until the next connect() - the same
     // fallback the old, never-refreshed code had - rather than guessing a
@@ -136,7 +171,8 @@ export async function refreshTurnCredentials(): Promise<void> {
       );
     }
   } catch {
-    // Stay STUN-only. The next connect() calls this again.
+    // Stay STUN-only for now, but keep trying - see RETRY_MS.
+    _scheduleRetry();
   }
 }
 
