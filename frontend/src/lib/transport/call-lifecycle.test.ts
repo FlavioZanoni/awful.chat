@@ -183,3 +183,33 @@ describe("deafen, leave, rejoin: peer gain is not stuck at 0 (finding 5)", () =>
     expect(outputVolume).toBe(1);
   });
 });
+
+describe("mute/deafen state broadcasts into the CALL's room", () => {
+  it("reaches the call room even when a different room is on screen", () => {
+    transportState.inCall = true;
+    transportState.callRoomCode = "call-room";
+    transportState.roomCode = "other-room"; // user is browsing elsewhere
+    transportMock.broadcast.mockClear();
+
+    setDeafened(true);
+
+    const rooms = transportMock.broadcast.mock.calls.map((c) => c[1]);
+    // Before the fix this went ONLY to "other-room" (the room on screen),
+    // so peers in the call kept the stale badge until a reconnect.
+    expect(rooms).toContain("call-room");
+    expect(rooms).toContain("other-room");
+  });
+
+  it("broadcasts once when the call room IS the room on screen", () => {
+    transportState.inCall = true;
+    transportState.callRoomCode = "room1";
+    transportState.roomCode = "room1";
+    transportMock.broadcast.mockClear();
+
+    setDeafened(true);
+
+    expect(
+      transportMock.broadcast.mock.calls.map((c) => c[1])
+    ).toEqual(["room1"]);
+  });
+});

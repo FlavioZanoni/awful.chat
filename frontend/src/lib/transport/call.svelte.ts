@@ -39,8 +39,20 @@ export function _sendCallState(peerId?: string): void {
     muted: transportState.muted,
     deafened: transportState.deafened,
   });
-  if (peerId) _transport.send(peerId, payload);
-  else _transport.broadcast(payload, transportState.roomCode!);
+  if (peerId) {
+    _transport.send(peerId, payload);
+    return;
+  }
+  // Same lesson _sendCallPresence learned: the state belongs to the CALL's
+  // room, not the room on screen. Muting while looking at another room
+  // broadcast into the wrong topic, so everyone in the call - and the call
+  // preview - kept the stale mute/deafen badge until a reconnect.
+  const rooms = new Set(
+    [transportState.callRoomCode, transportState.roomCode].filter(
+      (r): r is string => !!r
+    )
+  );
+  for (const room of rooms) _transport.broadcast(payload, room);
 }
 
 export function _sendCallPresence(peerId?: string): void {

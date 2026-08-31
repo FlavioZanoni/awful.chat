@@ -1117,10 +1117,9 @@ import {
         autoplay
         playsinline
         muted
-        class="h-full w-full object-contain bg-black {tile.isLocal &&
-        tile.kind === 'camera'
-          ? '-scale-x-100'
-          : ''}"
+        class="h-full w-full object-contain {isFullscreen || isFocused
+          ? 'bg-black'
+          : ''} {tile.isLocal && tile.kind === 'camera' ? '-scale-x-100' : ''}"
         use:videoAction={tile.videoTrack!}
       ></video>
     {:else if !isPendingTx}
@@ -1350,7 +1349,7 @@ import {
                   <MicOff class="size-3 text-red-400" />
                 {/if}
                 {#if state?.deafened}
-                  <HeadphoneOff class="size-3 text-amber-300" />
+                  <HeadphoneOff class="size-3 text-red-400" />
                 {/if}
               </div>
             {/if}
