@@ -17,8 +17,10 @@ vi.mock("$lib/sounds", () => ({
   playUnmuteSound: vi.fn(async () => {}),
 }));
 
+const sendWatchPresence = vi.hoisted(() => vi.fn());
 vi.mock("./transmission.svelte", () => ({
   setTransmissionOutputVolume: vi.fn(),
+  _sendWatchPresence: sendWatchPresence,
 }));
 
 // A plain object standing in for the real $state-backed transportState -
@@ -211,5 +213,29 @@ describe("mute/deafen state broadcasts into the CALL's room", () => {
     expect(
       transportMock.broadcast.mock.calls.map((c) => c[1])
     ).toEqual(["room1"]);
+  });
+});
+
+describe("presence heartbeat replays watch presence and call state", () => {
+  it("re-announces all three on the 20s beat, so one lost gossip frame heals", async () => {
+    vi.useFakeTimers();
+    try {
+      await joinCall();
+      transportMock.broadcast.mockClear();
+      sendWatchPresence.mockClear();
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      // Watch presence rode the beat (it broadcasts from its own module,
+      // mocked here)...
+      expect(sendWatchPresence).toHaveBeenCalledTimes(1);
+      // ...and call presence + mute/deafen state both went out too.
+      expect(
+        transportMock.broadcast.mock.calls.length
+      ).toBeGreaterThanOrEqual(2);
+    } finally {
+      leaveCall();
+      vi.useRealTimers();
+    }
   });
 });

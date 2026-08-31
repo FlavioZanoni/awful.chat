@@ -133,6 +133,10 @@ _video.on("trackRemoved", (peerId, source, kind) => {
       transportState.watchingTransmissionPeerId = null;
       transportState.watchingTransmissionProducerId = null;
       playTransmissionEndedSound();
+      // Retract our watch for everyone now - peers who missed the share's
+      // end (their producer-closed lost, or they were reconnecting) would
+      // otherwise keep us in the viewer list until the next heartbeat.
+      _sendWatchPresence();
     }
   });
 

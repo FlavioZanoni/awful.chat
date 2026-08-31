@@ -20,7 +20,10 @@ import {
   connect,
   transportState,
 } from "./transport.svelte";
-import { setTransmissionOutputVolume } from "./transmission.svelte";
+import {
+  _sendWatchPresence,
+  setTransmissionOutputVolume,
+} from "./transmission.svelte";
 import { buildShareOptions, classifyShareAudio } from "./share-audio";
 import { loadAudioPrefs, saveAudioPrefs } from "./audio-prefs";
 import { resetPeerQuality } from "$lib/call-peer-quality.svelte";
@@ -187,8 +190,16 @@ async function _joinCall(): Promise<void> {
     // and anyone learning we had.
     _sendCallPresence();
     // Heartbeat: peers expire silent roster entries after 60s, so a healthy
-    // call re-announces itself well inside that window.
-    _presenceHeartbeat = setInterval(() => _sendCallPresence(), 20_000);
+    // call re-announces itself well inside that window. Watch presence and
+    // mute/deafen state ride along: both are one-shot gossipsub broadcasts
+    // otherwise, and one lost frame left the "who is watching" list or a
+    // badge wrong until that peer's next change. Idempotent, so replaying
+    // them every beat costs nothing and makes the lists self-healing.
+    _presenceHeartbeat = setInterval(() => {
+      _sendCallPresence();
+      _sendCallState();
+      _sendWatchPresence();
+    }, 20_000);
     // Voice is peer-to-peer; only camera and screen share go through the SFU.
     // Awaiting this unguarded meant a media server that was down (or a VPS
     // whose DNS had moved) failed the whole join, taking out calls that never
