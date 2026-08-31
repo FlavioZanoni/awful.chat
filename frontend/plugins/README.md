@@ -57,6 +57,10 @@ export const manifest: PluginManifest = {
   repository: "https://github.com/you/your-plugin",
   apiVersion: 1,           // must be 1; the registry skips (and logs) anything else
   commands: [{ name: "wheel", usage: "/wheel Question? option1, option2" }],
+  hasSettings: true,      // optional: draws the gear for your `settings` surface
+  // Optional. Host features you cannot run without: an older app refuses to
+  // LOAD the plugin and says so, instead of mounting code that crashes.
+  requires: ["confirm"],
 };
 ```
 
@@ -133,20 +137,61 @@ the bytes cannot be produced. `host.openMessage(id)` jumps the chat to a
 cited message ("view evidence"); false if it is not this room's message.
 
 **Asking the user**: `host.confirm({ title, message, acceptLabel?,
-declineLabel? })` shows a yes/no dialog in HOST chrome (your plugin's name
-and icon are drawn by the host, so the user always knows who is asking)
-and resolves the choice; dismissal declines. One dialog shows at a time
-and one request may be PENDING per plugin - asking again resolves false
-immediately. For cross-peer consent (say, a transcriber asking everyone in
-the call for permission to record): send the request as a plugin update,
-have each peer's copy of your plugin relay it to `host.confirm`, and send
-the answer back as another update. Only the ANSWER travels; the dialog
-itself is always local and host-drawn.
+declineLabel?, timeoutMs?, signal?, fromDid? })` shows a yes/no dialog in
+HOST chrome and resolves one of four named results:
 
-**Settings surface**: ship a `settings` component on your definition
-(props: `{ host }` - no card, and the host's `roomCode()` is `""`) and set
-`hasSettings: true` in the manifest; the plugins tab then shows a gear
-that opens it in a modal. Persist through `host.storage`.
+| Result | Means |
+| --- | --- |
+| `"accepted"` | they pressed accept |
+| `"declined"` | they pressed decline, or dismissed it |
+| `"timeout"` | `timeoutMs` elapsed with no answer |
+| `"withdrawn"` | your `signal` aborted, or the session tore down |
+
+Never a bare boolean: "they said no" and "they never looked at it" are
+different facts, and a consent flow that cannot tell them apart reports a
+silent peer as a refusal. `timeoutMs` (clamped 1s..10min) is what keeps a
+group flow from waiting on one person forever, and the host renders the
+countdown. Pass a `signal` to withdraw a question that stopped applying -
+the asker hung up, the recording already ended - and the dialog closes
+itself.
+
+Your plugin's name and icon are drawn by the HOST, so a plugin cannot
+impersonate the app or another plugin. `fromDid` extends that to the
+cross-peer case: the host resolves the DID against the room's own peers
+and renders the name itself, showing nothing when it cannot resolve it -
+so "for Bob" is a fact the host vouches for, not a string you supplied.
+
+One dialog shows at a time and one request may be PENDING per plugin;
+asking again **rejects** (a `PluginConfirmBusyError`) rather than
+resolving, precisely so a dropped request can never read as consent
+refused. Catch it, or do not ask twice.
+
+For cross-peer consent (a transcriber asking everyone for permission to
+record): send the request as a plugin update, have each peer's copy of
+your plugin relay it to `host.confirm` with a `timeoutMs` and
+`fromDid: <asker>`, and send the RESULT back as another update, keyed in
+your reducer by the host-verified `ctx.senderDid`. Answers then arrive
+one by one, live, as each person responds, and a silent peer resolves
+`"timeout"` on its own instead of stalling the asker. Only the result
+travels; the dialog itself is always local and host-drawn.
+
+Two rules that flow's correctness depends on:
+
+- **The answering side owns the deadline.** An asker may PROPOSE a window
+  by putting it in the request, but the receiver decides what its own user
+  actually gets - clamp the proposal to a sane floor, or override it
+  outright. A peer proposing a one-second window must not be able to make
+  your user's dialog unanswerable.
+- **An answer is a current state, not a signature.** Consent is revocable:
+  the same person can accept, revoke, and accept again, and each answer
+  legitimately replaces the last (in the fold order described above, so
+  everyone converges on the same latest one). Whatever you gate on the
+  answer - a recording, a transcript - must watch the CURRENT value and
+  stop the moment it flips, never treat a past `"accepted"` as permanent.
+
+**Settings surface**: a consent flow usually wants preferences to go with
+it (an auto-decline, an answering window). Ship a `settings` component and
+set `hasSettings: true` - see Surfaces below for the full contract.
 
 **Requiring host features**: a plugin that cannot run without newer host
 APIs declares them in the manifest - `requires: ["room-context",
@@ -205,9 +250,11 @@ card props (`{ card, cardState, host }`); `localCard` has its own (below):
   Widgets act on their card's own room even while another room is open.
   Card-backed plugins get the newest card `widgetMine(cardState,
   selfDid)` claims (a PURE predicate: "is this card currently the
-  user's" - a party they are a member of), falling back to the plugin's
-  newest card so an unjoined party is still one click away; with no card
-  anywhere the strip waits under a plain label. A plugin with no `card`
+  user's" - a party they are a member of). When nothing is yours the
+  strip waits under a plain "idle" label and RELEASES whatever it last
+  followed: a pin that kept showing controls for a party the user had
+  left was a remote control for someone else's music. A plugin with no
+  `widgetMine` follows its newest card instead. A plugin with no `card`
   surface at all (a device-local soundboard) mounts its widget with
   `card: null` and `cardState: undefined`. `singletonWidget` is
   deprecated and ignored - one pin per plugin is true by construction.
@@ -228,6 +275,18 @@ card props (`{ card, cardState, host }`); `localCard` has its own (below):
   `chromeVisible` - it mirrors the call's own controls (shown while the
   mouse moves over the call section, hidden on idle in fullscreen); gate
   your control overlays on it so all chrome moves together.
+- `settings` - app-level configuration, opened from a gear on this
+  plugin's row in Settings > Plugins. Announce it with
+  `hasSettings: true` in the MANIFEST so the host can draw the gear
+  without loading your code; the component is imported on the first
+  click. It receives `{ host }` only - no card, no cardState - and the
+  host draws the modal chrome (your name, icon and close button), so
+  render just the body. The host is not bound to a room here:
+  `host.roomCode()` is `""`, which makes the room-scoped calls
+  (`sendCard`, `sendUpdate`, `roomContext`, `resolveRoomImage`,
+  `openMessage`) meaningless - keep this surface to device-local
+  preferences in `host.storage`. The gear only shows while the plugin is
+  enabled, and settings persist per device, never synced.
 
 For playback plugins, `host.setNowPlaying({...})` puts the track on the
 OS media surface (lock screen, media keys, headsets); the host owns
@@ -246,6 +305,19 @@ function of its inputs, and the same state materializes on every client and
 every reload. The context carries `{ senderDid, senderName, updateId,
 lamport, ephemeral }` - the identity fields are host-verified, and
 `ephemeral` tells a reducer this update will never replay.
+
+**That deterministic order is (lamport, senderId, updateId)** - not arrival
+order, and not wall-clock time. It is why "allow, then deny, then allow"
+ends as *allow* on every screen instead of "whichever packet landed last",
+and why a reducer may simply overwrite: the last write in fold order is the
+same one everywhere.
+
+**There is deliberately no timestamp in the context.** If you want to show
+*when* something happened, put your own `atMs: Date.now()` in the update
+payload and bound it in the reducer (`> 1e12 && < 1e13`), the way the watch
+tick below does. The host could hand you the message's `timestamp`, but it
+would not be worth more: that field is sender-supplied too. So order by
+`lamport`, display `atMs`, and treat neither as proof of anything.
 
 The starting state comes from `initialState(cardData)`, which receives the
 payload passed to `sendCard` - seed options and questions from it. A
@@ -459,9 +531,18 @@ the full watch-party built on top of this library.
 Browsers cannot reach most APIs directly (CORS), and API keys must never
 ship in the bundle. The instance relay exposes a generic proxy for both:
 
+```ts
+import { proxyUrl } from "$lib/plugins/api";
+
+const res = await fetch(proxyUrl("https://api.example.com/thing?key={{secret:NAME}}"));
 ```
-GET  <VITE_API_URL>/plugin-proxy?url=<https upstream url>
-```
+
+Call it per request. Do NOT build the url yourself from `import.meta.env`:
+vite compiles that value into the bundle, which puts the instance's own
+address into code that is supposed to be identical everywhere, and an
+instance that set nothing would silently send your users' requests to
+whichever origin you hardcoded as a fallback. Both of those have happened.
+The host reads its api origin at runtime, so there is nothing to inline.
 
 The upstream host must be in the instance's `PLUGIN_PROXY_HOSTS` allowlist,
 and the url may carry `{{secret:NAME}}` placeholders that the relay fills
@@ -482,6 +563,23 @@ your plugin needs in its README.
   Fetching belongs in command handlers or card components, client-side.
 - State must rebuild from updates alone. If you cache, cache derivations.
 - Test your reducer as a pure function; the repo's vitest setup applies.
+- Never read `import.meta.env`. Vite replaces those reads with their values
+  at build time, so anything instance-specific gets compiled into the bundle -
+  which makes every instance's JavaScript different and its build
+  unverifiable. `fetch-plugins` fails the build on this. Use `apiUrl()` from
+  `$lib/runtime-config`, or `proxyUrl()` below, both read at call time.
+
+### Your plugin is part of what people verify
+
+Plugins compile INTO the app; they are not loaded separately at runtime. Two
+consequences worth knowing before you publish one:
+
+- The bundle an instance serves depends on its plugin set, so your code is
+  inside the bytes anyone checking that instance will hash. A change you push
+  changes what every instance running you serves.
+- An instance is expected to pin you (`PLUGIN_SOURCES=owner/repo@sha`).
+  Tag releases, and do not rewrite history on a tag people pin - a pinned ref
+  that changes underneath is exactly what pinning is meant to prevent.
 
 ## Installing plugins from outside this repo
 
@@ -493,16 +591,18 @@ at build time because plugins compile into the app):
 PLUGIN_SOURCES=https://github.com/you/awful-plugin-dice#v1,you/plugin-pack
 ```
 
-- Accepted forms: a github url, `user/repo`, either with `#ref` (tag, branch,
-  or commit - pin refs for reproducible deploys), or a local path in dev.
+- Accepted forms: a github url, `user/repo`, either with `@ref` or `#ref`
+  (tag, branch or commit), or a local path in dev. Prefer `@` in an
+  environment variable: a `.env` file treats `#` as the start of a comment,
+  so `owner/repo#sha` arrives at the build as `owner/repo`.
 - A source can hold ONE plugin (manifest.ts at its root) or a PACK: plugin
   folders at the root or under `plugins/`.
 - Removing an entry removes the plugin on the next deploy. Fetched plugins
   never overwrite the built-in ones, and a broken source fails the build
   loudly rather than silently shipping without it.
-- A source with no `#ref` fails the build: it fetches HEAD of a third-party
+- A source with no ref fails the build: it fetches HEAD of a third-party
   repo with no integrity check, so the same env value can ship different
-  code on the next build. Pin it (`user/repo#<commit-sha or tag>`), or set
+  code on the next build. Pin it (`user/repo@<commit-sha>`), or set
   `PLUGIN_SOURCES_ALLOW_UNPINNED=1` to opt in anyway. Every fetched source
   logs its tarball's sha256 so you can confirm two fetches pulled the same
   bytes.

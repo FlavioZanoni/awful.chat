@@ -1,4 +1,5 @@
 import type { Component } from "svelte";
+import { apiUrl } from "$lib/runtime-config";
 
 /**
  * A component the host renders on a plugin's behalf.
@@ -184,7 +185,25 @@ export interface HostApi {
     message: string;
     acceptLabel?: string;
     declineLabel?: string;
-  }): Promise<boolean>;
+    /**
+     * Give up after this long (clamped 1s..10min) and resolve "timeout".
+     * Without it the promise waits for as long as the user ignores it -
+     * which for a group consent flow means one silent person stalls the
+     * asker forever.
+     */
+    timeoutMs?: number;
+    /** Withdraw the question when it stops applying (the asker left, the
+     *  recording already ended): the dialog closes and it resolves
+     *  "withdrawn". */
+    signal?: AbortSignal;
+    /**
+     * The PEER this question is on behalf of. The host resolves it to a
+     * name against the room's own peers and renders that in ITS chrome -
+     * so "Bob wants to record" is a fact the host vouches for, not a
+     * string the plugin can forge. Unknown DIDs are simply not shown.
+     */
+    fromDid?: string;
+  }): Promise<import("./confirm.svelte").PluginConfirmResult>;
   /** Show one session-only plugin surface in this room's conversation.
    *  It is never a Message: no signing, storage, sync, unread or notification. */
   showLocalCard(data?: unknown): string;
@@ -328,6 +347,27 @@ export interface PluginEphemeralPayload {
 
 export interface PluginUpdate {
   data: unknown;
+}
+
+/**
+ * The instance's plugin proxy, for an upstream a browser cannot reach on its
+ * own - no CORS, or it needs a secret the server holds.
+ *
+ * Exported here, as a FUNCTION, because the alternative is what actually
+ * happened: a plugin wrote its own base from `import.meta.env.VITE_API_URL`,
+ * vite replaced that with the literal value, and one line in one plugin put
+ * the instance's own address back into a bundle that the whole
+ * verify-what-an-instance-serves story needs to be identical everywhere. It
+ * was found by fingerprinting a real deploy and diffing it against a local
+ * build of the same commit.
+ *
+ * There is nothing to inline now even if somebody tries: the api origin is
+ * read from /config.json after the app loads, so it has to be asked for at
+ * the moment it is used. Call this per request, do not hoist it into a
+ * module-level const.
+ */
+export function proxyUrl(upstream: string): string {
+  return `${apiUrl()}/plugin-proxy?url=${encodeURIComponent(upstream)}`;
 }
 
 export function definePlugin(def: PluginDefinition): PluginDefinition {

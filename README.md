@@ -156,10 +156,30 @@ The SFU media range (500 ports, published for both UDP and TCP) measured at 2000
 processes and 8.4 GB of RAM, which will OOM a small VPS. With the flag off, the range uses
 iptables DNAT instead, which costs nothing.
 
+`VITE_API_URL`, `VITE_RELAY_MULTIADDR` and the two SFU variables are the
+instance's own addresses. They are NOT compiled into the app: the frontend
+container writes them to `/config.json` when it starts and the app reads that
+before it mounts, so changing one takes a restart rather than a rebuild.
+
+That is also what makes a build checkable. Two instances running the *same
+build* - same commit and the same `PLUGIN_SOURCES`, since plugins compile in -
+now serve byte-identical JavaScript however differently they are configured,
+so a hash published for a commit can be compared against what a running
+instance actually serves (see
+[awful-verify](https://github.com/awful-org/awful-verify)). Two things still
+belong to the build rather than the instance: the commit itself, inlined as
+`__APP_COMMIT__` so the app can say what it is running, and the plugin set.
+
+Nothing has to be configured for either. The frontend image builds from the
+repo root so `.git` is reachable, and the build reads the refs and the origin
+remote directly - no git binary, and nothing for a deployment to set. A build
+whose context holds no repository declares no commit.
+
 | Variable | Required | What it is |
 | --- | --- | --- |
 | `DOMAIN` | yes | public domain of the instance |
 | `RELAY_DOMAIN` | no | hostname the relay is served on; defaults to `relay.<DOMAIN>`. Set it when the relay lives under another name (a `dev-relay.example.com`), and point `VITE_API_URL` and `VITE_RELAY_MULTIADDR` at the same name |
+| `STACK` | no (yes if two stacks share one server) | unique prefix for this deployment's traefik router/service/middleware names, default `awful`. Traefik names are GLOBAL across every compose project behind one dokploy - a second stack reusing them takes the first one down. A second stack on the same box must also move its ports: `SFU_RTC_MIN_PORT`/`SFU_RTC_MAX_PORT`, `TURN_PORT` + `TURN_MIN_PORT`/`TURN_MAX_PORT` (coturn is host-network; set `TURN_URLS` to match the moved `TURN_PORT`) |
 | `ANNOUNCED_IP` | yes | the server's public IP (SFU and coturn announce it) |
 | `VITE_API_URL` | yes | relay API origin, e.g. `https://relay.<domain>` |
 | `VITE_RELAY_MULTIADDR` | yes | the relay's libp2p multiaddr shown on boot |
