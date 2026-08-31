@@ -254,6 +254,35 @@ describe("linkIsHealthy: inbound-media watchdog (finding 3)", () => {
     expect(remote.okAt).toBe(now);
   });
 
+  it("a stall that recovers WITHOUT a rebuild emits voice-ice-connected, so the degraded tile ring clears", () => {
+    const { voice, internals } = makeVoice("connected");
+    const remote = (
+      internals.remotePeers as Map<
+        string,
+        TestRemote & { stallSignaled: boolean; relayed: boolean }
+      >
+    ).get("aaa")!;
+    const statuses: Array<{ type: string; peerId?: string; relayed?: boolean }> =
+      [];
+    voice.on("status", (s) => statuses.push(s as (typeof statuses)[number]));
+    const now = Date.now();
+    // A stall was already announced (tile is amber), the pair went via TURN.
+    remote.stallSignaled = true;
+    remote.relayed = true;
+    remote.lastBytesReceived = 50_000;
+    remote.lastBytesReceivedAt = now - 500; // bytes flowing again
+    expect(callLinkIsHealthy(internals, remote, now)).toBe(true);
+    expect(remote.stallSignaled).toBe(false);
+    expect(statuses.filter((s) => s.type === "voice-ice-connected")).toEqual([
+      expect.objectContaining({ peerId: "aaa", relayed: true }),
+    ]);
+    // The next healthy tick must NOT emit again - once per episode.
+    expect(callLinkIsHealthy(internals, remote, now + 1_000)).toBe(true);
+    expect(
+      statuses.filter((s) => s.type === "voice-ice-connected")
+    ).toHaveLength(1);
+  });
+
   it("reconcileLinks tears down a stalled connected link end to end, on the side that notices it", () => {
     const sent: string[] = [];
     const transport = {

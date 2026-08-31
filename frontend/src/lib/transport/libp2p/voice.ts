@@ -159,6 +159,9 @@ interface RemotePeer {
   /** A media stall was already announced for this link; reset when bytes
    *  flow again, so the degraded status fires once per episode. */
   stallSignaled: boolean;
+  /** Whether the succeeded candidate pair went via TURN, remembered from the
+   *  connected probe so the stall-recovery emit reports the same path. */
+  relayed: boolean;
 }
 
 export class LibP2PVoice implements VoiceTransport {
@@ -629,7 +632,18 @@ export class LibP2PVoice implements VoiceTransport {
         now - remote.lastBytesReceivedAt < VOICE_MEDIA_STALL_MS
       ) {
         remote.okAt = now;
-        remote.stallSignaled = false;
+        if (remote.stallSignaled) {
+          remote.stallSignaled = false;
+          // Audio resumed WITHOUT a rebuild, so no connectionstatechange
+          // will ever fire - without this emit the degraded verdict (amber
+          // tile ring) latches until the next reconnect.
+          this.emit("status", {
+            type: "voice-ice-connected",
+            peerId: remote.peerId,
+            relayed: remote.relayed,
+            message: `Audio resumed from ${remote.peerId.slice(-8)}`,
+          });
+        }
         // A working link is the only proof worth resetting the backoff on:
         // opening a signalling stream says nothing about whether media flows.
         this.nextDialAt.delete(remote.peerId);
@@ -1211,6 +1225,7 @@ export class LibP2PVoice implements VoiceTransport {
                 const isRelay =
                   report.localCandidateType === "relay" ||
                   report.remoteCandidateType === "relay";
+                remote.relayed = isRelay;
                 this.emit("status", {
                   type: "voice-ice-connected",
                   // Full id: consumers match tiles against it; the human-
@@ -1293,6 +1308,7 @@ export class LibP2PVoice implements VoiceTransport {
       lastBytesReceived: null,
       lastBytesReceivedAt: Date.now(),
       stallSignaled: false,
+      relayed: false,
     };
     this.remotePeers.set(peerId, remote);
     return remote;
