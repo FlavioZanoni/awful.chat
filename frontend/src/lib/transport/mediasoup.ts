@@ -14,6 +14,9 @@ import { getIceServers } from "./ice-server-list";
  */
 import { SFU_PUBLISH_UNAVAILABLE, SFU_UNREACHABLE } from "./types";
 
+/** What a click on a tile for a share that no longer exists surfaces. */
+export const PRODUCER_GONE = "That stream has ended";
+
 // ── Message types (mirrored on the SFU server) ────────────────────────────────
 
 interface MSGetCapabilities {
@@ -71,6 +74,18 @@ interface MSConsumerOptions {
   options: mediasoupClient.types.ConsumerOptions;
   peerId: string;
   source: VideoSource;
+}
+/**
+ * The scoped "no" to one ms:consume: the producer closed between the
+ * announcement and the consume. It answers the request by id, so only that
+ * consume fails - unlike ms:error, which failSession() treats as a refusal
+ * of the whole session. Before this the server stayed silent and the click
+ * hung out the full 10s request timeout on a share that no longer existed.
+ */
+interface MSConsumeFailed {
+  type: "ms:consume-failed";
+  requestId: string;
+  producerId: string;
 }
 interface MSNewProducer {
   type: "ms:new-producer";
@@ -146,6 +161,7 @@ type MSMessage =
   | MSProduced
   | MSConsume
   | MSConsumerOptions
+  | MSConsumeFailed
   | MSNewProducer
   | MSPeerLeft
   | MSProducerClosed
@@ -416,11 +432,27 @@ export class MediasoupVideo implements VideoTransport {
         .get(peerId)
         ?.some((c) => c.source === "screen" && c.consumer.kind === "video");
       if (!gotVideo) {
+        // The intent was added above on the promise of a consumer; a failed
+        // watch must give it back, or the next producer from this peer gets
+        // auto-consumed as if the user were already watching.
+        this.watchingTransmissionPeers.delete(peerId);
         throw new Error("Failed to consume transmission");
       }
       return;
     }
-    await this.consumeProducer(peerId, producerId, "screen");
+    try {
+      await this.consumeProducer(peerId, producerId, "screen");
+    } catch (err) {
+      this.watchingTransmissionPeers.delete(peerId);
+      if (err instanceof Error && err.message === PRODUCER_GONE) {
+        // The share is over and this tile was stale (the close raced us, or
+        // was missed across a reconnect) - retract it instead of leaving a
+        // dead "click to watch" that times out on every click.
+        this.pendingScreenProducerIds.delete(peerId);
+        this.emit("transmissionEnded", peerId);
+      }
+      throw err;
+    }
   }
 
   /** Stop watching a transmission - close all screen consumers for that peer. */
@@ -651,6 +683,15 @@ export class MediasoupVideo implements VideoTransport {
     this.producers.forEach((ps) => ps.forEach((p) => p.producer.close()));
     this.producers.clear();
     this.active.clear();
+    // Retract every pending tile from the UI, not just this map: a share
+    // that ended while our socket was down never sends us its
+    // ms:producer-closed, so a silent clear left transportState offering a
+    // "click to watch" for a stream that no longer existed (every click a
+    // guaranteed consume timeout). The join replay re-announces every
+    // producer still live, and transmissionAvailable puts those tiles back.
+    for (const peer of this.pendingTransmissions.keys()) {
+      this.emit("transmissionEnded", peer);
+    }
     this.pendingTransmissions.clear();
     this.pendingScreenProducerIds.clear();
     // watchingTransmissionPeers is deliberately NOT cleared: it is the user's
@@ -1176,7 +1217,7 @@ export class MediasoupVideo implements VideoTransport {
     await this.ensureRecvTransport();
     if (!this.recvTransport) return;
 
-    const response = await this.request<MSConsumerOptions>(
+    const response = await this.request<MSConsumerOptions | MSConsumeFailed>(
       {
         type: "ms:consume",
         requestId: this.nextRequestId(),
@@ -1185,6 +1226,9 @@ export class MediasoupVideo implements VideoTransport {
       },
       "ms:consumer-options"
     );
+    if (response.type !== "ms:consumer-options") {
+      throw new Error(PRODUCER_GONE);
+    }
 
     const consumer = await this.recvTransport.consume(response.options);
     // The server creates every consumer paused (see handleConsume) so no RTP

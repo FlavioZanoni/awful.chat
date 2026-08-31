@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MediasoupVideo } from "./mediasoup";
+import { MediasoupVideo, PRODUCER_GONE } from "./mediasoup";
 import type * as mediasoupClient from "mediasoup-client";
 
 // White-box: reach past the public VideoTransport surface to drive the
@@ -262,6 +262,85 @@ describe("a rejoin does not demote a watched transmission (movie-night drop)", (
     // No pending tile for a transmission the viewer already chose to watch.
     expect(
       (internals.pendingTransmissions as Map<string, string>).has("sharer")
+    ).toBe(false);
+  });
+});
+
+describe("a share that ended while we were away cannot leave a dead tile", () => {
+  it("attemptRejoin retracts every pending tile from the UI, not just its own map", async () => {
+    const video = new MediasoupVideo();
+    const internals = internalsOf(video);
+    internals.currentRoomCode = "room";
+    internals.currentPeerId = "me";
+    (internals.pendingTransmissions as Map<string, string>).set("sharer", "p1");
+    internals.sessionIsLive = () => false;
+    internals.join = vi.fn(async () => {});
+    const ended: string[] = [];
+    video.on("transmissionEnded", (peerId) => ended.push(peerId));
+
+    await (internals.attemptRejoin as (g: number) => Promise<void>)(
+      internals.joinGeneration as number
+    );
+
+    // The bug: the internal map was cleared silently, so transportState kept
+    // offering "click to watch" for a share whose producer-closed we missed
+    // while disconnected - and every click timed out on a dead producer.
+    // The join replay's ms:new-producer puts back any tile still live.
+    expect(ended).toEqual(["sharer"]);
+  });
+
+  it("ms:consume-failed rejects just that consume with PRODUCER_GONE", async () => {
+    const video = new MediasoupVideo();
+    const internals = internalsOf(video);
+    internals.device = { recvRtpCapabilities: {} };
+    internals.recvTransport = fakeTransport();
+    internals.ensureRecvTransport = async () => {};
+
+    const consuming = (
+      internals.consumeProducer as (
+        p: string,
+        id: string,
+        s: string
+      ) => Promise<void>
+    ).call(video, "sharer", "p1", "screen");
+    // Let consumeProducer reach request() and register its pending entry.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    const pending = internals.pendingById as Map<string, unknown>;
+    expect(pending.size).toBe(1);
+    const [requestId] = pending.keys();
+
+    (internals.handleSignal as (msg: unknown) => void).call(video, {
+      type: "ms:consume-failed",
+      requestId,
+      producerId: "p1",
+    });
+
+    // Scoped failure: the one request rejects fast (no 10s timeout), and no
+    // session refusal latches the way an ms:error would.
+    await expect(consuming).rejects.toThrow(PRODUCER_GONE);
+    expect(internals.refusal).toBeNull();
+  });
+
+  it("a watch click on a gone producer retracts the tile and gives back the intent", async () => {
+    const video = new MediasoupVideo();
+    const internals = internalsOf(video);
+    internals.consumeProducer = vi.fn(async () => {
+      throw new Error(PRODUCER_GONE);
+    });
+    const ended: string[] = [];
+    video.on("transmissionEnded", (peerId) => ended.push(peerId));
+
+    await expect(video.watchTransmission("sharer", "p1")).rejects.toThrow(
+      PRODUCER_GONE
+    );
+
+    expect(ended).toEqual(["sharer"]);
+    // The click added watch intent on the promise of a consumer; a failed
+    // watch must not leave it behind to auto-consume a future share.
+    expect(
+      (internals.watchingTransmissionPeers as Set<string>).has("sharer")
     ).toBe(false);
   });
 });

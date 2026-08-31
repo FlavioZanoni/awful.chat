@@ -78,6 +78,16 @@ interface MSConsumerOptions {
   peerId: string;
   source: "camera" | "screen";
 }
+// The scoped "no" to one ms:consume, answered by requestId: the producer is
+// gone (closed between ms:new-producer and the consume, or the client's tile
+// was stale). Deliberately NOT ms:error - the client treats that as a refusal
+// of the whole session; this fails only the one request instead of leaving it
+// to hang out the client's 10s timeout.
+interface MSConsumeFailed {
+  type: "ms:consume-failed";
+  requestId: string;
+  producerId: string;
+}
 interface MSNewProducer {
   type: "ms:new-producer";
   peerId: string;
@@ -883,8 +893,14 @@ async function handleConsume(peer: PeerState, msg: MSConsume): Promise<void> {
       // Deliberately no ms:error: the client treats every ms:error as a
       // session refusal (mediasoup.ts failSession), and a producer that went
       // away between ms:new-producer and this consume is a normal race, not a
-      // reason to drop video for the whole call. The client's request() times
-      // out on its own.
+      // reason to drop video for the whole call. The scoped reply fails just
+      // this one request, so the client can retract a stale tile instead of
+      // hanging out its 10s timeout.
+      send(peer.ws, {
+        type: "ms:consume-failed",
+        requestId: msg.requestId,
+        producerId: msg.producerId,
+      } as MSConsumeFailed);
       return;
     }
 
